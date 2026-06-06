@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "eq-helper"
+version = "0.1.0"
+description = "Interactive IEM/headphone tuning tool with Equalizer APO integration."
+requires-python = ">=3.10"
+authors = [{ name = "eq-helper" }]
+dependencies = [
+    "PySide6>=6.6",
+    "sounddevice>=0.4.6",
+    "numpy>=1.26",
+    "scipy>=1.11",
+    "pyqtgraph>=0.13",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pytest-qt>=4.4",
+]
+
+[project.scripts]
+eq-helper = "eq_helper.app:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["eq_helper*"]
+exclude = ["tests*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+qt_api = "pyside6"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]
