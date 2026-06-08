@@ -50,10 +50,13 @@ class ProfilePanel(QGroupBox):
         self,
         *,
         get_override: Callable[[], Optional[str]],
+        get_isolation_band: Callable[[], Optional[Tuple[float, float]]] = lambda: None,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__("Profiles", parent)
         self._get_override = get_override
+        self._get_isolation_band = get_isolation_band
+        self._sr = 48000
         self._measurements: Dict[str, Optional[str]] = {}
         self._loading = False  # guards itemChanged during programmatic refresh
 
@@ -88,6 +91,14 @@ class ProfilePanel(QGroupBox):
             pbtns.addWidget(b)
         layout.addLayout(pbtns)
 
+        self.btn_optimize = QPushButton("Optimize → single EQ")
+        self.btn_optimize.setToolTip(
+            "Combine the active preset's whole stack into one equivalent "
+            "GraphicEQ in a new '(optimized)' preset — same sound, lighter."
+        )
+        self.btn_optimize.clicked.connect(self._on_optimize)
+        layout.addWidget(self.btn_optimize)
+
         # --- Stack (active preset's EQ files) ---
         layout.addWidget(QLabel("EQ files in this preset (double-click to edit):"))
         self._stack = QListWidget()
@@ -108,6 +119,14 @@ class ProfilePanel(QGroupBox):
         for b in (self.btn_new_eq, self.btn_add_eq, self.btn_up, self.btn_down, self.btn_remove_eq):
             sbtns.addWidget(b)
         layout.addLayout(sbtns)
+
+        self.btn_bypass = QPushButton("Bypass isolation band")
+        self.btn_bypass.setToolTip(
+            "Append a correction EQ that flattens the net EQ inside the current "
+            "Frequency-isolation band (toggle/remove it like any EQ file)."
+        )
+        self.btn_bypass.clicked.connect(self._on_bypass)
+        layout.addWidget(self.btn_bypass)
 
         # --- Measurements ---
         mbtns = QHBoxLayout()
@@ -319,6 +338,111 @@ class ProfilePanel(QGroupBox):
             return
         self._refresh_lists()
         self._emit_curves_for_device(self._current_device())
+
+    # --------------------------------------------------- optimize / bypass
+
+    def set_sample_rate(self, sample_rate: int) -> None:
+        """Sample rate used only for the optimize accuracy readout (the
+        GraphicEQ text itself is rate-independent; APO re-synthesizes per rate)."""
+        try:
+            self._sr = int(sample_rate)
+        except (TypeError, ValueError):
+            pass
+
+    def _do_optimize(self) -> Tuple[Preset, int, float]:
+        """Create the ``(optimized)`` preset + its single GraphicEQ file.
+
+        Assumes an active preset exists. Returns ``(new_preset, n_points,
+        max_dev_db)``. Dialog-free so it is unit-testable; ``_on_optimize``
+        wraps it with the user prompts."""
+        from eq_helper.apo.writer import atomic_write_with_backup
+        from eq_helper.dsp.eq_optimize import optimize_profile
+        from eq_helper.dsp.graphic_eq import graphic_eq_to_apo_text
+
+        lib = self._library()
+        preset = self._active_preset()
+        if lib is None or preset is None:
+            raise ValueError("no active preset")
+        geq, max_dev = optimize_profile(Path(preset.path), self._sr)
+        new = lib.create_preset(preset.device, f"{preset.name} (optimized)")
+        eq = lib.create_eq_file(new, "optimized")
+        atomic_write_with_backup(Path(eq.path), graphic_eq_to_apo_text(geq) + "\n")
+        return new, len(geq.bands), max_dev
+
+    def _on_optimize(self) -> None:
+        lib = self._library()
+        preset = self._active_preset()
+        if lib is None or preset is None:
+            QMessageBox.information(
+                self, "No active preset", "Activate a preset to optimize."
+            )
+            return
+        try:
+            new, n_points, max_dev = self._do_optimize()
+        except (ApoError, OSError, ValueError) as exc:
+            QMessageBox.critical(self, "Optimize failed", str(exc))
+            return
+        self._refresh_lists()
+        self._emit_curves_for_device(self._current_device())
+        msg = (
+            f"Combined the stack into one GraphicEQ ({n_points} points).\n"
+            f"Max deviation vs the original: {max_dev:.3f} dB.\n\n"
+            f"Created preset '{new.name}'. Click it to switch and compare."
+        )
+        if max_dev >= 0.1:
+            msg += (
+                "\n\nNote: deviation exceeds 0.1 dB — likely a very-high-Q "
+                "deep-bass feature near APO's 16384-tap FIR resolution limit "
+                "(inherent to any single-filter consolidation)."
+            )
+        QMessageBox.information(self, "Optimized", msg)
+
+    def _do_bypass(self, lo: float, hi: float) -> EqFile:
+        """Append a region-bypass correction EQ to the active preset and return
+        it. Assumes an active preset exists. Dialog-free for testability."""
+        from eq_helper.apo.writer import atomic_write_with_backup
+        from eq_helper.dsp.eq_optimize import region_bypass_correction
+        from eq_helper.dsp.graphic_eq import graphic_eq_to_apo_text
+
+        lib = self._library()
+        preset = self._active_preset()
+        if lib is None or preset is None:
+            raise ValueError("no active preset")
+        geq = region_bypass_correction(Path(preset.path), lo, hi, _EQ_FREQS)
+        eq = lib.create_eq_file(preset, f"bypass {int(lo)}-{int(hi)}Hz")
+        atomic_write_with_backup(Path(eq.path), graphic_eq_to_apo_text(geq) + "\n")
+        return eq
+
+    def _on_bypass(self) -> None:
+        lib = self._library()
+        preset = self._active_preset()
+        if lib is None or preset is None:
+            QMessageBox.information(
+                self, "No active preset", "Activate a preset first."
+            )
+            return
+        band = self._get_isolation_band()
+        if not band:
+            QMessageBox.information(
+                self, "No band", "Set the Frequency-isolation band first."
+            )
+            return
+        fc, bw = float(band[0]), float(band[1])
+        lo = max(20.0, fc - bw / 2.0)
+        hi = min(20000.0, fc + bw / 2.0)
+        try:
+            self._do_bypass(lo, hi)
+        except (ApoError, OSError, ValueError) as exc:
+            QMessageBox.critical(self, "Bypass failed", str(exc))
+            return
+        self._refresh_stack()
+        self._emit_curves_for_device(self._current_device())
+        QMessageBox.information(
+            self, "Bypassed",
+            f"Added a correction that flattens the EQ between "
+            f"{int(lo)} and {int(hi)} Hz.\nIt's the last EQ file in this preset — "
+            f"toggle or remove it any time.",
+        )
 
     # ---------------------------------------------------------- stack actions
 

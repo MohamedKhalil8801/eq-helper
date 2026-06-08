@@ -51,8 +51,13 @@ class MainWindow(QMainWindow):
         self.audio_panel = AudioPanel(self.engine)
         self.band_panel = BandPanel(self.engine)
         self.profile_panel = ProfilePanel(
-            get_override=lambda: self._settings.get("apo_config_dir_override")
+            get_override=lambda: self._settings.get("apo_config_dir_override"),
+            get_isolation_band=lambda: (
+                self.band_panel.fc_spin.value(),
+                self.band_panel.bw_spin.value(),
+            ),
         )
+        self.profile_panel.set_sample_rate(self.engine.sample_rate)
         self.spectrum_view = SpectrumView(self.engine)
         self.mic_panel = MicPanel(self.engine)
         self.test_songs_panel = TestSongsPanel()
