@@ -18,6 +18,8 @@ from typing import Optional, Set
 
 import numpy as np
 
+from eq_helper.dsp.graphic_eq import graphic_eq_response, parse_graphic_eq_line
+
 _FILTER_RE = re.compile(
     r"^\s*Filter\s*\d*\s*:\s*(?:ON|OFF)\s+"
     r"(?P<type>[A-Za-z]+)\s+"
@@ -158,6 +160,13 @@ def compute_eq_response(
                 base_dir=inc_path.parent,
                 _visited=_visited,
             )
+            continue
+
+        # --- Graphic EQ -----------------------------------------------------
+        if line.lstrip().lower().startswith("graphiceq"):
+            geq = parse_graphic_eq_line(line)
+            if geq is not None:
+                response += graphic_eq_response(geq.bands, freqs)
             continue
 
         # --- Skip disabled filters ------------------------------------------
