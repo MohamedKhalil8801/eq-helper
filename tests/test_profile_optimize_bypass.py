@@ -29,12 +29,22 @@ _FILTERS = (
 )
 
 
-def _setup_active_preset(tmp_path: Path) -> PresetLibrary:
+_BALANCE = (
+    "Filter 1: ON PK Fc 1000 Hz Gain 4 dB Q 2\n"
+    "Channel: L\n"
+    "Filter 2: ON PK Fc 120 Hz Gain 3 dB Q 1\n"
+    "Channel: R\n"
+    "Filter 3: ON PK Fc 6000 Hz Gain -5 dB Q 2\n"
+    "Channel: all\n"
+)
+
+
+def _setup_active_preset(tmp_path: Path, content: str = _FILTERS) -> PresetLibrary:
     (tmp_path / "config.txt").write_text(f"{DEV}\n", encoding="utf-8")
     lib = PresetLibrary(tmp_path)
     preset = lib.create_preset("HD600", "Base")
     eq = lib.create_eq_file(preset, "filters")
-    atomic_write_with_backup(Path(eq.path), _FILTERS)
+    atomic_write_with_backup(Path(eq.path), content)
     lib.activate(preset)
     return lib
 
@@ -54,11 +64,12 @@ def test_optimize_creates_optimized_preset(tmp_path, qtbot):
     _setup_active_preset(tmp_path)
     panel = _panel(tmp_path, qtbot)
 
-    new, n_points, max_dev = panel._do_optimize()
+    new, n_points, max_dev, n_groups = panel._do_optimize()
 
     assert new.name == "Base (optimized)"
     assert n_points >= 2
     assert max_dev < 0.1
+    assert n_groups == 1  # no channel directives -> single GraphicEQ
 
     lib = PresetLibrary(tmp_path)
     names = [p.name for p in lib.list_presets("HD600")]
@@ -80,6 +91,37 @@ def test_optimize_creates_optimized_preset(tmp_path, qtbot):
     assert np.max(np.abs(optimized - orig)) < 0.1
 
 
+def test_optimize_balance_preset_emits_channel_blocks(tmp_path, qtbot):
+    _setup_active_preset(tmp_path, _BALANCE)
+    panel = _panel(tmp_path, qtbot)
+
+    new, n_points, max_dev, n_groups = panel._do_optimize()
+    assert n_groups == 2  # L and R differ -> two channel-scoped GraphicEQs
+    assert max_dev < 0.1
+
+    lib = PresetLibrary(tmp_path)
+    opt = next(p for p in lib.list_presets("HD600") if p.name == "Base (optimized)")
+    content = Path(lib.list_eq_files(opt)[0].path).read_text(encoding="utf-8")
+    assert "Channel: L" in content
+    assert "Channel: R" in content
+    assert content.rstrip().endswith("Channel: all")  # reset, no state leak
+
+
+def test_bypass_balance_preset_is_first_and_per_channel(tmp_path, qtbot):
+    _setup_active_preset(tmp_path, _BALANCE)
+    panel = _panel(tmp_path, qtbot)
+
+    eq = panel._do_bypass(4000.0, 9000.0)
+
+    lib = PresetLibrary(tmp_path)
+    preset = lib.active_preset("HD600")
+    eqs = lib.list_eq_files(preset)
+    assert "bypass" in eqs[0].name  # placed first
+    content = Path(eq.path).read_text(encoding="utf-8")
+    assert "Channel: L" in content and "Channel: R" in content
+    assert content.rstrip().endswith("Channel: all")
+
+
 def test_optimize_without_active_preset_raises(tmp_path, qtbot):
     (tmp_path / "config.txt").write_text(f"{DEV}\n", encoding="utf-8")
     panel = _panel(tmp_path, qtbot)
@@ -97,11 +139,14 @@ def test_bypass_flattens_active_preset_band(tmp_path, qtbot):
     lib = PresetLibrary(tmp_path)
     preset = lib.active_preset("HD600")
     eqs = lib.list_eq_files(preset)
-    assert len(eqs) == 2  # original filters + the appended bypass correction
+    assert len(eqs) == 2  # original filters + the bypass correction
+    # The bypass correction must be placed FIRST in the stack.
+    assert "bypass" in eqs[0].name
+    filters_eq = next(e for e in eqs if "bypass" not in e.name)
 
     freqs = np.geomspace(20, 20000, 2000)
-    # original = filters-only file (eqs[0]); net = whole stack incl. the bypass.
-    orig = load_profile_eq_response(Path(eqs[0].path), freqs)
+    # original = filters-only file; net = whole stack incl. the bypass.
+    orig = load_profile_eq_response(Path(filters_eq.path), freqs)
     net = load_profile_eq_response(Path(preset.path), freqs)
 
     inside = (freqs >= 4500) & (freqs <= 6500)

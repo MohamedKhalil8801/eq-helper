@@ -349,25 +349,27 @@ class ProfilePanel(QGroupBox):
         except (TypeError, ValueError):
             pass
 
-    def _do_optimize(self) -> Tuple[Preset, int, float]:
-        """Create the ``(optimized)`` preset + its single GraphicEQ file.
+    def _do_optimize(self) -> Tuple[Preset, int, float, int]:
+        """Create the ``(optimized)`` preset + its GraphicEQ file (one bare
+        GraphicEQ, or per-channel scoped GraphicEQs when L/R differ).
 
         Assumes an active preset exists. Returns ``(new_preset, n_points,
-        max_dev_db)``. Dialog-free so it is unit-testable; ``_on_optimize``
-        wraps it with the user prompts."""
+        max_dev_db, n_channel_groups)``. Dialog-free so it is unit-testable;
+        ``_on_optimize`` wraps it with the user prompts."""
         from eq_helper.apo.writer import atomic_write_with_backup
-        from eq_helper.dsp.eq_optimize import optimize_profile
-        from eq_helper.dsp.graphic_eq import graphic_eq_to_apo_text
+        from eq_helper.dsp.eq_optimize import optimize_profile, render_channel_eqs
 
         lib = self._library()
         preset = self._active_preset()
         if lib is None or preset is None:
             raise ValueError("no active preset")
-        geq, max_dev = optimize_profile(Path(preset.path), self._sr)
+        groups, max_dev = optimize_profile(Path(preset.path), self._sr)
+        content = render_channel_eqs(groups)
+        n_points = sum(len(g.geq.bands) for g in groups)
         new = lib.create_preset(preset.device, f"{preset.name} (optimized)")
         try:
             eq = lib.create_eq_file(new, "optimized")
-            atomic_write_with_backup(Path(eq.path), graphic_eq_to_apo_text(geq) + "\n")
+            atomic_write_with_backup(Path(eq.path), content)
         except Exception:
             # Don't leave an orphan "(optimized)" preset if the EQ write fails.
             try:
@@ -375,7 +377,7 @@ class ProfilePanel(QGroupBox):
             except Exception:
                 pass
             raise
-        return new, len(geq.bands), max_dev
+        return new, n_points, max_dev, len(groups)
 
     def _on_optimize(self) -> None:
         lib = self._library()
@@ -386,14 +388,22 @@ class ProfilePanel(QGroupBox):
             )
             return
         try:
-            new, n_points, max_dev = self._do_optimize()
+            new, n_points, max_dev, n_groups = self._do_optimize()
         except Exception as exc:  # DSP runs before any write, so no partial state
             QMessageBox.critical(self, "Optimize failed", str(exc))
             return
         self._refresh_lists()
         self._emit_curves_for_device(self._current_device())
+        if n_groups > 1:
+            head = (
+                f"Combined the stack into {n_groups} channel-scoped GraphicEQs "
+                f"({n_points} points total) — left/right EQ differ, so each side "
+                f"is reproduced separately."
+            )
+        else:
+            head = f"Combined the stack into one GraphicEQ ({n_points} points)."
         msg = (
-            f"Combined the stack into one GraphicEQ ({n_points} points).\n"
+            f"{head}\n"
             f"Max deviation vs the original: {max_dev:.3f} dB.\n\n"
             f"Created preset '{new.name}'. Click it to switch and compare."
         )
@@ -406,19 +416,24 @@ class ProfilePanel(QGroupBox):
         QMessageBox.information(self, "Optimized", msg)
 
     def _do_bypass(self, lo: float, hi: float) -> EqFile:
-        """Append a region-bypass correction EQ to the active preset and return
-        it. Assumes an active preset exists. Dialog-free for testability."""
+        """Create a region-bypass correction EQ (per-channel aware) and move it
+        to the FIRST position in the active preset's stack. Assumes an active
+        preset exists. Dialog-free for testability."""
         from eq_helper.apo.writer import atomic_write_with_backup
-        from eq_helper.dsp.eq_optimize import region_bypass_correction
-        from eq_helper.dsp.graphic_eq import graphic_eq_to_apo_text
+        from eq_helper.dsp.eq_optimize import region_bypass_groups, render_channel_eqs
 
         lib = self._library()
         preset = self._active_preset()
         if lib is None or preset is None:
             raise ValueError("no active preset")
-        geq = region_bypass_correction(Path(preset.path), lo, hi, _EQ_FREQS)
+        groups = region_bypass_groups(Path(preset.path), lo, hi, _EQ_FREQS)
+        content = render_channel_eqs(groups)
         eq = lib.create_eq_file(preset, f"bypass {round(lo)}-{round(hi)}Hz")
-        atomic_write_with_backup(Path(eq.path), graphic_eq_to_apo_text(geq) + "\n")
+        atomic_write_with_backup(Path(eq.path), content)
+        # The bypass must be applied first; move it to the head of the stack.
+        order = [e.include_path for e in lib.list_eq_files(preset)]
+        order = [eq.include_path] + [p for p in order if p != eq.include_path]
+        lib.reorder_eq(preset, order)
         return eq
 
     def _on_bypass(self) -> None:
@@ -448,8 +463,8 @@ class ProfilePanel(QGroupBox):
         QMessageBox.information(
             self, "Bypassed",
             f"Added a correction that flattens the EQ between "
-            f"{int(lo)} and {int(hi)} Hz.\nIt's the last EQ file in this preset — "
-            f"toggle or remove it any time.",
+            f"{int(lo)} and {int(hi)} Hz on every channel.\nIt's the first EQ "
+            f"file in this preset — toggle or remove it any time.",
         )
 
     # ---------------------------------------------------------- stack actions

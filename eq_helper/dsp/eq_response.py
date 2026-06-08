@@ -42,6 +42,12 @@ _INCLUDE_RE = re.compile(
     r"^\s*Include\s*:\s*(?P<path>.+?)\s*$",
     re.IGNORECASE,
 )
+# Active (uncommented) Channel: line — selects which channels following filters
+# apply to (stateful in APO). A leading '#' prevents a match (comment).
+_CHANNEL_RE = re.compile(
+    r"^\s*Channel\s*:\s*(?P<chans>.+?)\s*$",
+    re.IGNORECASE,
+)
 
 
 def _peaking_response(
@@ -108,6 +114,80 @@ def _highpass_response(
     return 20.0 * np.log10(np.abs(H) + 1e-30)
 
 
+def _line_contribution(line: str, freqs: np.ndarray):
+    """dB contribution of a single ``Preamp:`` / ``GraphicEQ:`` / active
+    ``Filter:`` line — a scalar or an ndarray broadcastable over ``freqs`` — or
+    ``None`` for lines that contribute nothing (``Include:``/``Channel:``
+    directives, ``OFF`` filters, comments, unrecognised lines).
+
+    Includes are handled by the caller (they need recursion); everything else
+    routes through here so the single-response and per-channel paths can't drift.
+    """
+    pm = _PREAMP_RE.match(line)
+    if pm:
+        return float(pm.group("gain"))
+
+    if line.lstrip().lower().startswith("graphiceq"):
+        geq = parse_graphic_eq_line(line)
+        if geq is None:
+            return None
+        return graphic_eq_response(geq.bands, freqs)
+
+    if _FILTER_OFF_RE.match(line):
+        return None
+
+    m = _FILTER_RE.match(line)
+    if not m:
+        return None
+
+    ftype = m.group("type").upper()
+    fc = float(m.group("fc"))
+    gain_str = m.group("gain")
+    q_str = m.group("q")
+    gain = float(gain_str) if gain_str else 0.0
+    q = float(q_str) if q_str else 0.707
+    if q <= 0.0:
+        q = 1e-4  # guard degenerate Q (avoids division-by-zero in biquads)
+
+    if ftype == "PK":
+        return _peaking_response(freqs, fc, gain, q)
+    if ftype in ("LS", "LSC"):
+        return _low_shelf_response(freqs, fc, gain, q)
+    if ftype in ("HS", "HSC"):
+        return _high_shelf_response(freqs, fc, gain, q)
+    if ftype in ("LP", "LPQ"):
+        return _lowpass_response(freqs, fc, q)
+    if ftype in ("HP", "HPQ"):
+        return _highpass_response(freqs, fc, q)
+    return None
+
+
+def _resolve_include(line: str, base_dir: Optional[Path], visited: Set[str]):
+    """For an active ``Include:`` line, return ``(included_text, child_dir)`` to
+    recurse into, or ``None`` if it's not an include / can't be read / is a
+    cycle. Mutates ``visited`` with the resolved path."""
+    if base_dir is None:
+        return None
+    inc = _INCLUDE_RE.match(line)
+    if not inc:
+        return None
+    inc_path = Path(inc.group("path").strip())
+    if not inc_path.is_absolute():
+        inc_path = base_dir / inc_path
+    try:
+        resolved = str(inc_path.resolve())
+    except OSError:
+        return None
+    if resolved in visited:
+        return None  # cycle
+    visited.add(resolved)
+    try:
+        text = inc_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    return text, inc_path.parent
+
+
 def compute_eq_response(
     profile_text: str,
     freqs: np.ndarray,
@@ -117,10 +197,14 @@ def compute_eq_response(
 ) -> np.ndarray:
     """Return the combined EQ magnitude in dB at each frequency.
 
-    Parses ``Preamp:``, ``Filter N: ON ...``, and ``Include:`` lines from
-    ``profile_text`` and sums their responses.  ``Include:`` lines are
-    resolved recursively (relative paths resolved against ``base_dir``).
-    A ``_visited`` set prevents infinite cycles.
+    Parses ``Preamp:``, ``Filter N: ON ...``, ``GraphicEQ:`` and ``Include:``
+    lines from ``profile_text`` and sums their responses.  ``Include:`` lines are
+    resolved recursively (relative paths resolved against ``base_dir``).  A
+    ``_visited`` set prevents infinite cycles.
+
+    Channel selection is intentionally ignored here (every filter is summed) —
+    this drives the single combined display curve. Use
+    :func:`compute_channel_responses` for channel-aware per-side responses.
 
     Disabled filters (``OFF``) and commented-out includes are skipped.
     """
@@ -130,73 +214,15 @@ def compute_eq_response(
     response = np.zeros_like(freqs, dtype=np.float64)
 
     for line in profile_text.splitlines():
-        # --- Preamp ---------------------------------------------------------
-        pm = _PREAMP_RE.match(line)
-        if pm:
-            response += float(pm.group("gain"))
-            continue
-
-        # --- Include (recursive) --------------------------------------------
-        inc = _INCLUDE_RE.match(line)
-        if inc and base_dir is not None:
-            inc_path_str = inc.group("path").strip()
-            inc_path = Path(inc_path_str)
-            if not inc_path.is_absolute():
-                inc_path = base_dir / inc_path
-            try:
-                resolved = str(inc_path.resolve())
-            except OSError:
-                continue
-            if resolved in _visited:
-                continue  # cycle detected
-            _visited.add(resolved)
-            try:
-                inc_text = inc_path.read_text(encoding="utf-8", errors="replace")
-            except OSError:
-                continue
+        inc = _resolve_include(line, base_dir, _visited)
+        if inc is not None:
             response += compute_eq_response(
-                inc_text,
-                freqs,
-                base_dir=inc_path.parent,
-                _visited=_visited,
+                inc[0], freqs, base_dir=inc[1], _visited=_visited
             )
             continue
-
-        # --- Graphic EQ -----------------------------------------------------
-        if line.lstrip().lower().startswith("graphiceq"):
-            geq = parse_graphic_eq_line(line)
-            if geq is not None:
-                response += graphic_eq_response(geq.bands, freqs)
-            continue
-
-        # --- Skip disabled filters ------------------------------------------
-        if _FILTER_OFF_RE.match(line):
-            continue
-
-        # --- Active filter --------------------------------------------------
-        m = _FILTER_RE.match(line)
-        if not m:
-            continue
-
-        ftype = m.group("type").upper()
-        fc = float(m.group("fc"))
-        gain_str = m.group("gain")
-        q_str = m.group("q")
-        gain = float(gain_str) if gain_str else 0.0
-        q = float(q_str) if q_str else 0.707
-        if q <= 0.0:
-            q = 1e-4  # guard degenerate Q (avoids division-by-zero in biquads)
-
-        if ftype == "PK":
-            response += _peaking_response(freqs, fc, gain, q)
-        elif ftype in ("LS", "LSC"):
-            response += _low_shelf_response(freqs, fc, gain, q)
-        elif ftype in ("HS", "HSC"):
-            response += _high_shelf_response(freqs, fc, gain, q)
-        elif ftype in ("LP", "LPQ"):
-            response += _lowpass_response(freqs, fc, q)
-        elif ftype in ("HP", "HPQ"):
-            response += _highpass_response(freqs, fc, q)
+        contrib = _line_contribution(line, freqs)
+        if contrib is not None:
+            response += contrib
 
     return response
 
@@ -303,4 +329,108 @@ def load_profile_feature_freqs(profile_path: Path) -> List[float]:
         pass
     return collect_feature_freqs(
         text, base_dir=profile_path.parent, _visited=visited
+    )
+
+
+# --------------------------------------------------------- channel awareness
+
+# Sentinel key used when a config references no channels at all (so every filter
+# applies to every channel — one combined response, exactly as before).
+ALL_CHANNELS = "ALL"
+
+
+def _collect_channels(
+    text: str, *, base_dir: Optional[Path], _visited: Set[str]
+) -> Set[str]:
+    """The set of channel identifiers explicitly referenced by ``Channel:``
+    lines across the include tree (upper-cased; the ``all`` keyword excluded)."""
+    out: Set[str] = set()
+    for line in text.splitlines():
+        cm = _CHANNEL_RE.match(line)
+        if cm:
+            for tok in cm.group("chans").split():
+                tu = tok.strip().upper()
+                if tu and tu != "ALL":
+                    out.add(tu)
+            continue
+        inc = _resolve_include(line, base_dir, _visited)
+        if inc is not None:
+            out |= _collect_channels(inc[0], base_dir=inc[1], _visited=_visited)
+    return out
+
+
+def _accumulate_channels(
+    text: str,
+    freqs: np.ndarray,
+    base_dir: Optional[Path],
+    channels: Set[str],
+    acc: dict,
+    state: list,
+    visited: Set[str],
+) -> None:
+    """Walk the tree in document order, honouring stateful ``Channel:``
+    selection (``state[0]`` is the live set), adding each line's contribution to
+    every currently-selected channel's accumulator."""
+    for line in text.splitlines():
+        cm = _CHANNEL_RE.match(line)
+        if cm:
+            toks = [t.strip().upper() for t in cm.group("chans").split() if t.strip()]
+            if not toks or any(t == "ALL" for t in toks):
+                state[0] = set(channels)
+            else:
+                state[0] = {t for t in toks if t in channels}
+            continue
+        inc = _resolve_include(line, base_dir, visited)
+        if inc is not None:
+            _accumulate_channels(
+                inc[0], freqs, inc[1], channels, acc, state, visited
+            )
+            continue
+        contrib = _line_contribution(line, freqs)
+        if contrib is not None:
+            for ch in state[0]:
+                acc[ch] += contrib
+
+
+def compute_channel_responses(
+    profile_text: str,
+    freqs: np.ndarray,
+    *,
+    base_dir: Optional[Path] = None,
+) -> dict:
+    """Per-channel combined EQ response, honouring stateful ``Channel:``
+    selection across the whole include tree (document order; default = all
+    referenced channels).
+
+    Returns ``{channel_id: response_db}``. If the config references no channels
+    at all, returns ``{ALL_CHANNELS: combined_response}`` — identical to
+    :func:`compute_eq_response`. ``Channel:`` state is threaded through
+    ``Include:`` boundaries (APO treats includes as textual inclusion).
+    """
+    channels = _collect_channels(profile_text, base_dir=base_dir, _visited=set())
+    if not channels:
+        return {
+            ALL_CHANNELS: compute_eq_response(
+                profile_text, freqs, base_dir=base_dir
+            )
+        }
+    acc = {ch: np.zeros_like(freqs, dtype=np.float64) for ch in channels}
+    state = [set(channels)]  # mutable holder so Include recursion shares it
+    _accumulate_channels(
+        profile_text, freqs, base_dir, channels, acc, state, set()
+    )
+    return acc
+
+
+def load_profile_channel_responses(
+    profile_path: Path, freqs: np.ndarray
+) -> Optional[dict]:
+    """Channel-aware combined response for a profile file (resolving includes).
+    Returns ``None`` if the file can't be read."""
+    try:
+        text = profile_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    return compute_channel_responses(
+        text, freqs, base_dir=profile_path.parent
     )

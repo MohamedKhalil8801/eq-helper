@@ -22,16 +22,23 @@ along log-frequency) reproduces the target within tolerance. Verification
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
 from eq_helper.dsp.eq_response import (
+    ALL_CHANNELS,
+    load_profile_channel_responses,
     load_profile_eq_response,
     load_profile_feature_freqs,
 )
-from eq_helper.dsp.graphic_eq import GraphicEQ, GraphicEQBand
+from eq_helper.dsp.graphic_eq import (
+    GraphicEQ,
+    GraphicEQBand,
+    graphic_eq_to_apo_text,
+)
 
 # Dense log grid used to sample the combined response before fitting.
 _FIT_FREQS = np.geomspace(20.0, 20000.0, 4000)
@@ -163,6 +170,63 @@ def realized_response_db(
     return np.interp(np.asarray(freqs, dtype=float), grid, realized_db_grid)
 
 
+# --------------------------------------------------------- channel grouping
+
+
+@dataclass
+class ChannelEQ:
+    """One GraphicEQ scoped to a set of channels.
+
+    ``channels=None`` means "all channels" — rendered as a bare ``GraphicEQ:``
+    line with no ``Channel:`` directive (applies everywhere). A non-None tuple
+    (e.g. ``("L",)``) renders a ``Channel: L`` directive before the GraphicEQ.
+    """
+
+    channels: Optional[Tuple[str, ...]]
+    geq: GraphicEQ
+
+
+def render_channel_eqs(groups: List[ChannelEQ]) -> str:
+    """Render channel-scoped GraphicEQs to APO text.
+
+    A single all-channel group is one bare ``GraphicEQ:`` line. Otherwise each
+    group is a ``Channel: <ids>`` directive followed by its GraphicEQ, and the
+    block ends with ``Channel: all`` so the selection never leaks into EQ files
+    APO processes afterwards.
+    """
+    if len(groups) == 1 and groups[0].channels is None:
+        return graphic_eq_to_apo_text(groups[0].geq) + "\n"
+    lines: List[str] = []
+    for g in groups:
+        chans = "all" if g.channels is None else " ".join(g.channels)
+        lines.append(f"Channel: {chans}")
+        lines.append(graphic_eq_to_apo_text(g.geq))
+    lines.append("Channel: all")  # reset — don't leak channel state downstream
+    return "\n".join(lines) + "\n"
+
+
+def _responses_all_equal(resps: Dict[str, np.ndarray], atol: float = 0.01) -> bool:
+    vals = list(resps.values())
+    return all(np.max(np.abs(v - vals[0])) <= atol for v in vals[1:])
+
+
+def _group_channels_by_response(
+    resps: Dict[str, np.ndarray], atol: float = 0.01
+) -> List[Tuple[List[str], np.ndarray]]:
+    """Group channels whose responses match within ``atol`` dB. Returns a list
+    of ``(sorted_channel_ids, representative_response)``."""
+    groups: List[Tuple[List[str], np.ndarray]] = []
+    for ch in sorted(resps):
+        r = resps[ch]
+        for chans, rep in groups:
+            if np.max(np.abs(rep - r)) <= atol:
+                chans.append(ch)
+                break
+        else:
+            groups.append(([ch], r))
+    return groups
+
+
 # ------------------------------------------------------------- optimize a stack
 
 
@@ -171,34 +235,50 @@ def optimize_profile(
     sample_rate: int,
     *,
     tol_db: float = 0.02,
-    name: str = "Optimized",
-) -> Tuple[GraphicEQ, float]:
-    """Combine the whole include tree at ``profile_path`` into one ``GraphicEQ``.
+) -> Tuple[List[ChannelEQ], float]:
+    """Combine the whole include tree at ``profile_path`` into one GraphicEQ per
+    distinct channel response.
 
-    Returns ``(GraphicEQ, max_deviation_db)`` where the deviation is APO's exact
-    min-phase-FIR realization measured against the true combined response. The
-    fit grid and the (independent, denser) verification grid are both seeded
-    with every filter center + GraphicEQ point so narrow high-Q features are
-    resolved and ``max_dev`` cannot under-report. Raises ``ValueError`` if the
-    profile can't be read.
+    Returns ``(groups, max_deviation_db)``. When every channel has the same EQ
+    (or the config references no channels) ``groups`` is a single all-channel
+    GraphicEQ. When L/R (etc.) differ, each distinct response becomes its own
+    channel-scoped GraphicEQ. ``max_dev`` is the worst per-channel deviation of
+    APO's exact min-phase-FIR realization from the true response, measured on an
+    independent denser grid seeded with every feature frequency (so narrow
+    high-Q peaks are resolved and the deviation can't under-report). Raises
+    ``ValueError`` if the profile can't be read.
     """
     path = Path(profile_path)
     features = load_profile_feature_freqs(path)
-
     fit_freqs = _build_eval_grid(features, n_base=8000)
-    target = load_profile_eq_response(path, fit_freqs)
-    if target is None:
-        raise ValueError(f"could not read profile: {profile_path}")
-    bands = fit_graphic_eq(fit_freqs, target, tol_db=tol_db)
-    geq = GraphicEQ(name=name, bands=bands)
-
-    # Verify on an INDEPENDENT, denser grid (different base count + the same
-    # feature clusters) so the check can catch error between the fit's nodes.
     ver_freqs = _build_eval_grid(features, n_base=40000)
-    ver_target = load_profile_eq_response(path, ver_freqs)
-    ver_realized = realized_response_db(bands, ver_freqs, sample_rate)
-    max_dev = float(np.max(np.abs(ver_realized - ver_target)))
-    return geq, max_dev
+
+    fit_resps = load_profile_channel_responses(path, fit_freqs)
+    if fit_resps is None:
+        raise ValueError(f"could not read profile: {profile_path}")
+    ver_resps = load_profile_channel_responses(path, ver_freqs)
+
+    def _fit_and_verify(
+        target: np.ndarray, ver_target: np.ndarray
+    ) -> Tuple[GraphicEQ, float]:
+        bands = fit_graphic_eq(fit_freqs, target, tol_db=tol_db)
+        realized = realized_response_db(bands, ver_freqs, sample_rate)
+        dev = float(np.max(np.abs(realized - ver_target)))
+        return GraphicEQ(name="Optimized", bands=bands), dev
+
+    # One bare GraphicEQ when there are no channels or all channels are equal.
+    if set(fit_resps) == {ALL_CHANNELS} or _responses_all_equal(fit_resps):
+        key = next(iter(fit_resps))
+        geq, max_dev = _fit_and_verify(fit_resps[key], ver_resps[key])
+        return [ChannelEQ(channels=None, geq=geq)], max_dev
+
+    groups: List[ChannelEQ] = []
+    max_dev = 0.0
+    for chans, resp in _group_channels_by_response(fit_resps):
+        geq, dev = _fit_and_verify(resp, ver_resps[chans[0]])
+        groups.append(ChannelEQ(channels=tuple(chans), geq=geq))
+        max_dev = max(max_dev, dev)
+    return groups, max_dev
 
 
 # --------------------------------------------------------------- region bypass
@@ -222,7 +302,7 @@ def _raised_cosine_window(
     return w
 
 
-def region_bypass_correction(
+def region_bypass_groups(
     profile_path,
     lo: float,
     hi: float,
@@ -230,19 +310,31 @@ def region_bypass_correction(
     *,
     transition_oct: float = 1.0 / 6.0,
     tol_db: float = 0.02,
-    name: str = "bypass",
-) -> GraphicEQ:
-    """A ``GraphicEQ`` that cancels the combined EQ inside ``[lo, hi]``.
+) -> List[ChannelEQ]:
+    """Per-channel ``GraphicEQ`` corrections that cancel the combined EQ inside
+    ``[lo, hi]`` on every channel.
 
-    The correction is ``-R(f) * W(f)`` where ``R`` is the combined response and
-    ``W`` is a raised-cosine band window. Adding it makes the net response flat
-    inside the band (smooth at the edges) and unchanged outside. Raises
+    For each channel the correction is ``-R(f) * W(f)`` (``R`` = that channel's
+    combined response, ``W`` = a raised-cosine band window). Channels that share
+    the same EQ collapse to one bare GraphicEQ; channels that differ get their
+    own ``Channel:``-scoped correction. Adding the result makes each channel's
+    net response flat inside the band and unchanged outside. Raises
     ``ValueError`` if the profile can't be read."""
     lo, hi = float(min(lo, hi)), float(max(lo, hi))
-    R = load_profile_eq_response(Path(profile_path), freqs)
-    if R is None:
+    resps = load_profile_channel_responses(Path(profile_path), freqs)
+    if resps is None:
         raise ValueError(f"could not read profile: {profile_path}")
     W = _raised_cosine_window(freqs, lo, hi, transition_oct)
-    correction = -R * W
-    bands = fit_graphic_eq(freqs, correction, tol_db=tol_db)
-    return GraphicEQ(name=name, bands=bands)
+
+    def _corr(resp: np.ndarray) -> GraphicEQ:
+        bands = fit_graphic_eq(freqs, -resp * W, tol_db=tol_db)
+        return GraphicEQ(name="bypass", bands=bands)
+
+    if set(resps) == {ALL_CHANNELS} or _responses_all_equal(resps):
+        key = next(iter(resps))
+        return [ChannelEQ(channels=None, geq=_corr(resps[key]))]
+
+    return [
+        ChannelEQ(channels=tuple(chans), geq=_corr(resp))
+        for chans, resp in _group_channels_by_response(resps)
+    ]
