@@ -10,9 +10,10 @@ Two user-facing operations are powered here (both Qt-free, pure functions):
   We return the GraphicEQ plus the measured max deviation of APO's realization
   from the true target, so the UI can promise "exact to X dB".
 
-- :func:`region_bypass_correction` — a ``GraphicEQ`` that cancels the combined EQ
-  inside a chosen band (smooth raised-cosine edges, flat/zero outside), so adding
-  it flattens the net response there while leaving everything else untouched.
+- :func:`region_bypass_groups` — per-channel ``GraphicEQ`` corrections that cancel
+  the combined EQ inside a chosen band (smooth raised-cosine edges, flat/zero
+  outside), so adding them flattens the net response there while leaving
+  everything else untouched.
 
 The fit (:func:`fit_graphic_eq`) places points so APO's interpolation (linear dB
 along log-frequency) reproduces the target within tolerance. Verification
@@ -31,7 +32,6 @@ import numpy as np
 from eq_helper.dsp.eq_response import (
     ALL_CHANNELS,
     load_profile_channel_responses,
-    load_profile_eq_response,
     load_profile_feature_freqs,
 )
 from eq_helper.dsp.graphic_eq import (
