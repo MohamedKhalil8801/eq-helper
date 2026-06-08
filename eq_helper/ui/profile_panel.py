@@ -426,7 +426,7 @@ class ProfilePanel(QGroupBox):
         preset = self._active_preset()
         if lib is None or preset is None:
             raise ValueError("no active preset")
-        groups = region_bypass_groups(Path(preset.path), lo, hi, _EQ_FREQS)
+        groups = region_bypass_groups(Path(preset.path), lo, hi)
         content = render_channel_eqs(groups)
         eq = lib.create_eq_file(preset, f"bypass {round(lo)}-{round(hi)}Hz")
         atomic_write_with_backup(Path(eq.path), content)

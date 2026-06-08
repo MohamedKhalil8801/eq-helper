@@ -205,9 +205,31 @@ def render_channel_eqs(groups: List[ChannelEQ]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _require_stereo(resps: Dict[str, np.ndarray]) -> None:
+    """Raise if a profile references channels beyond stereo L/R. This is a
+    headphone/IEM tool; multichannel (center/sub/surround) configs can't be
+    safely reproduced without the device's physical layout, so refuse rather
+    than silently drop those channels."""
+    extra = sorted(set(resps) - {ALL_CHANNELS, "L", "R"})
+    if extra:
+        raise ValueError(
+            "Optimize/Bypass currently supports stereo (L/R) profiles. "
+            "This profile uses channel(s): " + ", ".join(extra) + "."
+        )
+
+
 def _responses_all_equal(resps: Dict[str, np.ndarray], atol: float = 0.01) -> bool:
     vals = list(resps.values())
     return all(np.max(np.abs(v - vals[0])) <= atol for v in vals[1:])
+
+
+def _is_bare(resps: Dict[str, np.ndarray]) -> bool:
+    """Whether the result is one bare all-channel GraphicEQ: either no channels
+    at all, or the full stereo pair carrying the same EQ on both sides."""
+    keys = set(resps)
+    if keys == {ALL_CHANNELS}:
+        return True
+    return keys == {"L", "R"} and _responses_all_equal(resps)
 
 
 def _group_channels_by_response(
@@ -256,26 +278,32 @@ def optimize_profile(
     fit_resps = load_profile_channel_responses(path, fit_freqs)
     if fit_resps is None:
         raise ValueError(f"could not read profile: {profile_path}")
+    _require_stereo(fit_resps)
     ver_resps = load_profile_channel_responses(path, ver_freqs)
 
     def _fit_and_verify(
-        target: np.ndarray, ver_target: np.ndarray
+        target: np.ndarray, verify_channels: List[str]
     ) -> Tuple[GraphicEQ, float]:
         bands = fit_graphic_eq(fit_freqs, target, tol_db=tol_db)
         realized = realized_response_db(bands, ver_freqs, sample_rate)
-        dev = float(np.max(np.abs(realized - ver_target)))
+        # Verify against EVERY channel the GraphicEQ serves, not just one, so a
+        # merged group's reported deviation can't under-report a folded channel.
+        dev = max(
+            float(np.max(np.abs(realized - ver_resps[ch]))) for ch in verify_channels
+        )
         return GraphicEQ(name="Optimized", bands=bands), dev
 
-    # One bare GraphicEQ when there are no channels or all channels are equal.
-    if set(fit_resps) == {ALL_CHANNELS} or _responses_all_equal(fit_resps):
+    # One bare GraphicEQ for no-channel configs or a symmetric stereo pair.
+    if _is_bare(fit_resps):
         key = next(iter(fit_resps))
-        geq, max_dev = _fit_and_verify(fit_resps[key], ver_resps[key])
+        verify = [ALL_CHANNELS] if set(fit_resps) == {ALL_CHANNELS} else list(fit_resps)
+        geq, max_dev = _fit_and_verify(fit_resps[key], verify)
         return [ChannelEQ(channels=None, geq=geq)], max_dev
 
     groups: List[ChannelEQ] = []
     max_dev = 0.0
     for chans, resp in _group_channels_by_response(fit_resps):
-        geq, dev = _fit_and_verify(resp, ver_resps[chans[0]])
+        geq, dev = _fit_and_verify(resp, chans)
         groups.append(ChannelEQ(channels=tuple(chans), geq=geq))
         max_dev = max(max_dev, dev)
     return groups, max_dev
@@ -306,7 +334,6 @@ def region_bypass_groups(
     profile_path,
     lo: float,
     hi: float,
-    freqs: np.ndarray,
     *,
     transition_oct: float = 1.0 / 6.0,
     tol_db: float = 0.02,
@@ -318,19 +345,25 @@ def region_bypass_groups(
     combined response, ``W`` = a raised-cosine band window). Channels that share
     the same EQ collapse to one bare GraphicEQ; channels that differ get their
     own ``Channel:``-scoped correction. Adding the result makes each channel's
-    net response flat inside the band and unchanged outside. Raises
-    ``ValueError`` if the profile can't be read."""
+    net response flat inside the band and unchanged outside. The fit runs on a
+    feature-aware grid (seeded with every filter center) so narrow in-band
+    features are cancelled accurately. Raises ``ValueError`` if the profile
+    can't be read or uses non-stereo channels."""
+    path = Path(profile_path)
     lo, hi = float(min(lo, hi)), float(max(lo, hi))
-    resps = load_profile_channel_responses(Path(profile_path), freqs)
+    features = load_profile_feature_freqs(path)
+    freqs = _build_eval_grid(features, n_base=8000)
+    resps = load_profile_channel_responses(path, freqs)
     if resps is None:
         raise ValueError(f"could not read profile: {profile_path}")
+    _require_stereo(resps)
     W = _raised_cosine_window(freqs, lo, hi, transition_oct)
 
     def _corr(resp: np.ndarray) -> GraphicEQ:
         bands = fit_graphic_eq(freqs, -resp * W, tol_db=tol_db)
         return GraphicEQ(name="bypass", bands=bands)
 
-    if set(resps) == {ALL_CHANNELS} or _responses_all_equal(resps):
+    if _is_bare(resps):
         key = next(iter(resps))
         return [ChannelEQ(channels=None, geq=_corr(resps[key]))]
 

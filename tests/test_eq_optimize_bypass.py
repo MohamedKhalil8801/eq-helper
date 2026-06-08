@@ -14,9 +14,9 @@ def test_bypass_flattens_band(tmp_path):
         "Filter 2: ON PK Fc 6000 Hz Gain -6 dB Q 1.5\n",
         encoding="utf-8",
     )
-    freqs = np.geomspace(20, 20000, 2000)
-    groups = region_bypass_groups(p, 4000.0, 7000.0, freqs)
+    groups = region_bypass_groups(p, 4000.0, 7000.0)
     assert len(groups) == 1 and groups[0].channels is None  # no channels => bare
+    freqs = np.geomspace(20, 20000, 2000)
     C = graphic_eq_response(groups[0].geq.bands, freqs)
     R = load_profile_eq_response(p, freqs)
     net = R + C

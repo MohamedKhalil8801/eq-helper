@@ -338,6 +338,11 @@ def load_profile_feature_freqs(profile_path: Path) -> List[float]:
 # applies to every channel — one combined response, exactly as before).
 ALL_CHANNELS = "ALL"
 
+# This is a headphone/IEM (stereo) tool: when a config names only L and/or R, the
+# full physical channel set is {L, R}, so a default/`all`-scope filter must reach
+# BOTH sides even if only one is explicitly trimmed.
+_STEREO_CHANNELS = frozenset({"L", "R"})
+
 
 def _collect_channels(
     text: str, *, base_dir: Optional[Path], _visited: Set[str]
@@ -397,27 +402,41 @@ def compute_channel_responses(
     freqs: np.ndarray,
     *,
     base_dir: Optional[Path] = None,
+    _seed_path: Optional[str] = None,
 ) -> dict:
     """Per-channel combined EQ response, honouring stateful ``Channel:``
     selection across the whole include tree (document order; default = all
-    referenced channels).
+    physical channels).
 
     Returns ``{channel_id: response_db}``. If the config references no channels
     at all, returns ``{ALL_CHANNELS: combined_response}`` — identical to
-    :func:`compute_eq_response`. ``Channel:`` state is threaded through
-    ``Include:`` boundaries (APO treats includes as textual inclusion).
+    :func:`compute_eq_response`. When it names only L and/or R, the result is
+    keyed by the full stereo pair ``{L, R}`` so a default/`all`-scope filter
+    reaches both sides even if only one is explicitly trimmed. ``Channel:`` state
+    is threaded through ``Include:`` boundaries (APO treats includes as textual
+    inclusion). ``_seed_path`` seeds the cycle-detection visited set with the
+    top-level file (so a self-include is counted once, matching
+    :func:`compute_eq_response` via :func:`load_profile_eq_response`).
     """
-    channels = _collect_channels(profile_text, base_dir=base_dir, _visited=set())
+    seed = {_seed_path} if _seed_path else set()
+    channels = _collect_channels(
+        profile_text, base_dir=base_dir, _visited=set(seed)
+    )
     if not channels:
         return {
             ALL_CHANNELS: compute_eq_response(
-                profile_text, freqs, base_dir=base_dir
+                profile_text, freqs, base_dir=base_dir, _visited=set(seed)
             )
         }
-    acc = {ch: np.zeros_like(freqs, dtype=np.float64) for ch in channels}
-    state = [set(channels)]  # mutable holder so Include recursion shares it
+    universe = (
+        set(_STEREO_CHANNELS)
+        if channels <= _STEREO_CHANNELS
+        else set(channels)
+    )
+    acc = {ch: np.zeros_like(freqs, dtype=np.float64) for ch in universe}
+    state = [set(universe)]  # mutable holder so Include recursion shares it
     _accumulate_channels(
-        profile_text, freqs, base_dir, channels, acc, state, set()
+        profile_text, freqs, base_dir, universe, acc, state, set(seed)
     )
     return acc
 
@@ -431,6 +450,10 @@ def load_profile_channel_responses(
         text = profile_path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return None
+    try:
+        seed_path = str(profile_path.resolve())
+    except OSError:
+        seed_path = None
     return compute_channel_responses(
-        text, freqs, base_dir=profile_path.parent
+        text, freqs, base_dir=profile_path.parent, _seed_path=seed_path
     )

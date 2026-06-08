@@ -60,9 +60,63 @@ def test_channel_state_persists_across_include(tmp_path):
     main = tmp_path / "main.txt"
     main.write_text(f"Channel: L\nInclude: {inc}\n", encoding="utf-8")
     resps = load_profile_channel_responses(main, _FREQS)
-    assert set(resps) == {"L"}
+    assert set(resps) == {"L", "R"}  # stereo universe; R exists but is untouched
     i200 = int(np.argmin(np.abs(_FREQS - 200)))
     assert resps["L"][i200] > 4.0
+    assert abs(resps["R"][i200]) < 0.01  # R got nothing
+
+
+def test_global_filter_reaches_both_sides_with_one_side_trim(tmp_path):
+    # The key fix: a global (no-Channel) filter applies to BOTH L and R even
+    # though only L is explicitly trimmed.
+    p = tmp_path / "g.txt"
+    p.write_text(
+        "Filter 1: ON PK Fc 1000 Hz Gain 4 dB Q 2\n"   # global -> both sides
+        "Channel: L\n"
+        "Filter 2: ON PK Fc 120 Hz Gain 3 dB Q 1\n",   # L only
+        encoding="utf-8",
+    )
+    resps = load_profile_channel_responses(p, _FREQS)
+    assert set(resps) == {"L", "R"}
+    i1k = int(np.argmin(np.abs(_FREQS - 1000)))
+    i120 = int(np.argmin(np.abs(_FREQS - 120)))
+    assert resps["L"][i1k] > 3.5 and resps["R"][i1k] > 3.5  # global on both
+    assert resps["L"][i120] > 2.5                            # trim on L
+    assert abs(resps["R"][i120]) < 0.3                       # not on R
+
+    # Optimize must keep R (= global only), not collapse to L's curve.
+    groups, max_dev = optimize_profile(p, 48000)
+    assert {g.channels for g in groups} == {("L",), ("R",)}
+    rmap = {g.channels[0]: g for g in groups}
+    r_curve = graphic_eq_response(rmap["R"].geq.bands, _FREQS)
+    assert abs(r_curve[i120]) < 0.3  # R has no 120 Hz boost
+
+
+def test_non_stereo_channels_are_refused(tmp_path):
+    import pytest
+    p = tmp_path / "surround.txt"
+    p.write_text(
+        "Channel: C\nFilter 1: ON PK Fc 1000 Hz Gain 3 dB Q 2\n", encoding="utf-8"
+    )
+    with pytest.raises(ValueError):
+        optimize_profile(p, 48000)
+    with pytest.raises(ValueError):
+        region_bypass_groups(p, 500.0, 2000.0)
+
+
+def test_self_include_not_double_counted(tmp_path):
+    # A profile that includes itself must be counted once (cycle detection),
+    # so the ALL bucket matches the single combined response.
+    from eq_helper.dsp.eq_response import load_profile_eq_response
+    p = tmp_path / "selfref.txt"
+    p.write_text(
+        f"Filter 1: ON PK Fc 1000 Hz Gain 6 dB Q 2\nInclude: {p}\n",
+        encoding="utf-8",
+    )
+    resps = load_profile_channel_responses(p, _FREQS)
+    single = load_profile_eq_response(p, _FREQS)
+    assert set(resps) == {ALL_CHANNELS}
+    assert np.allclose(resps[ALL_CHANNELS], single)
 
 
 def test_optimize_two_graphic_eqs_when_channels_differ(tmp_path):
@@ -113,7 +167,7 @@ def test_bypass_per_channel_flattens_both_sides(tmp_path):
     p = tmp_path / "bal.txt"
     p.write_text(_BALANCE, encoding="utf-8")
     # Bypass a band covering the R-only 6 kHz cut and around it.
-    groups = region_bypass_groups(p, 4000.0, 9000.0, _FREQS)
+    groups = region_bypass_groups(p, 4000.0, 9000.0)
     assert {g.channels for g in groups} == {("L",), ("R",)}
     resps = load_profile_channel_responses(p, _FREQS)
     inside = (_FREQS >= 4500) & (_FREQS <= 8200)
