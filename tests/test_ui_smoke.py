@@ -308,3 +308,62 @@ def test_eq_library_panel_drilldown(qtbot, tmp_path) -> None:
     # Back returns to the browser.
     lib.show_browser()
     assert lib.current_is_browser() is True
+
+
+# ----------------------------------------------- graphic-EQ region audition
+
+
+def test_graphic_eq_audition_controls(qtbot) -> None:
+    from eq_helper.ui.graphic_eq_panel import GraphicEQPanel
+
+    p = GraphicEQPanel()
+    qtbot.addWidget(p)
+    assert p.audition_enabled() is False
+    assert p.audition_noise() == "pink"  # default
+    p.set_audition_noise("grey")
+    assert p.audition_noise() == "grey"
+    p.set_audition_enabled(True)
+    assert p.audition_enabled() is True
+
+
+def test_audition_isolate_sets_band_and_plays_noise(qtbot) -> None:
+    from eq_helper.audio.shared_state import Mode
+    from eq_helper.ui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.audio_panel.stop_all()  # ensure idle so it auto-plays
+    window.graphic_eq_panel.set_audition_noise("pink")
+
+    window.graphic_eq_panel.auditionIsolateRequested.emit(100.0, 200.0)
+    snap = window.engine.state.snapshot()
+    assert snap.band_enabled is True
+    assert window.band_panel.enable_check.isChecked() is True
+    assert window.band_panel.fc_spin.value() == pytest.approx(150.0, abs=1.0)
+    assert window.band_panel.bw_spin.value() == pytest.approx(100.0, abs=1.0)
+    assert snap.mode == Mode.PINK  # idle -> auto-played the selected noise
+
+
+def test_audition_sweep_starts_focus_sweep_over_region(qtbot) -> None:
+    from eq_helper.audio.shared_state import Mode
+    from eq_helper.ui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.graphic_eq_panel.auditionSweepRequested.emit(100.0, 200.0)
+    snap = window.engine.state.snapshot()
+    assert snap.mode == Mode.SWEEP
+    assert snap.sweep_f_start == pytest.approx(100.0, rel=0.05)
+    assert snap.sweep_f_end == pytest.approx(200.0, rel=0.05)
+
+
+def test_audition_mode_off_disables_isolation(qtbot) -> None:
+    from eq_helper.ui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.graphic_eq_panel.auditionIsolateRequested.emit(100.0, 200.0)
+    assert window.band_panel.enable_check.isChecked() is True
+    window.graphic_eq_panel.auditionModeChanged.emit(False)
+    assert window.band_panel.enable_check.isChecked() is False
+    assert window.engine.state.snapshot().band_enabled is False

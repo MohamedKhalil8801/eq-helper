@@ -14,6 +14,7 @@ import numpy as np
 import pyqtgraph as pg
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QHBoxLayout,
     QLabel,
@@ -33,6 +34,7 @@ from eq_helper.dsp.graphic_eq import (
     double_bands,
     make_fixed_bands,
     parse_graphic_eq_line,
+    region_for_freq,
 )
 
 _LOG_F_MIN = math.log10(20.0)
@@ -45,6 +47,11 @@ class GraphicEQPanel(QWidget):
 
     # Emitted whenever bands change: (list_of_GraphicEQ,)
     graphicEqChanged = Signal(list)
+    # Audition mode: clicking a band point asks to hear the region it influences.
+    auditionIsolateRequested = Signal(float, float)  # (lo_hz, hi_hz) — plain click
+    auditionSweepRequested = Signal(float, float)     # (lo_hz, hi_hz) — Shift+click
+    auditionModeChanged = Signal(bool)
+    auditionNoiseChanged = Signal(str)  # "pink" | "grey"
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -89,6 +96,25 @@ class GraphicEQPanel(QWidget):
         toolbar.addWidget(self._btn_remove_geq)
 
         toolbar.addStretch()
+
+        # Audition: click a band point to hear the region it influences.
+        self._audition_check = QCheckBox("Audition region")
+        self._audition_check.setToolTip(
+            "Click a band point to isolate its region (Shift+click to sweep it)"
+        )
+        self._audition_check.toggled.connect(self._on_audition_toggled)
+        toolbar.addWidget(self._audition_check)
+        self._audition_noise = QComboBox()
+        self._audition_noise.addItems(["Pink", "Grey"])
+        self._audition_noise.setToolTip(
+            "Noise auto-played when auditioning a region (only if nothing is playing)"
+        )
+        self._audition_noise.setEnabled(False)
+        self._audition_noise.currentTextChanged.connect(
+            lambda t: self.auditionNoiseChanged.emit(t.lower())
+        )
+        toolbar.addWidget(self._audition_noise)
+
         layout.addLayout(toolbar)
 
         # Plot + text editor in a horizontal splitter.
@@ -154,20 +180,36 @@ class GraphicEQPanel(QWidget):
         self._orig_click = vb.mouseClickEvent
 
         def _press(ev):
-            if ev.button() == Qt.LeftButton and not ev.modifiers():
-                pos = vb.mapSceneToView(ev.scenePos())
-                # Use a generous threshold (25px) so it's hard to
-                # accidentally create a point when trying to grab one.
-                idx = self._find_nearest_band(pos, threshold_px=25)
-                if idx >= 0:
-                    self._dragging_band = idx
-                else:
-                    hz = max(20.0, min(20000.0, 10.0 ** pos.x()))
-                    db = max(-15.0, min(15.0, pos.y()))
-                    self._add_band(hz, db)
-                    self._dragging_band = len(self._current_geq().bands) - 1
-                ev.accept()
-                return
+            if ev.button() == Qt.LeftButton:
+                mods = ev.modifiers()
+                shift = bool(mods & Qt.ShiftModifier)
+                plain = mods == Qt.NoModifier
+                if plain or shift:
+                    pos = vb.mapSceneToView(ev.scenePos())
+                    # Generous threshold (25px) so it's hard to accidentally
+                    # create a point when trying to grab one.
+                    idx = self._find_nearest_band(pos, threshold_px=25)
+                    if idx >= 0 and self.audition_enabled():
+                        lo, hi = self._region_for_band(idx)
+                        if shift:
+                            self.auditionSweepRequested.emit(lo, hi)
+                        else:
+                            # Isolate the region AND grab the point, so you can
+                            # tweak its gain while listening.
+                            self.auditionIsolateRequested.emit(lo, hi)
+                            self._dragging_band = idx
+                        ev.accept()
+                        return
+                    if plain:
+                        if idx >= 0:
+                            self._dragging_band = idx
+                        else:
+                            hz = max(20.0, min(20000.0, 10.0 ** pos.x()))
+                            db = max(-15.0, min(15.0, pos.y()))
+                            self._add_band(hz, db)
+                            self._dragging_band = len(self._current_geq().bands) - 1
+                        ev.accept()
+                        return
             if ev.button() == Qt.RightButton:
                 # Right-click removes nearest band (both modes).
                 pos = vb.mapSceneToView(ev.scenePos())
@@ -225,6 +267,34 @@ class GraphicEQPanel(QWidget):
 
     def graphic_eqs(self) -> List[GraphicEQ]:
         return list(self._geqs)
+
+    # --------------------------------------------------------- audition
+
+    def audition_enabled(self) -> bool:
+        return self._audition_check.isChecked()
+
+    def set_audition_enabled(self, on: bool) -> None:
+        self._audition_check.setChecked(bool(on))
+
+    def audition_noise(self) -> str:
+        """The selected auto-play noise: ``"pink"`` or ``"grey"``."""
+        return self._audition_noise.currentText().lower()
+
+    def set_audition_noise(self, kind: str) -> None:
+        idx = self._audition_noise.findText(str(kind).capitalize())
+        if idx >= 0:
+            self._audition_noise.setCurrentIndex(idx)
+
+    def _on_audition_toggled(self, on: bool) -> None:
+        self._audition_noise.setEnabled(on)
+        self.auditionModeChanged.emit(on)
+
+    def _region_for_band(self, idx: int) -> tuple[float, float]:
+        geq = self._current_geq()
+        if not geq or not (0 <= idx < len(geq.bands)):
+            return 20.0, 20000.0
+        target = geq.bands[idx].freq_hz
+        return region_for_freq([b.freq_hz for b in geq.bands], target)
 
     # --------------------------------------------------------- internal
 

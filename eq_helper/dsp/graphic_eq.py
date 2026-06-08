@@ -24,6 +24,27 @@ import numpy as np
 from scipy.signal import firwin2
 
 
+def region_for_freq(
+    freqs: List[float],
+    target: float,
+    f_min: float = 20.0,
+    f_max: float = 20000.0,
+) -> tuple[float, float]:
+    """The frequency span a graphic-EQ point at ``target`` influences.
+
+    Returns ``(lo, hi)`` = the nearest lower neighbour (or ``f_min`` for the
+    lowest point) to the nearest higher neighbour (or ``f_max`` for the highest).
+    A lone point spans the full range. Always ``0 < lo < hi``.
+    """
+    lo = max((f for f in freqs if f < target), default=f_min)
+    hi = min((f for f in freqs if f > target), default=f_max)
+    lo = max(f_min, min(f_max, lo))
+    hi = max(f_min, min(f_max, hi))
+    if hi <= lo:
+        hi = min(f_max, lo * 1.01)
+    return float(lo), float(hi)
+
+
 @dataclass
 class GraphicEQBand:
     """One frequency-gain point in a graphic EQ."""

@@ -17,7 +17,29 @@ from eq_helper.dsp.graphic_eq import (
     double_bands,
     make_fixed_bands,
     parse_graphic_eq_line,
+    region_for_freq,
 )
+
+
+class TestRegionForFreq:
+    def test_interior_point_spans_neighbours(self) -> None:
+        assert region_for_freq([100.0, 150.0, 200.0], 150.0) == (100.0, 200.0)
+
+    def test_first_point_clamps_low_edge(self) -> None:
+        assert region_for_freq([100.0, 150.0, 200.0], 100.0) == (20.0, 150.0)
+
+    def test_last_point_clamps_high_edge(self) -> None:
+        assert region_for_freq([100.0, 150.0, 200.0], 200.0) == (150.0, 20000.0)
+
+    def test_single_point_is_full_range(self) -> None:
+        assert region_for_freq([1000.0], 1000.0) == (20.0, 20000.0)
+
+    def test_unsorted_input(self) -> None:
+        assert region_for_freq([200.0, 100.0, 150.0], 150.0) == (100.0, 200.0)
+
+    def test_always_increasing(self) -> None:
+        lo, hi = region_for_freq([500.0], 500.0)
+        assert 0 < lo < hi
 
 SR = 48000
 

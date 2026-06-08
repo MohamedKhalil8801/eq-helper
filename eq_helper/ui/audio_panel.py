@@ -305,6 +305,26 @@ class AudioPanel(QGroupBox):
         self._on_play_focus_sweep()
         self._set_active(self.btn_focus)
 
+    def trigger_focus_sweep_band(self, center_hz: float, width_octaves: float) -> None:
+        """Focus-sweep a specific band (used by graphic-EQ region audition)."""
+        self._stop_all_internal()
+        self._engine.start_focused_sweep(
+            center_hz=center_hz,
+            width_octaves=width_octaves,
+            seconds_per_octave=self.focus_speed.value(),
+        )
+        self._set_active(self.btn_focus)
+
+    def start_audition_noise(self, kind: str) -> None:
+        """Start pink or grey noise (region audition) and highlight its button."""
+        self._stop_all_internal()
+        if kind == "grey":
+            self._engine.start_grey()
+            self._set_active(self.btn_grey)
+        else:
+            self._engine.start_pink()
+            self._set_active(self.btn_pink)
+
     def _on_focus_param_changed(self, *_args: object) -> None:
         """Width/speed changed: apply live to a running focused sweep (no
         restart). A no-op for any other source."""

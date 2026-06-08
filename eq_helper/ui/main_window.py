@@ -141,6 +141,10 @@ class MainWindow(QMainWindow):
         # The EQ editor starts empty until the user picks an EQ file in Profiles;
         # the graphic-EQ panel is disabled until then (nothing to save into).
         self.graphic_eq_panel.setEnabled(False)
+        self.graphic_eq_panel.set_audition_noise(self._settings.get("audition_noise", "pink"))
+        self.graphic_eq_panel.set_audition_enabled(
+            bool(self._settings.get("audition_enabled", False))
+        )
         self._refresh_apo_watch()
 
         # The stream is opened lazily on the first play-button press so the
@@ -199,6 +203,11 @@ class MainWindow(QMainWindow):
 
         # Graphic EQ panel
         self.graphic_eq_panel.graphicEqChanged.connect(self._on_graphic_eq_changed)
+        self.graphic_eq_panel.auditionIsolateRequested.connect(self._on_audition_isolate)
+        self.graphic_eq_panel.auditionSweepRequested.connect(self._on_audition_sweep)
+        self.graphic_eq_panel.auditionModeChanged.connect(self._on_audition_mode_changed)
+        self.graphic_eq_panel.auditionModeChanged.connect(self._schedule_save)
+        self.graphic_eq_panel.auditionNoiseChanged.connect(self._schedule_save)
 
         # Profiles panel: clicking an EQ file loads it into the editor.
         self.profile_panel.editEqFileRequested.connect(self._on_edit_eq_file)
@@ -287,6 +296,27 @@ class MainWindow(QMainWindow):
             return  # nothing to save into; ignore stray edits
         self.eq_panel.set_graphic_eqs(geqs)
         self.engine.set_graphic_eq(None)
+
+    # -------- graphic-EQ region audition
+
+    def _on_audition_isolate(self, lo: float, hi: float) -> None:
+        """Clicked a band point: isolate its region; auto-play noise if idle."""
+        from eq_helper.audio.shared_state import Mode
+        self.band_panel.isolate(fc=(lo + hi) / 2.0, bw=hi - lo)
+        if self.engine.state.snapshot().mode == Mode.IDLE:
+            self.audio_panel.start_audition_noise(self.graphic_eq_panel.audition_noise())
+
+    def _on_audition_sweep(self, lo: float, hi: float) -> None:
+        """Shift+clicked a band point: focus-sweep its region."""
+        import math
+        center = math.sqrt(lo * hi)
+        width_octaves = math.log2(hi / lo)
+        self.audio_panel.trigger_focus_sweep_band(center, width_octaves)
+
+    def _on_audition_mode_changed(self, on: bool) -> None:
+        """Turning audition mode off restores normal listening (isolation off)."""
+        if not on:
+            self.band_panel.enable_check.setChecked(False)
 
     # -------- EQ preview response
 
@@ -399,6 +429,8 @@ class MainWindow(QMainWindow):
         self.test_songs_panel.collect_settings(self._settings)
         self._settings["mic_section_expanded"] = self.mic_section.is_expanded()
         self._settings["band_section_expanded"] = self.band_section.is_expanded()
+        self._settings["audition_enabled"] = self.graphic_eq_panel.audition_enabled()
+        self._settings["audition_noise"] = self.graphic_eq_panel.audition_noise()
         try:
             save_settings(self._settings, self._settings_path)
         except OSError:

@@ -78,6 +78,23 @@ class BandPanel(QGroupBox):
         )
         self.bandValueChanged.emit(self.fc_spin.value(), self.bw_spin.value())
 
+    def isolate(self, fc: float, bw: float) -> None:
+        """Set the band to ``(fc, bw)``, enable isolation, and apply it — used by
+        the graphic-EQ region audition."""
+        self.fc_spin.blockSignals(True)
+        self.bw_spin.blockSignals(True)
+        self.fc_spin.setValue(max(20.0, min(20000.0, fc)))
+        self.bw_spin.setValue(max(1.0, min(20000.0, bw)))
+        self.fc_spin.blockSignals(False)
+        self.bw_spin.blockSignals(False)
+        self.enable_check.blockSignals(True)
+        self.enable_check.setChecked(True)
+        self.enable_check.blockSignals(False)
+        self._engine.set_band_filter(
+            fc=self.fc_spin.value(), bw=self.bw_spin.value(), enabled=True
+        )
+        self.bandValueChanged.emit(self.fc_spin.value(), self.bw_spin.value())
+
     def set_from_region(self, fc: float, bw: float) -> None:
         """Called when the user drags the plot's LinearRegionItem."""
         self.fc_spin.blockSignals(True)
