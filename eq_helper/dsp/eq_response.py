@@ -14,7 +14,7 @@ from __future__ import annotations
 import math
 import re
 from pathlib import Path
-from typing import Optional, Set
+from typing import List, Optional, Set
 
 import numpy as np
 
@@ -184,6 +184,8 @@ def compute_eq_response(
         q_str = m.group("q")
         gain = float(gain_str) if gain_str else 0.0
         q = float(q_str) if q_str else 0.707
+        if q <= 0.0:
+            q = 1e-4  # guard degenerate Q (avoids division-by-zero in biquads)
 
         if ftype == "PK":
             response += _peaking_response(freqs, fc, gain, q)
@@ -224,4 +226,81 @@ def load_profile_eq_response(
         freqs,
         base_dir=profile_path.parent,
         _visited=visited,
+    )
+
+
+def collect_feature_freqs(
+    profile_text: str,
+    *,
+    base_dir: Optional[Path] = None,
+    _visited: Optional[Set[str]] = None,
+) -> List[float]:
+    """Collect the center frequencies of every active parametric filter and the
+    point frequencies of every GraphicEQ across the whole include tree.
+
+    Used to build an evaluation grid dense enough to resolve narrow (high-Q)
+    features: a peak whose ``Fc`` falls between coarse grid samples would
+    otherwise be missed by both the fit and the verification.
+    """
+    if _visited is None:
+        _visited = set()
+
+    out: List[float] = []
+    for line in profile_text.splitlines():
+        inc = _INCLUDE_RE.match(line)
+        if inc and base_dir is not None:
+            inc_path = Path(inc.group("path").strip())
+            if not inc_path.is_absolute():
+                inc_path = base_dir / inc_path
+            try:
+                resolved = str(inc_path.resolve())
+            except OSError:
+                continue
+            if resolved in _visited:
+                continue
+            _visited.add(resolved)
+            try:
+                inc_text = inc_path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            out.extend(
+                collect_feature_freqs(
+                    inc_text, base_dir=inc_path.parent, _visited=_visited
+                )
+            )
+            continue
+
+        if line.lstrip().lower().startswith("graphiceq"):
+            from eq_helper.dsp.graphic_eq import parse_graphic_eq_line
+
+            geq = parse_graphic_eq_line(line)
+            if geq is not None:
+                out.extend(float(b.freq_hz) for b in geq.bands)
+            continue
+
+        if _FILTER_OFF_RE.match(line):
+            continue
+        m = _FILTER_RE.match(line)
+        if m:
+            try:
+                out.append(float(m.group("fc")))
+            except (TypeError, ValueError):
+                pass
+    return out
+
+
+def load_profile_feature_freqs(profile_path: Path) -> List[float]:
+    """Feature frequencies (filter centers + GraphicEQ points) for a profile
+    file, resolving includes. Returns ``[]`` if the file can't be read."""
+    try:
+        text = profile_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    visited: Set[str] = set()
+    try:
+        visited.add(str(profile_path.resolve()))
+    except OSError:
+        pass
+    return collect_feature_freqs(
+        text, base_dir=profile_path.parent, _visited=visited
     )

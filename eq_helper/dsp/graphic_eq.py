@@ -229,6 +229,10 @@ def graphic_eq_response(
 
     Uses linear interpolation in log-frequency space (matching APO's behavior).
     """
+    if len(bands) == 1:
+        # APO holds a single GraphicEQ point flat at its gain across the whole
+        # spectrum; returning zeros would silently under-count the response.
+        return np.full_like(freqs, bands[0].gain_db, dtype=np.float64)
     if len(bands) < 2:
         return np.zeros_like(freqs, dtype=np.float64)
     sorted_bands = sorted(bands, key=lambda b: b.freq_hz)

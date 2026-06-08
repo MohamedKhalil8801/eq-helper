@@ -25,6 +25,32 @@ def test_optimize_reproduces_combined_response(tmp_path):
     assert len(geq.bands) >= 2
 
 
+def test_optimize_high_q_subgrid_filter_accurate_and_honest(tmp_path):
+    # A high-Q peak whose Fc deliberately lands between coarse grid samples.
+    # The optimized EQ must be genuinely accurate AND max_dev must not
+    # under-report the true error (the feature-aware grid + independent
+    # verification grid fix).
+    fc, q, g = 5117.3, 120, 9
+    p = tmp_path / "hq.txt"
+    p.write_text(f"Filter 1: ON PK Fc {fc} Hz Gain {g} dB Q {q}\n", encoding="utf-8")
+    geq, max_dev = optimize_profile(p, 48000)
+
+    truth = np.unique(np.concatenate([np.geomspace(20, 20000, 200000), [fc]]))
+    target = load_profile_eq_response(p, truth)
+    realized = realized_response_db(geq.bands, truth, 48000)
+    true_max = float(np.max(np.abs(realized - target)))
+
+    assert true_max < 0.1  # genuinely accurate (was ~0.35 dB before the fix)
+    assert max_dev >= true_max - 0.03  # honest: no under-report (was ~6x under)
+
+
+def test_optimize_handles_degenerate_q(tmp_path):
+    p = tmp_path / "bad.txt"
+    p.write_text("Filter 1: ON PK Fc 1000 Hz Gain 6 dB Q 0\n", encoding="utf-8")
+    geq, max_dev = optimize_profile(p, 48000)  # must not raise
+    assert len(geq.bands) >= 2
+
+
 def test_optimize_includes_graphic_eq_source(tmp_path):
     # A profile whose EQ is itself a GraphicEQ should round-trip near-exactly.
     p = tmp_path / "prof.txt"

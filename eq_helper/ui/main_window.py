@@ -53,8 +53,9 @@ class MainWindow(QMainWindow):
         self.profile_panel = ProfilePanel(
             get_override=lambda: self._settings.get("apo_config_dir_override"),
             get_isolation_band=lambda: (
-                self.band_panel.fc_spin.value(),
-                self.band_panel.bw_spin.value(),
+                (self.band_panel.fc_spin.value(), self.band_panel.bw_spin.value())
+                if self.band_panel.enable_check.isChecked()
+                else None
             ),
         )
         self.profile_panel.set_sample_rate(self.engine.sample_rate)

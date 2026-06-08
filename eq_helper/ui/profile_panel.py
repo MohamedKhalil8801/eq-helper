@@ -365,8 +365,16 @@ class ProfilePanel(QGroupBox):
             raise ValueError("no active preset")
         geq, max_dev = optimize_profile(Path(preset.path), self._sr)
         new = lib.create_preset(preset.device, f"{preset.name} (optimized)")
-        eq = lib.create_eq_file(new, "optimized")
-        atomic_write_with_backup(Path(eq.path), graphic_eq_to_apo_text(geq) + "\n")
+        try:
+            eq = lib.create_eq_file(new, "optimized")
+            atomic_write_with_backup(Path(eq.path), graphic_eq_to_apo_text(geq) + "\n")
+        except Exception:
+            # Don't leave an orphan "(optimized)" preset if the EQ write fails.
+            try:
+                lib.remove_preset(new)
+            except Exception:
+                pass
+            raise
         return new, len(geq.bands), max_dev
 
     def _on_optimize(self) -> None:
@@ -379,7 +387,7 @@ class ProfilePanel(QGroupBox):
             return
         try:
             new, n_points, max_dev = self._do_optimize()
-        except (ApoError, OSError, ValueError) as exc:
+        except Exception as exc:  # DSP runs before any write, so no partial state
             QMessageBox.critical(self, "Optimize failed", str(exc))
             return
         self._refresh_lists()
@@ -409,7 +417,7 @@ class ProfilePanel(QGroupBox):
         if lib is None or preset is None:
             raise ValueError("no active preset")
         geq = region_bypass_correction(Path(preset.path), lo, hi, _EQ_FREQS)
-        eq = lib.create_eq_file(preset, f"bypass {int(lo)}-{int(hi)}Hz")
+        eq = lib.create_eq_file(preset, f"bypass {round(lo)}-{round(hi)}Hz")
         atomic_write_with_backup(Path(eq.path), graphic_eq_to_apo_text(geq) + "\n")
         return eq
 
@@ -432,7 +440,7 @@ class ProfilePanel(QGroupBox):
         hi = min(20000.0, fc + bw / 2.0)
         try:
             self._do_bypass(lo, hi)
-        except (ApoError, OSError, ValueError) as exc:
+        except Exception as exc:  # DSP runs before any write, so no partial state
             QMessageBox.critical(self, "Bypass failed", str(exc))
             return
         self._refresh_stack()

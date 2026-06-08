@@ -27,11 +27,38 @@ from typing import List, Tuple
 
 import numpy as np
 
-from eq_helper.dsp.eq_response import load_profile_eq_response
+from eq_helper.dsp.eq_response import (
+    load_profile_eq_response,
+    load_profile_feature_freqs,
+)
 from eq_helper.dsp.graphic_eq import GraphicEQ, GraphicEQBand
 
 # Dense log grid used to sample the combined response before fitting.
 _FIT_FREQS = np.geomspace(20.0, 20000.0, 4000)
+
+# Octave offsets sprinkled around each feature (filter center / GraphicEQ point)
+# so narrow, high-Q peaks/notches are always resolved by both the fit and the
+# verification grid — a peak whose Fc lands between coarse samples is otherwise
+# invisible (the fit can't shape it and max_dev can't detect the resulting error).
+_FLANK_OCT = np.array(
+    [0.0005, 0.001, 0.002, 0.004, 0.008, 0.016, 0.032, 0.064, 0.125, 0.25]
+)
+
+_F_MIN, _F_MAX = 20.0, 20000.0
+
+
+def _build_eval_grid(feature_freqs: List[float], n_base: int) -> np.ndarray:
+    """A log grid of ``n_base`` points over [20, 20000] augmented with each
+    feature frequency and a multiscale cluster of flanking points around it, so
+    the steep sides and apex of narrow features are sampled."""
+    pts = [np.geomspace(_F_MIN, _F_MAX, n_base)]
+    for fc in feature_freqs:
+        fc = float(min(max(fc, _F_MIN), _F_MAX))
+        pts.append(np.array([fc]))
+        pts.append(fc * (2.0 ** _FLANK_OCT))
+        pts.append(fc * (2.0 ** (-_FLANK_OCT)))
+    grid = np.clip(np.concatenate(pts), _F_MIN, _F_MAX)
+    return np.unique(grid)
 
 
 # --------------------------------------------------------------- adaptive fit
@@ -149,18 +176,28 @@ def optimize_profile(
     """Combine the whole include tree at ``profile_path`` into one ``GraphicEQ``.
 
     Returns ``(GraphicEQ, max_deviation_db)`` where the deviation is APO's exact
-    min-phase-FIR realization measured against the true combined response across
-    the audible range. Raises ``ValueError`` if the profile can't be read.
+    min-phase-FIR realization measured against the true combined response. The
+    fit grid and the (independent, denser) verification grid are both seeded
+    with every filter center + GraphicEQ point so narrow high-Q features are
+    resolved and ``max_dev`` cannot under-report. Raises ``ValueError`` if the
+    profile can't be read.
     """
-    freqs = _FIT_FREQS
-    target = load_profile_eq_response(Path(profile_path), freqs)
+    path = Path(profile_path)
+    features = load_profile_feature_freqs(path)
+
+    fit_freqs = _build_eval_grid(features, n_base=8000)
+    target = load_profile_eq_response(path, fit_freqs)
     if target is None:
         raise ValueError(f"could not read profile: {profile_path}")
-    bands = fit_graphic_eq(freqs, target, tol_db=tol_db)
+    bands = fit_graphic_eq(fit_freqs, target, tol_db=tol_db)
     geq = GraphicEQ(name=name, bands=bands)
-    realized = realized_response_db(bands, freqs, sample_rate)
-    audible = (freqs >= 20.0) & (freqs <= 20000.0)
-    max_dev = float(np.max(np.abs(realized[audible] - target[audible])))
+
+    # Verify on an INDEPENDENT, denser grid (different base count + the same
+    # feature clusters) so the check can catch error between the fit's nodes.
+    ver_freqs = _build_eval_grid(features, n_base=40000)
+    ver_target = load_profile_eq_response(path, ver_freqs)
+    ver_realized = realized_response_db(bands, ver_freqs, sample_rate)
+    max_dev = float(np.max(np.abs(ver_realized - ver_target)))
     return geq, max_dev
 
 

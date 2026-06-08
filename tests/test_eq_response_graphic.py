@@ -21,6 +21,22 @@ def test_graphic_eq_sums_with_filters():
     assert abs(resp[0] - (-1.0)) < 0.01  # -3 preamp + 2 geq
 
 
+def test_single_band_graphic_eq_contributes_its_gain():
+    # APO holds a 1-point GraphicEQ flat at its gain across the whole spectrum;
+    # it must not silently contribute 0 dB.
+    text = "GraphicEQ: 1000 6\n"
+    freqs = np.array([100.0, 1000.0, 10000.0])
+    resp = compute_eq_response(text, freqs)
+    assert np.allclose(resp, 6.0, atol=0.01)
+
+
+def test_degenerate_q_does_not_crash():
+    # Q=0 is invalid but should be guarded, not raise ZeroDivisionError.
+    text = "Filter 1: ON PK Fc 1000 Hz Gain 6 dB Q 0\n"
+    resp = compute_eq_response(text, np.array([1000.0]))
+    assert np.isfinite(resp[0])
+
+
 def test_graphic_eq_plus_peaking_filter():
     text = (
         "GraphicEQ: 100 0; 1000 4; 10000 0\n"
