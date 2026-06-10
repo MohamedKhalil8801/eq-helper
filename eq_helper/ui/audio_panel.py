@@ -55,6 +55,11 @@ class AudioPanel(QGroupBox):
         super().__init__("Audio Controls", parent)
         self._engine = engine
         self._active_btn: Optional[QPushButton] = None
+        # Saved device ids from settings — kept so the selection can be applied
+        # once the (async) audio init populates the device combos. At boot the
+        # combos may be empty because sounddevice loads in the background.
+        self._saved_dev_a = None
+        self._saved_dev_b = None
         # Separate remembered volumes for Grey vs everything else; real values
         # are loaded in apply_settings().
         self._volume = VolumeMemory(regular=0.08, grey=0.08)
@@ -345,6 +350,29 @@ class AudioPanel(QGroupBox):
                 combo.addItem(name, dev_id)
             combo.blockSignals(False)
 
+    def on_audio_ready(self) -> None:
+        """Audio became available after the async init: the device combos were
+        empty at boot, so repopulate them and restore the saved selection."""
+        want_a = self.device_a_combo.currentData()
+        want_b = self.device_b_combo.currentData()
+        if want_a is None:
+            want_a = self._saved_dev_a
+        if want_b is None:
+            want_b = self._saved_dev_b
+        self._populate_device_combos()
+        self.device_a_combo.blockSignals(True)
+        self.device_b_combo.blockSignals(True)
+        self.device_a_combo.setCurrentIndex(
+            self._find_device_combo_index(self.device_a_combo, want_a)
+        )
+        self.device_b_combo.setCurrentIndex(
+            self._find_device_combo_index(self.device_b_combo, want_b)
+        )
+        self.device_a_combo.blockSignals(False)
+        self.device_b_combo.blockSignals(False)
+        self._engine.set_device_a(self.device_a_combo.currentData())
+        self._engine.set_device_b(self.device_b_combo.currentData())
+
     def _on_dual_toggled(self, checked: bool) -> None:
         self._dual_container.setVisible(checked)
         self._engine.set_dual_output(checked)
@@ -393,6 +421,8 @@ class AudioPanel(QGroupBox):
         # Dual output
         dev_a = settings.get("device_a_id")
         dev_b = settings.get("device_b_id")
+        self._saved_dev_a = dev_a
+        self._saved_dev_b = dev_b
         self.device_a_combo.blockSignals(True)
         self.device_b_combo.blockSignals(True)
         self.device_a_combo.setCurrentIndex(self._find_device_combo_index(self.device_a_combo, dev_a))

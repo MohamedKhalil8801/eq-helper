@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import os
+import threading
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QObject, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QHBoxLayout,
@@ -19,6 +21,7 @@ from PySide6.QtWidgets import (
 )
 from eq_helper.apo.errors import ApoError
 from eq_helper.apo.paths import MAIN_CONFIG_NAME, resolve_apo_config_dir
+from eq_helper.audio import engine as audio_engine
 from eq_helper.audio.engine import AudioEngine
 from eq_helper.storage.settings import (
     default_settings_path,
@@ -36,6 +39,20 @@ from eq_helper.ui.profile_panel import ProfilePanel
 from eq_helper.ui.spectrum_view import SpectrumView
 from eq_helper.ui.test_songs_panel import TestSongsDialog, TestSongsPanel
 from eq_helper.ui.widgets import CollapsibleSection
+
+
+class _AudioInitNotifier(QObject):
+    """Relays the background audio-init result onto the GUI thread (the
+    cross-thread emit is delivered as a queued connection)."""
+
+    done = Signal(bool)
+
+
+class _WmiHealthNotifier(QObject):
+    """Relays background WMI probe/repair results onto the GUI thread."""
+
+    probed = Signal(bool)    # True = WMI healthy
+    repaired = Signal(bool)  # True = repair worked (WMI answers again)
 
 
 class MainWindow(QMainWindow):
@@ -221,6 +238,126 @@ class MainWindow(QMainWindow):
         # Spacebar stops all audio playback.
         self._space_shortcut = QShortcut(QKeySequence(Qt.Key_Space), self)
         self._space_shortcut.activated.connect(self.audio_panel.stop_all)
+
+        # Audio (sounddevice/PortAudio) initialises OFF the GUI thread: its
+        # import can block forever on a wedged Windows WMI/audio state (the
+        # "exe runs but never shows a window after changing audio devices"
+        # hang). The UI must never wait on it.
+        self._start_audio_init()
+
+        # Detect a wedged Windows WMI service (the state that used to freeze
+        # this app at startup and breaks other software until a reboot) and
+        # offer a one-click repair.
+        self._start_wmi_health_check()
+
+    # -------- async audio init
+
+    def _start_audio_init(self) -> None:
+        if os.environ.get("EQ_HELPER_NO_AUDIO"):
+            return
+        self._audio_notifier = _AudioInitNotifier(self)
+        self._audio_notifier.done.connect(self._on_audio_init_done)
+        self._audio_slow_timer = QTimer(self)
+        self._audio_slow_timer.setSingleShot(True)
+        self._audio_slow_timer.setInterval(5000)
+        self._audio_slow_timer.timeout.connect(self._on_audio_init_slow)
+        self._audio_slow_timer.start()
+        notifier = self._audio_notifier
+        threading.Thread(
+            target=lambda: notifier.done.emit(audio_engine.ensure_audio()),
+            name="audio-init",
+            daemon=True,  # may stay blocked forever; must not hold up exit
+        ).start()
+
+    def _on_audio_init_done(self, ok: bool) -> None:
+        self._audio_slow_timer.stop()
+        if ok:
+            self.statusBar().clearMessage()
+            self.audio_panel.on_audio_ready()
+        else:
+            err = audio_engine.audio_init_error()
+            if err:
+                self.statusBar().showMessage(f"Audio unavailable: {err}")
+
+    def _on_audio_init_slow(self) -> None:
+        self.statusBar().showMessage(
+            "Audio is not responding (Windows audio/WMI can get stuck after a "
+            "device change) — sound is disabled, everything else works. "
+            "Rebooting or restarting the 'Windows Management Instrumentation' "
+            "service brings it back."
+        )
+
+    # -------- WMI health (detect + one-click repair)
+
+    def _start_wmi_health_check(self) -> None:
+        if os.environ.get("EQ_HELPER_NO_AUDIO") or os.environ.get(
+            "EQ_HELPER_NO_WMI_CHECK"
+        ):
+            return  # tests / explicit opt-out
+        from eq_helper.wmi_health import probe_wmi
+
+        self._wmi_notifier = _WmiHealthNotifier(self)
+        self._wmi_notifier.probed.connect(self._on_wmi_probed)
+        self._wmi_notifier.repaired.connect(self._on_wmi_repaired)
+        notifier = self._wmi_notifier
+        threading.Thread(
+            target=lambda: notifier.probed.emit(probe_wmi()),
+            name="wmi-probe",
+            daemon=True,
+        ).start()
+
+    def _on_wmi_probed(self, healthy: bool) -> None:
+        if healthy:
+            return
+        from PySide6.QtWidgets import QMessageBox
+
+        choice = QMessageBox.question(
+            self,
+            "Windows WMI service is stuck",
+            "Windows' WMI service is not responding on this PC. This is what "
+            "made EQ Helper unable to start before, and it can affect other "
+            "programs too (it usually happens after changing audio devices, "
+            "and otherwise only a reboot clears it).\n\n"
+            "Fix it now? Windows will show an administrator prompt, then the "
+            "WMI service is restarted.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes,
+        )
+        if choice != QMessageBox.Yes:
+            self.statusBar().showMessage(
+                "WMI left as-is — a reboot will also clear the stuck state."
+            )
+            return
+        from eq_helper.wmi_health import repair_wmi
+
+        self.statusBar().showMessage("Repairing the Windows WMI service…")
+        notifier = self._wmi_notifier
+        threading.Thread(
+            target=lambda: notifier.repaired.emit(repair_wmi()),
+            name="wmi-repair",
+            daemon=True,
+        ).start()
+
+    def _on_wmi_repaired(self, ok: bool) -> None:
+        from PySide6.QtWidgets import QMessageBox
+
+        if ok:
+            self.statusBar().showMessage("Windows WMI service repaired ✓", 10000)
+            QMessageBox.information(
+                self,
+                "Fixed",
+                "The Windows WMI service is responding again. Other programs "
+                "that were hanging should work now too.",
+            )
+        else:
+            self.statusBar().showMessage("WMI repair did not complete.")
+            QMessageBox.warning(
+                self,
+                "Could not repair",
+                "The WMI service still isn't responding (the admin prompt may "
+                "have been declined, or the service is stuck hard). "
+                "A reboot will clear it.",
+            )
 
     def _apply_initial_band_region(self) -> None:
         self.spectrum_view.set_band(

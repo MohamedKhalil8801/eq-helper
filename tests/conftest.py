@@ -14,6 +14,13 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+# Neutralize platform's WMI queries before test modules import numpy/scipy —
+# on a wedged Windows WMI service those queries block for minutes to forever
+# (the same hang the app itself guards against via eq_helper.app).
+from eq_helper.winquirks import disable_wmi_platform_queries  # noqa: E402
+
+disable_wmi_platform_queries()
+
 # Use the offscreen Qt platform in tests that don't need a real display.
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 # Never open a real PortAudio output during tests — the realtime thread

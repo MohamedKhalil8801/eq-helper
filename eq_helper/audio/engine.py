@@ -17,10 +17,48 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 
-try:
-    import sounddevice as sd  # type: ignore
-except OSError:  # pragma: no cover - PortAudio missing on CI
-    sd = None  # type: ignore
+# sounddevice is imported LAZILY via ensure_audio() — never at module import.
+# Its import runs platform.system(), which on Python 3.12+ issues a Windows WMI
+# query that can block FOREVER when WMI is wedged (a state some machines enter
+# after changing audio devices; CPython gh-112278). With the import on the
+# module level it sat on the GUI-critical path, so the app process started but
+# no window ever appeared. All call sites already treat ``sd is None`` as
+# "no audio" and keep working.
+sd = None  # type: ignore  # set by ensure_audio()
+_sd_lock = threading.Lock()
+_sd_error: Optional[str] = None
+
+
+def ensure_audio() -> bool:
+    """Import sounddevice and enable audio. Idempotent and thread-safe.
+
+    MUST be called off the GUI thread: the import can block indefinitely on a
+    wedged Windows WMI/audio state. Returns ``True`` when audio is available.
+    Honors ``EQ_HELPER_NO_AUDIO`` (used by tests) by staying in no-audio mode.
+    """
+    global sd, _sd_error
+    if sd is not None:
+        return True
+    if os.environ.get("EQ_HELPER_NO_AUDIO"):
+        return False
+    with _sd_lock:
+        if sd is not None:
+            return True
+        try:
+            import sounddevice as _sd_mod  # noqa: PLC0415 — deliberate lazy import
+        except Exception as exc:  # OSError: PortAudio missing; else broken env
+            _sd_error = str(exc)
+            return False
+        sd = _sd_mod
+        return True
+
+
+def audio_available() -> bool:
+    return sd is not None
+
+
+def audio_init_error() -> Optional[str]:
+    return _sd_error
 
 from eq_helper.audio.filters import BandPassFilter
 from eq_helper.audio.generators import (
