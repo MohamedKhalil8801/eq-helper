@@ -99,3 +99,13 @@ def test_load_frequency_response_empty_raises(tmp_path: Path) -> None:
     p.write_text("* only comments\n* nothing else\n", encoding="utf-8")
     with pytest.raises(OverlayLoadError):
         load_frequency_response(p)
+
+
+def test_load_frequency_response_dedupes_frequencies(tmp_path: Path) -> None:
+    # Duplicate frequencies (some exporters repeat) must be collapsed so
+    # downstream np.interp sees a strictly-increasing axis.
+    p = tmp_path / "dup.txt"
+    p.write_text("100 85\n100 86\n1000 90\n1000 91\n", encoding="utf-8")
+    f, db = load_frequency_response(p)
+    np.testing.assert_allclose(f, [100.0, 1000.0])
+    assert np.all(np.diff(f) > 0)

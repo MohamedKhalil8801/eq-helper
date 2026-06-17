@@ -82,7 +82,11 @@ def load_frequency_response(path: str | Path) -> Tuple[np.ndarray, np.ndarray]:
     if f.size == 0:
         raise OverlayLoadError(f"{p}: no rows with a positive frequency")
     order = np.argsort(f)
-    return f[order], d[order]
+    f, d = f[order], d[order]
+    # Drop duplicate frequencies (keep the first): downstream np.interp needs a
+    # strictly-increasing x, and some exporters repeat a frequency.
+    keep = np.concatenate(([True], np.diff(f) > 0))
+    return f[keep], d[keep]
 
 
 def load_measurement_csv(path: str | Path) -> Tuple[np.ndarray, np.ndarray]:

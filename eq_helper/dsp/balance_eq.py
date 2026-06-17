@@ -96,11 +96,16 @@ def generate_balance_eq(
     the reference, plus the measured max deviation of APO's exact min-phase-FIR
     realization from the intended correction.
     """
-    grid, corr = balance_correction(
-        ref_f, ref_db, oth_f, oth_db, match_level=match_level
+    fit_grid, fit_corr = balance_correction(
+        ref_f, ref_db, oth_f, oth_db, match_level=match_level, n=8000
     )
-    bands = fit_graphic_eq(grid, corr, tol_db=tol_db)
+    bands = fit_graphic_eq(fit_grid, fit_corr, tol_db=tol_db)
     geq = GraphicEQ(name=f"balance {other_channel}", bands=bands)
-    realized = realized_response_db(bands, grid, sample_rate)
-    max_dev = float(np.max(np.abs(realized - corr)))
+    # Verify on an INDEPENDENT, denser grid (recomputing the correction there) so
+    # the reported deviation can't under-report realization error between nodes.
+    ver_grid, ver_corr = balance_correction(
+        ref_f, ref_db, oth_f, oth_db, match_level=match_level, n=40000
+    )
+    realized = realized_response_db(bands, ver_grid, sample_rate)
+    max_dev = float(np.max(np.abs(realized - ver_corr)))
     return ChannelEQ(channels=(other_channel,), geq=geq), max_dev
