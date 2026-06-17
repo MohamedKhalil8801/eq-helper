@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Optional
 
 from PySide6.QtWidgets import (
+    QCheckBox,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
@@ -27,7 +28,13 @@ class BalanceEqDialog(QDialog):
     disabled until both measurement files are chosen.
     """
 
-    def __init__(self, parent: Optional[QWidget] = None) -> None:
+    def __init__(
+        self,
+        *,
+        initial_invert: bool = False,
+        swap_detected: bool = False,
+        parent: Optional[QWidget] = None,
+    ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Generate balance EQ")
         self._left: Optional[str] = None
@@ -56,6 +63,12 @@ class BalanceEqDialog(QDialog):
         ref_row.addWidget(self.ref_right)
         ref_row.addStretch(1)
         layout.addLayout(ref_row)
+
+        self.invert_check = QCheckBox("Invert L/R (config swaps channels)")
+        self.invert_check.setChecked(initial_invert)
+        if swap_detected:
+            self.invert_check.setText("Invert L/R (channel swap detected)")
+        layout.addWidget(self.invert_check)
 
         self._buttons = QDialogButtonBox(
             QDialogButtonBox.Ok | QDialogButtonBox.Cancel
@@ -112,3 +125,6 @@ class BalanceEqDialog(QDialog):
 
     def reference(self) -> str:
         return "L" if self.ref_left.isChecked() else "R"
+
+    def invert(self) -> bool:
+        return self.invert_check.isChecked()

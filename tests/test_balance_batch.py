@@ -1,0 +1,91 @@
+"""Balance EQ batch: filename parsing, set detection, 3xN generation, swap."""
+
+from pathlib import Path
+
+import numpy as np
+
+from eq_helper.dsp.balance_eq import (
+    detect_measurement_sets,
+    effective_other_channel,
+    generate_balance_batch,
+    parse_side_index,
+)
+from eq_helper.dsp.eq_response import detect_lr_swap, load_profile_lr_swap
+
+
+def test_parse_side_index():
+    assert parse_side_index("L 1.txt") == ("L", 1)
+    assert parse_side_index("R 3.txt") == ("R", 3)
+    assert parse_side_index("left2.csv") == ("L", 2)
+    assert parse_side_index("Right_10.txt") == ("R", 10)
+    assert parse_side_index("L.txt") == ("L", None)
+    # not a side label -> None (don't mistake "reference" for Right)
+    assert parse_side_index("reference.txt") is None
+    assert parse_side_index("balance.txt") is None
+
+
+def test_detect_measurement_sets(tmp_path):
+    for n in ("L 1.txt", "L 2.txt", "L 3.txt", "R 1.txt", "R 2.txt", "notes.md"):
+        (tmp_path / n).write_text("x", encoding="utf-8")
+    left, right = detect_measurement_sets(tmp_path)
+    assert [i for i, _ in left] == [1, 2, 3]
+    assert [i for i, _ in right] == [1, 2]
+    assert all(p.name.startswith("L") for _, p in left)
+
+
+def test_effective_other_channel():
+    assert effective_other_channel("L") == "R"
+    assert effective_other_channel("R") == "L"
+    assert effective_other_channel("L", invert=True) == "L"
+    assert effective_other_channel("R", invert=True) == "R"
+
+
+def _write_meas(path, peak_hz, peak_db):
+    f = np.geomspace(20, 20000, 400)
+    lf = np.log10(f)
+    db = 85 + peak_db * np.exp(-((lf - np.log10(peak_hz)) ** 2) / (2 * 0.05 ** 2))
+    path.write_text(
+        "Frequency (Hz),Raw (dB)\n"
+        + "\n".join(f"{a:.3f},{b:.4f}" for a, b in zip(f, db)),
+        encoding="utf-8",
+    )
+
+
+def test_generate_balance_batch_counts_and_names(tmp_path):
+    for i in (1, 2, 3):
+        _write_meas(tmp_path / f"L {i}.txt", 1000 + 200 * i, 3.0)
+    for j in (1, 2):
+        _write_meas(tmp_path / f"R {j}.txt", 5000 + 300 * j, -2.0)
+    left, right = detect_measurement_sets(tmp_path)
+    results = generate_balance_batch(left, right, "L", 48000)
+    assert len(results) == 6  # 3 x 2
+    names = [n for n, _, _ in results]
+    assert "bal L1-R1" in names and "bal L3-R2" in names
+    # reference=L, no invert -> EQ scoped to R
+    assert all(ceq.channels == ("R",) for _, ceq, _ in results)
+
+
+def test_generate_balance_batch_invert_flips_channel(tmp_path):
+    _write_meas(tmp_path / "L 1.txt", 1200, 3.0)
+    _write_meas(tmp_path / "R 1.txt", 5000, -2.0)
+    left, right = detect_measurement_sets(tmp_path)
+    results = generate_balance_batch(left, right, "L", 48000, invert=True)
+    # name still reflects the physical pairing, channel is inverted to L
+    assert results[0][0] == "bal L1-R1"
+    assert results[0][1].channels == ("L",)
+
+
+def test_detect_lr_swap_active(tmp_path):
+    assert detect_lr_swap("Copy: L=R R=L\nFilter: ON PK Fc 1000 Hz Gain 1 dB Q 1\n")
+    assert not detect_lr_swap("# Copy: L=R R=L\n")  # commented
+    assert not detect_lr_swap("Copy: L=R\n")  # not a full swap
+    # two swaps cancel (parity)
+    assert not detect_lr_swap("Copy: L=R R=L\nCopy: L=R R=L\n")
+
+
+def test_load_profile_lr_swap_across_includes(tmp_path):
+    inc = tmp_path / "inner.txt"
+    inc.write_text("Filter: ON PK Fc 1000 Hz Gain 1 dB Q 1\n", encoding="utf-8")
+    top = tmp_path / "top.txt"
+    top.write_text(f"Copy: L=R R=L\nInclude: {inc}\n", encoding="utf-8")
+    assert load_profile_lr_swap(top) is True

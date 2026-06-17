@@ -27,6 +27,7 @@ from eq_helper.apo.include_file import (
     parse_includes,
     remove_include,
     reorder_includes,
+    reorder_includes_in_device,
     set_active_include_in_device,
     set_include_enabled,
 )
@@ -208,6 +209,17 @@ class PresetLibrary:
             is_active=was_active,
             device=preset.device,
             device_raw=preset.device_raw,
+        )
+
+    def reorder_presets(self, device: str, ordered_paths: List[str]) -> None:
+        """Reorder the presets under ``device`` in config.txt to follow
+        ``ordered_paths`` (resolved-absolute match), scoped to that device."""
+        scope = self._device_raw(device)
+        edit_include_file(
+            self._config_path,
+            lambda t: reorder_includes_in_device(
+                t, scope, str(self._config_dir), ordered_paths
+            ),
         )
 
     def remove_preset(self, preset: Preset) -> None:

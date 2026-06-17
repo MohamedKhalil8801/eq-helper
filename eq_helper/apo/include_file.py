@@ -247,6 +247,49 @@ def add_include_under_device(
     return "".join(lines)
 
 
+def reorder_includes_in_device(
+    text: str, device: str, base_dir: str, ordered_paths: List[str]
+) -> str:
+    """Reorder the include lines **within one device scope** in ``config.txt`` to
+    follow ``ordered_paths`` (matched by resolved absolute path).
+
+    ``device`` is the full ``Device:`` value (incl. ``{GUID}``), matched exactly
+    so a same-named device elsewhere is never touched. Non-include lines and
+    other scopes stay put; each include slot in the scope is refilled by the next
+    listed path; unlisted includes keep their relative order and follow.
+    """
+    lines = text.splitlines(keepends=True)
+    cur_raw = ""
+    positions: List[int] = []
+    inc: List[tuple[str, str]] = []  # (path, full line)
+    for i, line in enumerate(lines):
+        if _ANY_DEVICE_RE.match(line):
+            dm = _DEVICE_RE.match(line)
+            cur_raw = dm.group("name").strip() if dm else ""
+            continue
+        lp = _line_path(line)
+        if lp is not None and _device_match(cur_raw, device):
+            positions.append(i)
+            inc.append((lp, line))
+
+    used = [False] * len(inc)
+    reordered: List[str] = []
+    for p in ordered_paths:
+        pa = _abs_norm(base_dir, p)
+        for j, (ip, il) in enumerate(inc):
+            if not used[j] and paths_match(_abs_norm(base_dir, ip), pa):
+                reordered.append(il)
+                used[j] = True
+                break
+    for j, (_ip, il) in enumerate(inc):
+        if not used[j]:
+            reordered.append(il)
+
+    for pos, new_line in zip(positions, reordered):
+        lines[pos] = new_line
+    return "".join(lines)
+
+
 def remove_include(text: str, path: str) -> str:
     """Remove the include line (commented or not) matching ``path``."""
     lines = text.splitlines(keepends=True)

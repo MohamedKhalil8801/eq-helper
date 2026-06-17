@@ -84,11 +84,18 @@ class ProfilePanel(QGroupBox):
         self.btn_add_preset = QPushButton("Add file…")
         self.btn_rename_preset = QPushButton("Rename…")
         self.btn_remove_preset = QPushButton("Remove")
+        self.btn_preset_up = QPushButton("↑")
+        self.btn_preset_down = QPushButton("↓")
+        self.btn_preset_up.setToolTip("Move preset up (rank candidates)")
+        self.btn_preset_down.setToolTip("Move preset down (rank candidates)")
         self.btn_new_preset.clicked.connect(self._on_new_preset)
         self.btn_add_preset.clicked.connect(self._on_add_preset_from_file)
         self.btn_rename_preset.clicked.connect(self._on_rename_preset)
         self.btn_remove_preset.clicked.connect(self._on_remove_preset)
-        for b in (self.btn_new_preset, self.btn_add_preset, self.btn_rename_preset, self.btn_remove_preset):
+        self.btn_preset_up.clicked.connect(lambda: self._move_preset(-1))
+        self.btn_preset_down.clicked.connect(lambda: self._move_preset(1))
+        for b in (self.btn_new_preset, self.btn_add_preset, self.btn_rename_preset,
+                  self.btn_remove_preset, self.btn_preset_up, self.btn_preset_down):
             pbtns.addWidget(b)
         layout.addLayout(pbtns)
 
@@ -107,6 +114,22 @@ class ProfilePanel(QGroupBox):
         )
         self.btn_balance.clicked.connect(self._on_balance)
         layout.addWidget(self.btn_balance)
+
+        bbtns = QHBoxLayout()
+        self.btn_balance_batch = QPushButton("Balance EQ batch…")
+        self.btn_balance_batch.setToolTip(
+            "Generate every reference×other balance EQ from a folder of "
+            "Left/Right measurements, each as its own preset to audition."
+        )
+        self.btn_remove_others = QPushButton("Remove other candidates")
+        self.btn_remove_others.setToolTip(
+            "Remove all 'bal …' candidate presets except the active one."
+        )
+        self.btn_balance_batch.clicked.connect(self._on_balance_batch)
+        self.btn_remove_others.clicked.connect(self._on_remove_other_candidates)
+        bbtns.addWidget(self.btn_balance_batch)
+        bbtns.addWidget(self.btn_remove_others)
+        layout.addLayout(bbtns)
 
         # --- Stack (active preset's EQ files) ---
         layout.addWidget(QLabel("EQ files in this preset (double-click to edit):"))
@@ -425,13 +448,14 @@ class ProfilePanel(QGroupBox):
         QMessageBox.information(self, "Optimized", msg)
 
     def _do_balance(
-        self, left_path: str, right_path: str, reference: str
+        self, left_path: str, right_path: str, reference: str, invert: bool = False
     ) -> Tuple[EqFile, float, str]:
         """Generate a balance EQ and add it to the active preset, scoped to the
-        non-reference channel. Assumes an active preset exists. Returns
-        ``(eq_file, max_dev_db, other_channel)``. Dialog-free for testability."""
+        non-reference channel (inverted when ``invert`` — a config that swaps
+        L/R). Assumes an active preset exists. Returns ``(eq_file, max_dev_db,
+        channel)``. Dialog-free for testability."""
         from eq_helper.apo.writer import atomic_write_with_backup
-        from eq_helper.dsp.balance_eq import generate_balance_eq
+        from eq_helper.dsp.balance_eq import effective_other_channel, generate_balance_eq
         from eq_helper.dsp.eq_optimize import render_channel_eqs
         from eq_helper.dsp.overlay import load_frequency_response
 
@@ -439,7 +463,8 @@ class ProfilePanel(QGroupBox):
         preset = self._active_preset()
         if lib is None or preset is None:
             raise ValueError("no active preset")
-        other = "R" if reference == "L" else "L"
+        other = effective_other_channel(reference, invert)
+        phys_other = "R" if reference == "L" else "L"
         left_f, left_db = load_frequency_response(left_path)
         right_f, right_db = load_frequency_response(right_path)
         if reference == "L":
@@ -450,9 +475,21 @@ class ProfilePanel(QGroupBox):
             ref_f, ref_db, oth_f, oth_db, other, self._sr
         )
         content = render_channel_eqs([ceq])
-        eq = lib.create_eq_file(preset, f"balance {other} to {reference}")
+        eq = lib.create_eq_file(preset, f"balance {phys_other} to {reference}")
         atomic_write_with_backup(Path(eq.path), content)
         return eq, max_dev, other
+
+    def _active_preset_swapped(self) -> bool:
+        """Whether the active preset's chain has an L/R channel swap in effect."""
+        from eq_helper.dsp.eq_response import load_profile_lr_swap
+
+        preset = self._active_preset()
+        if preset is None:
+            return False
+        try:
+            return load_profile_lr_swap(Path(preset.path))
+        except Exception:
+            return False
 
     def _on_balance(self) -> None:
         from eq_helper.ui.balance_eq_dialog import BalanceEqDialog
@@ -464,22 +501,26 @@ class ProfilePanel(QGroupBox):
                 self, "No active preset", "Activate a preset first."
             )
             return
-        dlg = BalanceEqDialog(self)
+        swap = self._active_preset_swapped()
+        dlg = BalanceEqDialog(initial_invert=swap, swap_detected=swap, parent=self)
         if dlg.exec() != QDialog.Accepted:
             return
         left, right = dlg.left_path(), dlg.right_path()
         if not left or not right:
             return
         try:
-            eq, max_dev, other = self._do_balance(left, right, dlg.reference())
+            eq, max_dev, other = self._do_balance(
+                left, right, dlg.reference(), dlg.invert()
+            )
         except Exception as exc:  # DSP runs before any write, so no partial state
             QMessageBox.critical(self, "Balance EQ failed", str(exc))
             return
         self._refresh_stack()
         self._emit_curves_for_device(self._current_device())
         msg = (
-            f"Created '{eq.name}'. Corrects {other} to match {dlg.reference()} "
-            f"at every frequency.\nMax deviation: {max_dev:.3f} dB.\n\n"
+            f"Created '{eq.name}'. Corrects the {dlg.reference()}-referenced "
+            f"side at every frequency (Channel: {other}).\n"
+            f"Max deviation: {max_dev:.3f} dB.\n\n"
             f"It's an EQ file in this preset — toggle or remove it any time."
         )
         if max_dev >= 0.1:
@@ -488,6 +529,134 @@ class ProfilePanel(QGroupBox):
                 "near APO's 16384-tap FIR resolution limit."
             )
         QMessageBox.information(self, "Balance EQ created", msg)
+
+    def _do_balance_batch(
+        self, folder: str, reference: str, invert: bool
+    ) -> Tuple[List[str], float, int]:
+        """Generate every reference×other balance EQ from ``folder`` as its own
+        preset under the active device; activate the first. Assumes an active
+        preset exists (for the device). Returns ``(preset_names, worst_max_dev,
+        skipped)``. Dialog-free for testability."""
+        from eq_helper.apo.writer import atomic_write_with_backup
+        from eq_helper.dsp.balance_eq import (
+            detect_measurement_sets,
+            generate_balance_batch,
+        )
+        from eq_helper.dsp.eq_optimize import render_channel_eqs
+
+        lib = self._library()
+        device = self._current_device()
+        if lib is None or not device:
+            raise ValueError("no device")
+        left, right = detect_measurement_sets(folder)
+        results = generate_balance_batch(left, right, reference, self._sr, invert=invert)
+
+        created: List[str] = []
+        worst = 0.0
+        first_preset = None
+        for name, ceq, max_dev in results:
+            content = render_channel_eqs([ceq])
+            new = lib.create_preset(device, name)
+            try:
+                eq = lib.create_eq_file(new, name)
+                atomic_write_with_backup(Path(eq.path), content)
+            except Exception:
+                try:
+                    lib.remove_preset(new)
+                except Exception:
+                    pass
+                raise
+            created.append(new.name)
+            worst = max(worst, max_dev)
+            if first_preset is None:
+                first_preset = new
+        if first_preset is not None:
+            lib.activate(first_preset)
+        return created, worst, 0
+
+    def _on_balance_batch(self) -> None:
+        from eq_helper.ui.balance_batch_dialog import BalanceBatchDialog
+
+        lib = self._library()
+        if lib is None or not self._current_device():
+            QMessageBox.information(
+                self, "No device", "No device is available in config.txt."
+            )
+            return
+        swap = self._active_preset_swapped()
+        dlg = BalanceBatchDialog(initial_invert=swap, swap_detected=swap, parent=self)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        folder = dlg.folder()
+        if not folder:
+            return
+        try:
+            created, worst, _ = self._do_balance_batch(
+                folder, dlg.reference(), dlg.invert()
+            )
+        except Exception as exc:
+            QMessageBox.critical(self, "Balance batch failed", str(exc))
+            return
+        self._refresh_lists()
+        self._emit_curves_for_device(self._current_device())
+        msg = (
+            f"Generated {len(created)} balance-EQ presets (reference "
+            f"{dlg.reference()}). Worst max deviation: {worst:.3f} dB.\n\n"
+            f"Click each in the switcher to audition, ↑/↓ to rank them, then "
+            f"'Remove other candidates' to keep your favourite."
+        )
+        QMessageBox.information(self, "Balance candidates created", msg)
+
+    def _move_preset(self, delta: int) -> None:
+        lib = self._library()
+        device = self._current_device()
+        row = self._presets.currentRow()
+        if lib is None or not device or row < 0:
+            return
+        order = [
+            self._presets.item(i).data(Qt.UserRole).path
+            for i in range(self._presets.count())
+        ]
+        new_row = row + delta
+        if not (0 <= new_row < len(order)):
+            return
+        order[row], order[new_row] = order[new_row], order[row]
+        try:
+            lib.reorder_presets(device, order)
+        except (ApoError, OSError) as exc:
+            QMessageBox.critical(self, "Write failed", str(exc))
+            return
+        self._refresh_presets()
+        self._presets.setCurrentRow(new_row)
+
+    def _on_remove_other_candidates(self) -> None:
+        lib = self._library()
+        device = self._current_device()
+        if lib is None or not device:
+            return
+        presets = lib.list_presets(device)
+        candidates = [p for p in presets if p.name.startswith("bal ")]
+        losers = [p for p in candidates if not p.is_active]
+        if not losers:
+            QMessageBox.information(
+                self, "No candidates",
+                "No 'bal …' candidate presets to remove (besides the active one).",
+            )
+            return
+        active = next((p for p in candidates if p.is_active), None)
+        keep_note = f" Keeping '{active.name}'." if active else ""
+        if QMessageBox.question(
+            self, "Remove other candidates",
+            f"Remove {len(losers)} candidate preset(s)?{keep_note}",
+        ) != QMessageBox.Yes:
+            return
+        for p in losers:
+            try:
+                lib.remove_preset(p)
+            except (ApoError, OSError):
+                pass
+        self._refresh_lists()
+        self._emit_curves_for_device(self._current_device())
 
     def _do_bypass(self, lo: float, hi: float) -> EqFile:
         """Create a region-bypass correction EQ (per-channel aware) and move it

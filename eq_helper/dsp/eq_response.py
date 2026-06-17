@@ -48,6 +48,12 @@ _CHANNEL_RE = re.compile(
     r"^\s*Channel\s*:\s*(?P<chans>.+?)\s*$",
     re.IGNORECASE,
 )
+# Active (uncommented) Copy: line — reassigns channel contents. A leading '#'
+# prevents a match.
+_COPY_RE = re.compile(
+    r"^\s*Copy\s*:\s*(?P<body>.+?)\s*$",
+    re.IGNORECASE,
+)
 
 
 def _peaking_response(
@@ -457,3 +463,62 @@ def load_profile_channel_responses(
     return compute_channel_responses(
         text, freqs, base_dir=profile_path.parent, _seed_path=seed_path
     )
+
+
+# --------------------------------------------------------- channel swap (Copy)
+
+
+def _is_lr_swap(copy_body: str) -> bool:
+    """True if a ``Copy:`` body swaps L and R (``L=R`` and ``R=L`` both present,
+    case-insensitive, with no scaling)."""
+    assigns: dict = {}
+    for tok in copy_body.split():
+        if "=" in tok:
+            dest, _, expr = tok.partition("=")
+            assigns[dest.strip().upper()] = expr.strip().upper()
+    return assigns.get("L") == "R" and assigns.get("R") == "L"
+
+
+def detect_lr_swap(
+    profile_text: str,
+    *,
+    base_dir: Optional[Path] = None,
+    _visited: Optional[Set[str]] = None,
+) -> bool:
+    """Whether an L↔R channel swap is in effect across the include tree.
+
+    Counts **active** (uncommented) ``Copy: L=R R=L`` lines and returns the
+    parity — an odd number leaves the channels swapped, an even number cancels
+    out. Used to invert a balance EQ's channel selector so it targets the
+    intended physical driver.
+    """
+    if _visited is None:
+        _visited = set()
+    count = 0
+    for line in profile_text.splitlines():
+        cm = _COPY_RE.match(line)
+        if cm and _is_lr_swap(cm.group("body")):
+            count += 1
+            continue
+        inc = _resolve_include(line, base_dir, _visited)
+        if inc is not None and detect_lr_swap(
+            inc[0], base_dir=inc[1], _visited=_visited
+        ):
+            count += 1
+    return count % 2 == 1
+
+
+def load_profile_lr_swap(profile_path) -> bool:
+    """Whether an L↔R swap is in effect for a profile file (resolving includes).
+    Returns ``False`` if the file can't be read."""
+    profile_path = Path(profile_path)
+    try:
+        text = profile_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    visited: Set[str] = set()
+    try:
+        visited.add(str(profile_path.resolve()))
+    except OSError:
+        pass
+    return detect_lr_swap(text, base_dir=profile_path.parent, _visited=visited)
