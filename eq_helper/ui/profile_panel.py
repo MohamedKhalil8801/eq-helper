@@ -15,6 +15,7 @@ import numpy as np
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QComboBox,
+    QDialog,
     QFileDialog,
     QGroupBox,
     QHBoxLayout,
@@ -98,6 +99,14 @@ class ProfilePanel(QGroupBox):
         )
         self.btn_optimize.clicked.connect(self._on_optimize)
         layout.addWidget(self.btn_optimize)
+
+        self.btn_balance = QPushButton("Balance EQ…")
+        self.btn_balance.setToolTip(
+            "Import Left and Right measurements and generate an EQ that makes "
+            "one side identical to the other (chases every peak/dip exactly)."
+        )
+        self.btn_balance.clicked.connect(self._on_balance)
+        layout.addWidget(self.btn_balance)
 
         # --- Stack (active preset's EQ files) ---
         layout.addWidget(QLabel("EQ files in this preset (double-click to edit):"))
@@ -414,6 +423,71 @@ class ProfilePanel(QGroupBox):
                 "(inherent to any single-filter consolidation)."
             )
         QMessageBox.information(self, "Optimized", msg)
+
+    def _do_balance(
+        self, left_path: str, right_path: str, reference: str
+    ) -> Tuple[EqFile, float, str]:
+        """Generate a balance EQ and add it to the active preset, scoped to the
+        non-reference channel. Assumes an active preset exists. Returns
+        ``(eq_file, max_dev_db, other_channel)``. Dialog-free for testability."""
+        from eq_helper.apo.writer import atomic_write_with_backup
+        from eq_helper.dsp.balance_eq import generate_balance_eq
+        from eq_helper.dsp.eq_optimize import render_channel_eqs
+        from eq_helper.dsp.overlay import load_frequency_response
+
+        lib = self._library()
+        preset = self._active_preset()
+        if lib is None or preset is None:
+            raise ValueError("no active preset")
+        other = "R" if reference == "L" else "L"
+        left_f, left_db = load_frequency_response(left_path)
+        right_f, right_db = load_frequency_response(right_path)
+        if reference == "L":
+            ref_f, ref_db, oth_f, oth_db = left_f, left_db, right_f, right_db
+        else:
+            ref_f, ref_db, oth_f, oth_db = right_f, right_db, left_f, left_db
+        ceq, max_dev = generate_balance_eq(
+            ref_f, ref_db, oth_f, oth_db, other, self._sr
+        )
+        content = render_channel_eqs([ceq])
+        eq = lib.create_eq_file(preset, f"balance {other} to {reference}")
+        atomic_write_with_backup(Path(eq.path), content)
+        return eq, max_dev, other
+
+    def _on_balance(self) -> None:
+        from eq_helper.ui.balance_eq_dialog import BalanceEqDialog
+
+        lib = self._library()
+        preset = self._active_preset()
+        if lib is None or preset is None:
+            QMessageBox.information(
+                self, "No active preset", "Activate a preset first."
+            )
+            return
+        dlg = BalanceEqDialog(self)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        left, right = dlg.left_path(), dlg.right_path()
+        if not left or not right:
+            return
+        try:
+            eq, max_dev, other = self._do_balance(left, right, dlg.reference())
+        except Exception as exc:  # DSP runs before any write, so no partial state
+            QMessageBox.critical(self, "Balance EQ failed", str(exc))
+            return
+        self._refresh_stack()
+        self._emit_curves_for_device(self._current_device())
+        msg = (
+            f"Created '{eq.name}'. Corrects {other} to match {dlg.reference()} "
+            f"at every frequency.\nMax deviation: {max_dev:.3f} dB.\n\n"
+            f"It's an EQ file in this preset — toggle or remove it any time."
+        )
+        if max_dev >= 0.1:
+            msg += (
+                "\n\nNote: deviation exceeds 0.1 dB — a very narrow/deep feature "
+                "near APO's 16384-tap FIR resolution limit."
+            )
+        QMessageBox.information(self, "Balance EQ created", msg)
 
     def _do_bypass(self, lo: float, hi: float) -> EqFile:
         """Create a region-bypass correction EQ (per-channel aware) and move it

@@ -9,6 +9,7 @@ import pytest
 
 from eq_helper.dsp.overlay import (
     OverlayLoadError,
+    load_frequency_response,
     load_measurement_csv,
     normalize_at_1khz,
 )
@@ -60,3 +61,41 @@ def test_load_measurement_csv_no_header(tmp_path: Path) -> None:
     freqs, db = load_measurement_csv(csv)
     assert freqs.shape == (3,)
     np.testing.assert_allclose(freqs, [100, 1000, 10000])
+
+
+def test_load_frequency_response_rew_text(tmp_path: Path) -> None:
+    p = tmp_path / "rew.txt"
+    p.write_text(
+        "* Measurement data measured by REW V5\n"
+        "* Freq(Hz) SPL(dB) Phase(degrees)\n"
+        "20.000\t85.10\t-12.3\n"
+        "1000.0\t88.00\t0.0\n"
+        "10000\t84.5\t44.1\n",
+        encoding="utf-8",
+    )
+    f, db = load_frequency_response(p)
+    np.testing.assert_allclose(f, [20.0, 1000.0, 10000.0])
+    np.testing.assert_allclose(db, [85.10, 88.00, 84.5])
+
+
+def test_load_frequency_response_csv_still_works(tmp_path: Path) -> None:
+    p = tmp_path / "a.csv"
+    p.write_text("Frequency (Hz),Raw (dB)\n100,85\n1000,90\n", encoding="utf-8")
+    f, db = load_frequency_response(p)
+    np.testing.assert_allclose(f, [100.0, 1000.0])
+    np.testing.assert_allclose(db, [85.0, 90.0])
+
+
+def test_load_frequency_response_space_delimited_no_comments(tmp_path: Path) -> None:
+    p = tmp_path / "plain.txt"
+    p.write_text("100 85\n1000 90\n10000 80\n", encoding="utf-8")
+    f, db = load_frequency_response(p)
+    np.testing.assert_allclose(f, [100.0, 1000.0, 10000.0])
+    np.testing.assert_allclose(db, [85.0, 90.0, 80.0])
+
+
+def test_load_frequency_response_empty_raises(tmp_path: Path) -> None:
+    p = tmp_path / "empty.txt"
+    p.write_text("* only comments\n* nothing else\n", encoding="utf-8")
+    with pytest.raises(OverlayLoadError):
+        load_frequency_response(p)

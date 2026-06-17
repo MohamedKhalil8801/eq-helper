@@ -1,68 +1,94 @@
-"""Loader for oratory1990 / AutoEQ style headphone measurement CSVs.
+"""Loaders for headphone/earphone frequency-response files.
 
-Expected format (two columns, comma-separated, with a header row)::
+Supports two shapes with one parser:
 
-    Frequency (Hz),Raw (dB)
-    20.00,85.21
-    20.18,85.18
-    ...
+- **oratory1990 / AutoEQ CSV** — comma-separated ``Frequency (Hz),Raw (dB)``
+  with an optional header row.
+- **REW "Export measurement as text"** — whitespace-separated
+  ``freq SPL phase`` columns with a ``*``-prefixed comment header.
+
+Only the first two numeric columns (frequency, level dB) are used; any phase or
+extra columns are ignored.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Tuple
+from typing import List, Tuple
 
 import numpy as np
 
 
 class OverlayLoadError(ValueError):
-    """Raised when the overlay CSV can't be parsed."""
+    """Raised when a measurement file can't be parsed."""
 
 
-def load_measurement_csv(path: str | Path) -> Tuple[np.ndarray, np.ndarray]:
-    """Return ``(freq_hz, db)`` arrays from an oratory1990/AutoEQ CSV."""
+def _parse_row(line: str) -> List[float]:
+    """Return the leading float-parseable tokens of a data line.
+
+    Splits on comma when the line contains one (CSV), otherwise on any
+    whitespace (REW text / space- or tab-delimited). Returns ``[]`` for a line
+    whose first two tokens aren't both numeric (e.g. a header row).
+    """
+    stripped = line.strip()
+    if not stripped:
+        return []
+    tokens = stripped.split(",") if "," in stripped else stripped.split()
+    out: List[float] = []
+    for tok in tokens:
+        tok = tok.strip()
+        try:
+            out.append(float(tok))
+        except ValueError:
+            break  # stop at the first non-numeric token
+    return out
+
+
+def load_frequency_response(path: str | Path) -> Tuple[np.ndarray, np.ndarray]:
+    """Return ``(freq_hz, db)`` from an AutoEQ/oratory CSV or a REW text export.
+
+    Comment lines (``*`` or ``#``) and blank lines are skipped; a non-numeric
+    header row is ignored. Frequencies are sorted ascending and rows with a
+    non-positive frequency are dropped. Raises :class:`OverlayLoadError` if the
+    file is missing or contains no parseable ``freq, level`` rows.
+    """
     p = Path(path)
     if not p.exists():
-        raise OverlayLoadError(f"CSV not found: {p}")
-
-    # Peek at the first line: if it parses cleanly as floats, there's no
-    # header; otherwise skip one row. This avoids silently dropping a data
-    # row from a headerless file that happens to contain only numeric text.
+        raise OverlayLoadError(f"measurement file not found: {p}")
     try:
-        with p.open("r", encoding="utf-8", errors="replace") as f:
-            first_line = f.readline()
+        text = p.read_text(encoding="utf-8", errors="replace")
     except OSError as exc:
         raise OverlayLoadError(f"could not open {p}: {exc}") from exc
 
-    def _is_numeric_row(line: str) -> bool:
-        parts = [s.strip() for s in line.strip().split(",")]
-        if len(parts) < 2:
-            return False
-        try:
-            for s in parts[:2]:
-                float(s)
-        except ValueError:
-            return False
-        return True
+    freqs: List[float] = []
+    dbs: List[float] = []
+    for line in text.splitlines():
+        s = line.lstrip()
+        if not s or s[0] in "*#;":
+            continue
+        row = _parse_row(line)
+        if len(row) < 2:
+            continue  # header / malformed line
+        freqs.append(row[0])
+        dbs.append(row[1])
 
-    skip = 0 if _is_numeric_row(first_line) else 1
-    try:
-        data = np.loadtxt(p, delimiter=",", skiprows=skip, dtype=np.float64)
-    except ValueError as exc:
-        raise OverlayLoadError(f"could not parse {p}: {exc}") from exc
+    if not freqs:
+        raise OverlayLoadError(f"{p}: no parseable 'frequency, level' rows found")
 
-    if data.ndim != 2 or data.shape[1] < 2:
-        raise OverlayLoadError(
-            f"{p}: expected a 2-column CSV, got shape {data.shape}"
-        )
+    f = np.asarray(freqs, dtype=np.float64)
+    d = np.asarray(dbs, dtype=np.float64)
+    mask = f > 0
+    f, d = f[mask], d[mask]
+    if f.size == 0:
+        raise OverlayLoadError(f"{p}: no rows with a positive frequency")
+    order = np.argsort(f)
+    return f[order], d[order]
 
-    freqs = data[:, 0]
-    db = data[:, 1]
 
-    # Sanity: strip rows with non-positive frequencies.
-    mask = freqs > 0
-    return freqs[mask], db[mask]
+def load_measurement_csv(path: str | Path) -> Tuple[np.ndarray, np.ndarray]:
+    """Return ``(freq_hz, db)`` from an oratory1990/AutoEQ CSV (or any format
+    :func:`load_frequency_response` accepts)."""
+    return load_frequency_response(path)
 
 
 def normalize_at_1khz(freqs: np.ndarray, db: np.ndarray) -> np.ndarray:
