@@ -483,7 +483,7 @@ def detect_lr_swap(
     profile_text: str,
     *,
     base_dir: Optional[Path] = None,
-    _visited: Optional[Set[str]] = None,
+    _ancestors: frozenset = frozenset(),
 ) -> bool:
     """Whether an L↔R channel swap is in effect across the include tree.
 
@@ -491,18 +491,37 @@ def detect_lr_swap(
     parity — an odd number leaves the channels swapped, an even number cancels
     out. Used to invert a balance EQ's channel selector so it targets the
     intended physical driver.
+
+    Cycle detection uses the **ancestor path** (only a file currently being
+    expanded is a cycle), so a legal non-cyclic duplicate include — which APO
+    re-applies textually — is correctly counted again rather than deduped.
     """
-    if _visited is None:
-        _visited = set()
     count = 0
     for line in profile_text.splitlines():
         cm = _COPY_RE.match(line)
         if cm and _is_lr_swap(cm.group("body")):
             count += 1
             continue
-        inc = _resolve_include(line, base_dir, _visited)
-        if inc is not None and detect_lr_swap(
-            inc[0], base_dir=inc[1], _visited=_visited
+        if base_dir is None:
+            continue
+        inc = _INCLUDE_RE.match(line)
+        if not inc:
+            continue
+        inc_path = Path(inc.group("path").strip())
+        if not inc_path.is_absolute():
+            inc_path = base_dir / inc_path
+        try:
+            resolved = str(inc_path.resolve())
+        except OSError:
+            continue
+        if resolved in _ancestors:
+            continue  # cycle: this file is currently being expanded
+        try:
+            inc_text = inc_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if detect_lr_swap(
+            inc_text, base_dir=inc_path.parent, _ancestors=_ancestors | {resolved}
         ):
             count += 1
     return count % 2 == 1
@@ -516,9 +535,9 @@ def load_profile_lr_swap(profile_path) -> bool:
         text = profile_path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return False
-    visited: Set[str] = set()
+    ancestors: frozenset = frozenset()
     try:
-        visited.add(str(profile_path.resolve()))
+        ancestors = frozenset({str(profile_path.resolve())})
     except OSError:
         pass
-    return detect_lr_swap(text, base_dir=profile_path.parent, _visited=visited)
+    return detect_lr_swap(text, base_dir=profile_path.parent, _ancestors=ancestors)

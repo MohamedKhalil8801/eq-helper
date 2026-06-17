@@ -549,7 +549,9 @@ class ProfilePanel(QGroupBox):
         if lib is None or not device:
             raise ValueError("no device")
         left, right = detect_measurement_sets(folder)
-        results = generate_balance_batch(left, right, reference, self._sr, invert=invert)
+        results, skipped = generate_balance_batch(
+            left, right, reference, self._sr, invert=invert
+        )
 
         created: List[str] = []
         worst = 0.0
@@ -572,7 +574,7 @@ class ProfilePanel(QGroupBox):
                 first_preset = new
         if first_preset is not None:
             lib.activate(first_preset)
-        return created, worst, 0
+        return created, worst, len(skipped)
 
     def _on_balance_batch(self) -> None:
         from eq_helper.ui.balance_batch_dialog import BalanceBatchDialog
@@ -591,11 +593,18 @@ class ProfilePanel(QGroupBox):
         if not folder:
             return
         try:
-            created, worst, _ = self._do_balance_batch(
+            created, worst, skipped = self._do_balance_batch(
                 folder, dlg.reference(), dlg.invert()
             )
         except Exception as exc:
             QMessageBox.critical(self, "Balance batch failed", str(exc))
+            return
+        if not created:
+            QMessageBox.warning(
+                self, "Nothing generated",
+                "No candidates could be generated (no usable measurement "
+                "pairs).",
+            )
             return
         self._refresh_lists()
         self._emit_curves_for_device(self._current_device())
@@ -605,6 +614,11 @@ class ProfilePanel(QGroupBox):
             f"Click each in the switcher to audition, ↑/↓ to rank them, then "
             f"'Remove other candidates' to keep your favourite."
         )
+        if skipped:
+            msg += (
+                f"\n\n{skipped} pairing(s) were skipped (unreadable file or no "
+                f"overlapping frequency range)."
+            )
         QMessageBox.information(self, "Balance candidates created", msg)
 
     def _move_preset(self, delta: int) -> None:
@@ -636,18 +650,32 @@ class ProfilePanel(QGroupBox):
             return
         presets = lib.list_presets(device)
         candidates = [p for p in presets if p.name.startswith("bal ")]
-        losers = [p for p in candidates if not p.is_active]
-        if not losers:
+        if not candidates:
             QMessageBox.information(
-                self, "No candidates",
-                "No 'bal …' candidate presets to remove (besides the active one).",
+                self, "No candidates", "No 'bal …' candidate presets found."
             )
             return
-        active = next((p for p in candidates if p.is_active), None)
-        keep_note = f" Keeping '{active.name}'." if active else ""
+        # Pick the one to KEEP — never delete all. Prefer the selected
+        # candidate, then the active candidate, else the first candidate.
+        sel_item = self._presets.currentItem()
+        sel = sel_item.data(Qt.UserRole) if sel_item is not None else None
+        keep = None
+        if sel is not None and sel.name.startswith("bal "):
+            keep = sel
+        if keep is None:
+            keep = next((p for p in candidates if p.is_active), None)
+        if keep is None:
+            keep = candidates[0]
+        losers = [p for p in candidates if p.path != keep.path]
+        if not losers:
+            QMessageBox.information(
+                self, "Only one candidate",
+                f"'{keep.name}' is the only candidate — nothing to remove.",
+            )
+            return
         if QMessageBox.question(
             self, "Remove other candidates",
-            f"Remove {len(losers)} candidate preset(s)?{keep_note}",
+            f"Remove {len(losers)} candidate preset(s)? Keeping '{keep.name}'.",
         ) != QMessageBox.Yes:
             return
         for p in losers:

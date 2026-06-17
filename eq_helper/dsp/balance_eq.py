@@ -167,6 +167,21 @@ def generate_balance_eq(
     return ChannelEQ(channels=(other_channel,), geq=geq), max_dev
 
 
+def _fallback_labels(side_set: List[Tuple[Optional[int], Path]]) -> List[int]:
+    """Per-entry display index: the parsed index when present, else numbered
+    above the max explicit index so indexless files can't collide with them."""
+    explicit = [i for i, _ in side_set if i is not None]
+    nxt = (max(explicit) + 1) if explicit else 1
+    labels: List[int] = []
+    for i, _ in side_set:
+        if i is not None:
+            labels.append(i)
+        else:
+            labels.append(nxt)
+            nxt += 1
+    return labels
+
+
 def generate_balance_batch(
     left: List[Tuple[Optional[int], Path]],
     right: List[Tuple[Optional[int], Path]],
@@ -176,16 +191,19 @@ def generate_balance_batch(
     invert: bool = False,
     match_level: bool = True,
     tol_db: float = 0.02,
-) -> List[Tuple[str, ChannelEQ, float]]:
+) -> Tuple[List[Tuple[str, ChannelEQ, float]], List[Tuple[str, str]]]:
     """Generate all reference×other balance EQs.
 
     ``left``/``right`` are ``(index, path)`` lists (from
     :func:`detect_measurement_sets`). The reference side is fixed; every
     reference measurement is paired with every other-side measurement. Returns
-    ``[(name, ChannelEQ, max_dev)]`` named ``bal <Ref><i>-<Oth><j>`` by the
-    physical sides/indices (the EQ's channel is the effective, possibly
-    inverted, one). Each measurement file is loaded once. Raises ``ValueError``
-    if either side has no measurements."""
+    ``(results, skipped)`` where ``results`` is ``[(name, ChannelEQ, max_dev)]``
+    named ``bal <Ref><i>-<Oth><j>`` by the physical sides/indices (the EQ's
+    channel is the effective, possibly inverted, one), and ``skipped`` is
+    ``[(name, reason)]`` for pairs that couldn't be generated (unreadable file,
+    no frequency overlap) — one bad measurement never aborts the whole batch.
+    Each measurement file is loaded once. Raises ``ValueError`` only if a side
+    has no measurements at all."""
     ref_side = reference.upper()
     oth_side = "R" if ref_side == "L" else "L"
     ref_set = left if ref_side == "L" else right
@@ -194,6 +212,8 @@ def generate_balance_batch(
         raise ValueError("need at least one Left and one Right measurement")
 
     other_channel = effective_other_channel(reference, invert)
+    ref_labels = _fallback_labels(ref_set)
+    oth_labels = _fallback_labels(oth_set)
     cache: dict = {}
 
     def _load(path: Path):
@@ -203,16 +223,19 @@ def generate_balance_batch(
         return cache[key]
 
     results: List[Tuple[str, ChannelEQ, float]] = []
-    for ri, (ridx, rpath) in enumerate(ref_set):
-        ref_f, ref_db = _load(rpath)
-        for oj, (oidx, opath) in enumerate(oth_set):
-            oth_f, oth_db = _load(opath)
-            ceq, max_dev = generate_balance_eq(
-                ref_f, ref_db, oth_f, oth_db, other_channel, sample_rate,
-                match_level=match_level, tol_db=tol_db,
-            )
-            ri_lbl = ridx if ridx is not None else ri + 1
-            oj_lbl = oidx if oidx is not None else oj + 1
-            name = f"bal {ref_side}{ri_lbl}-{oth_side}{oj_lbl}"
+    skipped: List[Tuple[str, str]] = []
+    for ri, (_ridx, rpath) in enumerate(ref_set):
+        for oj, (_oidx, opath) in enumerate(oth_set):
+            name = f"bal {ref_side}{ref_labels[ri]}-{oth_side}{oth_labels[oj]}"
+            try:
+                ref_f, ref_db = _load(rpath)
+                oth_f, oth_db = _load(opath)
+                ceq, max_dev = generate_balance_eq(
+                    ref_f, ref_db, oth_f, oth_db, other_channel, sample_rate,
+                    match_level=match_level, tol_db=tol_db,
+                )
+            except (ValueError, OSError) as exc:
+                skipped.append((name, str(exc)))
+                continue
             results.append((name, ceq, max_dev))
-    return results
+    return results, skipped

@@ -57,8 +57,9 @@ def test_generate_balance_batch_counts_and_names(tmp_path):
     for j in (1, 2):
         _write_meas(tmp_path / f"R {j}.txt", 5000 + 300 * j, -2.0)
     left, right = detect_measurement_sets(tmp_path)
-    results = generate_balance_batch(left, right, "L", 48000)
+    results, skipped = generate_balance_batch(left, right, "L", 48000)
     assert len(results) == 6  # 3 x 2
+    assert skipped == []
     names = [n for n, _, _ in results]
     assert "bal L1-R1" in names and "bal L3-R2" in names
     # reference=L, no invert -> EQ scoped to R
@@ -69,10 +70,40 @@ def test_generate_balance_batch_invert_flips_channel(tmp_path):
     _write_meas(tmp_path / "L 1.txt", 1200, 3.0)
     _write_meas(tmp_path / "R 1.txt", 5000, -2.0)
     left, right = detect_measurement_sets(tmp_path)
-    results = generate_balance_batch(left, right, "L", 48000, invert=True)
+    results, skipped = generate_balance_batch(left, right, "L", 48000, invert=True)
     # name still reflects the physical pairing, channel is inverted to L
     assert results[0][0] == "bal L1-R1"
     assert results[0][1].channels == ("L",)
+
+
+def test_generate_balance_batch_skips_bad_pair(tmp_path):
+    _write_meas(tmp_path / "L 1.txt", 1200, 3.0)
+    _write_meas(tmp_path / "R 1.txt", 5000, -2.0)
+    # R 2 covers a band that doesn't overlap [20, 20000] after clamping
+    f = np.geomspace(22000, 40000, 50)
+    (tmp_path / "R 2.txt").write_text(
+        "Frequency (Hz),Raw (dB)\n" + "\n".join(f"{a:.3f},80.0" for a in f),
+        encoding="utf-8",
+    )
+    left, right = detect_measurement_sets(tmp_path)
+    results, skipped = generate_balance_batch(left, right, "L", 48000)
+    # L1-R1 still generated; L1-R2 skipped, not the whole batch
+    assert [n for n, _, _ in results] == ["bal L1-R1"]
+    assert len(skipped) == 1 and skipped[0][0] == "bal L1-R2"
+
+
+def test_detect_lr_swap_duplicate_include_parity(tmp_path):
+    from eq_helper.dsp.eq_response import load_profile_lr_swap
+    swap = tmp_path / "swap.txt"
+    swap.write_text("Copy: L=R R=L\n", encoding="utf-8")
+    # included twice (non-cyclic) -> APO applies it twice -> NOT swapped
+    twice = tmp_path / "twice.txt"
+    twice.write_text(f"Include: {swap}\nInclude: {swap}\n", encoding="utf-8")
+    assert load_profile_lr_swap(twice) is False
+    # included once -> swapped
+    once = tmp_path / "once.txt"
+    once.write_text(f"Include: {swap}\n", encoding="utf-8")
+    assert load_profile_lr_swap(once) is True
 
 
 def test_detect_lr_swap_active(tmp_path):

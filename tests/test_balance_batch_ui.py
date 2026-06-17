@@ -115,3 +115,26 @@ def test_remove_other_candidates_keeps_active(tmp_path, qtbot, monkeypatch):
     bal = [p for p in presets if p.name.startswith("bal ")]
     assert len(bal) == 1  # only the active candidate remains
     assert bal[0].is_active
+
+
+def test_remove_other_candidates_never_deletes_all(tmp_path, qtbot, monkeypatch):
+    # Footgun guard: even when a NON-candidate preset is active, one candidate
+    # must be kept (the selected one), never all removed.
+    folder = tmp_path / "meas"
+    _measurements(folder, 3, 1)  # 3 candidates
+    panel = _panel(tmp_path, qtbot)
+    panel._do_balance_batch(str(folder), "L", False)
+    lib = PresetLibrary(tmp_path)
+    base = next(p for p in lib.list_presets("HD600") if p.name == "Base")
+    lib.activate(base)  # active preset is NOT a candidate
+    panel._refresh_presets()
+    # select the first candidate in the list
+    for i in range(panel._presets.count()):
+        if panel._presets.item(i).data(Qt.UserRole).name.startswith("bal "):
+            panel._presets.setCurrentRow(i)
+            break
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.Yes)
+    panel._on_remove_other_candidates()
+
+    bal = [p for p in lib.list_presets("HD600") if p.name.startswith("bal ")]
+    assert len(bal) == 1  # exactly one kept, not zero
