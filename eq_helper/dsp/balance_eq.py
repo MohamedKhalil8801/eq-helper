@@ -174,17 +174,23 @@ def generate_balance_eq(
 
 
 def _fallback_labels(side_set: List[Tuple[Optional[int], Path]]) -> List[int]:
-    """Per-entry display index: the parsed index when present, else numbered
-    above the max explicit index so indexless files can't collide with them."""
+    """Per-entry display index, **unique within the side**: the parsed index
+    when present and not already taken, else the next free integer above the max
+    explicit index. Uniqueness matters because labels key the seal-marker/metrics
+    map — two files parsing to the same (side, index) must not collide."""
     explicit = [i for i, _ in side_set if i is not None]
     nxt = (max(explicit) + 1) if explicit else 1
+    used: set = set()
     labels: List[int] = []
     for i, _ in side_set:
-        if i is not None:
-            labels.append(i)
-        else:
-            labels.append(nxt)
+        label = i if (i is not None and i not in used) else None
+        if label is None:
+            while nxt in used:
+                nxt += 1
+            label = nxt
             nxt += 1
+        used.add(label)
+        labels.append(label)
     return labels
 
 
@@ -245,7 +251,13 @@ def generate_balance_batch(
         _prep(p, ref_side, ref_labels[i])
     for j, (_idx, p) in enumerate(oth_set):
         _prep(p, oth_side, oth_labels[j])
-    flagged = detect_seal_loss(metrics)
+    # Detect seal loss WITHIN each side (an outlier among a side's own repeats),
+    # not across sides — so a genuine L/R sub-bass difference is never mistaken
+    # for a lost seal. Needs >=2 measurements on a side to have a reference.
+    flagged: set = set()
+    for side in (ref_side, oth_side):
+        side_metrics = {k: v for k, v in metrics.items() if k[0] == side}
+        flagged |= detect_seal_loss(side_metrics)
 
     def _mark(side: str, label: int) -> str:
         return f"{side}{label}{'!!!' if (side, label) in flagged else ''}"

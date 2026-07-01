@@ -8,7 +8,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-_CAND = re.compile(r"\(\d\.\d\d\)")  # batch candidate names end with a score
+_CAND = re.compile(  # batch candidate name shape (anchored)
+    r"^[LR]\d+(?:!!!)? [LR]\d+(?:!!!)? \(\d\.\d\d\)(?: \(\d+\))?$"
+)
 
 pytest.importorskip("pytestqt")
 
@@ -50,6 +52,16 @@ def _panel(tmp_path: Path, qtbot) -> ProfilePanel:
     panel.set_sample_rate(48000)
     panel.apply_settings({})
     return panel
+
+
+def test_candidate_regex_rejects_normal_presets():
+    from eq_helper.ui.profile_panel import _CANDIDATE_RE
+    for good in ("R1 L1 (0.94)", "R1!!! L1 (0.95)", "L2 R3!!! (0.00)",
+                 "R1 L1 (0.94) (2)", "R10 L2 (1.00)"):
+        assert _CANDIDATE_RE.search(good), good
+    for bad in ("Harman (1.00)", "JM-1 (0.71)", "Base", "Base (optimized)",
+                "My EQ (v0.95)", "L1 (0.9)"):
+        assert not _CANDIDATE_RE.search(bad), bad
 
 
 def test_batch_dialog_counts_and_ok(tmp_path, qtbot):

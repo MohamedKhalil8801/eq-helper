@@ -110,6 +110,44 @@ def test_detect_lr_swap_duplicate_include_parity(tmp_path):
     assert load_profile_lr_swap(once) is True
 
 
+def test_fallback_labels_unique_on_duplicate_index(tmp_path):
+    # 'L 1.txt' and 'L1.txt' both parse to (L, 1); labels must stay unique so
+    # the seal-marker/metrics key doesn't collide.
+    from eq_helper.dsp.balance_eq import _fallback_labels
+    for n in ("L 1.txt", "L1.txt", "R 1.txt"):
+        (tmp_path / n).write_text("x", encoding="utf-8")
+    left, right = detect_measurement_sets(tmp_path)
+    labels = _fallback_labels(left)
+    assert len(set(labels)) == len(left)  # unique
+
+
+def test_seal_within_side_not_across(tmp_path):
+    # A genuinely bass-light R side (all R rolled off vs L) must NOT be flagged
+    # (that's a genuine L/R difference, not seal loss). A single R outlier IS.
+    def rolloff(path, sub_db):
+        f = np.geomspace(20, 20000, 800)
+        db = np.full_like(f, 80.0)
+        db[f <= 60] = 80.0 + sub_db
+        path.write_text(
+            "Frequency (Hz),Raw (dB)\n" + "\n".join(f"{a:.3f},{b:.4f}" for a, b in zip(f, db)),
+            encoding="utf-8",
+        )
+    # L flat; all R uniformly bass-light by 9 dB (genuine channel difference)
+    for i in (1, 2, 3):
+        rolloff(tmp_path / f"L {i}.txt", 0.0)
+        rolloff(tmp_path / f"R {i}.txt", -9.0)
+    left, right = detect_measurement_sets(tmp_path)
+    results, _ = generate_balance_batch(left, right, "L", 48000)
+    assert not any("!!!" in n for n, _, _ in results)  # no false seal flag
+
+    # Now make R2 an outlier among R (a lost seal on that one seating).
+    rolloff(tmp_path / "R 2.txt", -17.0)  # 8 dB below the other R captures
+    left, right = detect_measurement_sets(tmp_path)
+    results, _ = generate_balance_batch(left, right, "L", 48000)
+    flagged = {n for n, _, _ in results if "R2!!!" in n}
+    assert flagged  # R2 flagged as the within-side outlier
+
+
 def test_detect_lr_swap_active(tmp_path):
     assert detect_lr_swap("Copy: L=R R=L\nFilter: ON PK Fc 1000 Hz Gain 1 dB Q 1\n")
     assert not detect_lr_swap("# Copy: L=R R=L\n")  # commented

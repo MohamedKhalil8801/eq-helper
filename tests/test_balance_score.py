@@ -70,6 +70,24 @@ def test_alignment_no_match_is_zero():
     assert alignment_score(detect_features(fa, da), detect_features(fb, db)) == 0.0
 
 
+def test_alignment_is_symmetric():
+    # optimal assignment -> order-independent (greedy was not).
+    fa, da = _meas_with_features(peak_hz=8700, dip_hz=None)
+    fb, db = _meas_with_features(peak_hz=8700, dip_hz=None)
+    a, b = detect_features(fa, da), detect_features(fb, db)
+    assert alignment_score(a, b) == alignment_score(b, a)
+
+
+def test_alignment_shared_resonance_optimal_not_greedy():
+    # A and B share a peak at 10500 (plus a non-shared peak each). Greedy could
+    # let A's 8700 steal the 10500 match and score ~0; optimal assignment keeps
+    # the perfect 10500<->10500 match and drops the out-of-tolerance leftovers.
+    a = [(8700.0, 4.0, 1), (10500.0, 4.0, 1)]
+    b = [(10500.0, 4.0, 1), (12500.0, 4.0, 1)]
+    assert alignment_score(a, b) > 0.9
+    assert alignment_score(a, b) == alignment_score(b, a)  # symmetric
+
+
 def _bass(sub_db, mid_db=0.0):
     f = np.geomspace(20, 20000, 2000)
     db = np.full_like(f, 80.0)

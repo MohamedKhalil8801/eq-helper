@@ -18,6 +18,7 @@ from typing import Dict, List, Set, Tuple
 
 import numpy as np
 from scipy.ndimage import uniform_filter1d
+from scipy.optimize import linear_sum_assignment
 from scipy.signal import find_peaks
 
 # One feature: (frequency Hz, prominence dB, sign) where sign +1 = peak, -1 = dip.
@@ -50,12 +51,18 @@ def detect_features(
     ppo = n_grid / math.log2(_F_MAX / _F_MIN)
     ys = uniform_filter1d(y, size=max(3, int(ppo * smooth_oct)))
 
+    # Pad the acceptance window slightly (~0.15 oct) so a resonance present on
+    # both sides but shifted just past the edge on one side (insertion depth is
+    # exactly what we measure) is still detected and matched rather than being
+    # silently treated as one-sided.
+    pad = 2.0 ** 0.15
+    keep_lo, keep_hi = lo / pad, hi * pad
     out: List[Feature] = []
     for sign in (1, -1):
         idx, props = find_peaks(sign * ys, prominence=prominence_db)
         for i, prom in zip(idx, props["prominences"]):
             f = float(grid[i])
-            if lo <= f <= hi:
+            if keep_lo <= f <= keep_hi:
                 out.append((f, float(prom), sign))
     return out
 
@@ -69,31 +76,31 @@ def alignment_score(
 ) -> float:
     """Frequency-alignment score in ``[0, 1]`` between two feature sets.
 
-    Same-type features are matched greedily by nearest frequency within
-    ``max_tol_oct`` octaves; **unmatched features are excluded**. Each match
-    contributes ``exp(−(Δ_oct/σ)²)``, aggregated as a prominence-weighted mean
-    (weight ``sqrt(prom_a·prom_b)``). Gain never enters. ``0.0`` when nothing
-    matches.
+    Same-type features are matched by **optimal** (minimum total frequency
+    deviation) 1-to-1 assignment; matches beyond ``max_tol_oct`` octaves are
+    dropped, so **unmatched features are excluded**. Each kept match contributes
+    ``exp(−(Δ_oct/σ)²)``, aggregated as a prominence-weighted mean (weight
+    ``sqrt(prom_a·prom_b)``). The optimal assignment makes the score symmetric
+    and order-independent. Gain never enters. ``0.0`` when nothing matches.
     """
-    b_used = [False] * len(feats_b)
     weights: List[float] = []
     scores: List[float] = []
-    for fa, pa, sa in feats_a:
-        best_j = -1
-        best_d = max_tol_oct
-        for j, (fb, pb, sb) in enumerate(feats_b):
-            if b_used[j] or sb != sa:
-                continue
-            d = abs(math.log10(fa / fb)) / _LOG2
-            if d <= best_d:
-                best_d = d
-                best_j = j
-        if best_j < 0:
+    for sign in (1, -1):
+        a = [(f, p) for f, p, s in feats_a if s == sign]
+        b = [(f, p) for f, p, s in feats_b if s == sign]
+        if not a or not b:
             continue
-        b_used[best_j] = True
-        pb = feats_b[best_j][1]
-        weights.append(math.sqrt(max(pa, 0.0) * max(pb, 0.0)))
-        scores.append(math.exp(-((best_d / sigma_oct) ** 2)))
+        dev = np.array(
+            [[abs(math.log10(fa / fb)) / _LOG2 for fb, _ in b] for fa, _ in a]
+        )
+        per = np.exp(-((dev / sigma_oct) ** 2))  # per-pair alignment score
+        # Maximize the total alignment score (minimize -per), so a perfect
+        # shared-resonance match is preferred over two mediocre ones.
+        for i, j in zip(*linear_sum_assignment(-per)):
+            if float(dev[i, j]) > max_tol_oct:
+                continue  # not the same feature — excluded
+            weights.append(math.sqrt(max(a[i][1], 0.0) * max(b[j][1], 0.0)))
+            scores.append(float(per[i, j]))
     if not weights or sum(weights) <= 0:
         return 0.0
     w = np.asarray(weights)

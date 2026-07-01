@@ -38,8 +38,12 @@ from eq_helper.dsp.overlay import OverlayLoadError, load_measurement_csv, normal
 
 _EQ_FREQS = np.geomspace(20.0, 20000.0, 500)
 _APO_FILTER = "EQ / APO text (*.txt);;All files (*.*)"
-# Batch balance-EQ candidate presets end with an alignment score like "(0.95)".
-_CANDIDATE_RE = re.compile(r"\(\d\.\d\d\)")
+# Batch balance-EQ candidate presets are named "<Oth><j>[!!!] <Ref><i>[!!!]
+# (0.NN)" (with an optional " (N)" de-dup suffix). Anchored so a normal user
+# preset that merely contains a score-like "(1.00)" isn't treated as a candidate.
+_CANDIDATE_RE = re.compile(
+    r"^[LR]\d+(?:!!!)? [LR]\d+(?:!!!)? \(\d\.\d\d\)(?: \(\d+\))?$"
+)
 
 
 class ProfilePanel(QGroupBox):
