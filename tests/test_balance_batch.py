@@ -1,5 +1,6 @@
 """Balance EQ batch: filename parsing, set detection, 3xN generation, swap."""
 
+import re
 from pathlib import Path
 
 import numpy as np
@@ -61,7 +62,10 @@ def test_generate_balance_batch_counts_and_names(tmp_path):
     assert len(results) == 6  # 3 x 2
     assert skipped == []
     names = [n for n, _, _ in results]
-    assert "bal L1-R1" in names and "bal L3-R2" in names
+    # other side first, reference second, trailing "(0.NN)" score
+    assert all(re.match(r"^R\d L\d \(\d\.\d\d\)$", n) for n in names)
+    assert any(n.startswith("R1 L1 ") for n in names)
+    assert any(n.startswith("R2 L3 ") for n in names)
     # reference=L, no invert -> EQ scoped to R
     assert all(ceq.channels == ("R",) for _, ceq, _ in results)
 
@@ -72,7 +76,7 @@ def test_generate_balance_batch_invert_flips_channel(tmp_path):
     left, right = detect_measurement_sets(tmp_path)
     results, skipped = generate_balance_batch(left, right, "L", 48000, invert=True)
     # name still reflects the physical pairing, channel is inverted to L
-    assert results[0][0] == "bal L1-R1"
+    assert results[0][0].startswith("R1 L1 (")
     assert results[0][1].channels == ("L",)
 
 
@@ -87,9 +91,9 @@ def test_generate_balance_batch_skips_bad_pair(tmp_path):
     )
     left, right = detect_measurement_sets(tmp_path)
     results, skipped = generate_balance_batch(left, right, "L", 48000)
-    # L1-R1 still generated; L1-R2 skipped, not the whole batch
-    assert [n for n, _, _ in results] == ["bal L1-R1"]
-    assert len(skipped) == 1 and skipped[0][0] == "bal L1-R2"
+    # R1 L1 still generated; R2 L1 skipped, not the whole batch
+    assert len(results) == 1 and results[0][0].startswith("R1 L1 (")
+    assert len(skipped) == 1 and skipped[0][0] == "R2 L1"
 
 
 def test_detect_lr_swap_duplicate_include_parity(tmp_path):

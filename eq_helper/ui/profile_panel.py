@@ -8,6 +8,7 @@ remove. Per-device measurement CSVs and the graph curve-sets are preserved.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Callable, Dict, Optional, Tuple
 
@@ -37,6 +38,8 @@ from eq_helper.dsp.overlay import OverlayLoadError, load_measurement_csv, normal
 
 _EQ_FREQS = np.geomspace(20.0, 20000.0, 500)
 _APO_FILTER = "EQ / APO text (*.txt);;All files (*.*)"
+# Batch balance-EQ candidate presets end with an alignment score like "(0.95)".
+_CANDIDATE_RE = re.compile(r"\(\d\.\d\d\)")
 
 
 class ProfilePanel(QGroupBox):
@@ -123,7 +126,7 @@ class ProfilePanel(QGroupBox):
         )
         self.btn_remove_others = QPushButton("Remove other candidates")
         self.btn_remove_others.setToolTip(
-            "Remove all 'bal …' candidate presets except the active one."
+            "Remove all balance-EQ candidate presets except the selected one."
         )
         self.btn_balance_batch.clicked.connect(self._on_balance_batch)
         self.btn_remove_others.clicked.connect(self._on_remove_other_candidates)
@@ -649,10 +652,10 @@ class ProfilePanel(QGroupBox):
         if lib is None or not device:
             return
         presets = lib.list_presets(device)
-        candidates = [p for p in presets if p.name.startswith("bal ")]
+        candidates = [p for p in presets if _CANDIDATE_RE.search(p.name)]
         if not candidates:
             QMessageBox.information(
-                self, "No candidates", "No 'bal …' candidate presets found."
+                self, "No candidates", "No balance-EQ candidate presets found."
             )
             return
         # Pick the one to KEEP — never delete all. Prefer the selected
@@ -660,7 +663,7 @@ class ProfilePanel(QGroupBox):
         sel_item = self._presets.currentItem()
         sel = sel_item.data(Qt.UserRole) if sel_item is not None else None
         keep = None
-        if sel is not None and sel.name.startswith("bal "):
+        if sel is not None and _CANDIDATE_RE.search(sel.name):
             keep = sel
         if keep is None:
             keep = next((p for p in candidates if p.is_active), None)

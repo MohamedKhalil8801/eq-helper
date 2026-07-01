@@ -25,6 +25,12 @@ from eq_helper.dsp.eq_optimize import (
     fit_graphic_eq,
     realized_response_db,
 )
+from eq_helper.dsp.balance_score import (
+    alignment_score,
+    detect_features,
+    detect_seal_loss,
+    sub_bass_metric,
+)
 from eq_helper.dsp.graphic_eq import GraphicEQ
 from eq_helper.dsp.overlay import load_frequency_response
 
@@ -198,12 +204,13 @@ def generate_balance_batch(
     :func:`detect_measurement_sets`). The reference side is fixed; every
     reference measurement is paired with every other-side measurement. Returns
     ``(results, skipped)`` where ``results`` is ``[(name, ChannelEQ, max_dev)]``
-    named ``bal <Ref><i>-<Oth><j>`` by the physical sides/indices (the EQ's
-    channel is the effective, possibly inverted, one), and ``skipped`` is
+    named ``<Oth><j>[!!!] <Ref><i>[!!!] (0.NN)`` — other side first, reference
+    second, ``!!!`` after a seal-flagged measurement, peak/dip alignment score
+    last — sorted no-seal-loss-first then by score descending. ``skipped`` is
     ``[(name, reason)]`` for pairs that couldn't be generated (unreadable file,
     no frequency overlap) — one bad measurement never aborts the whole batch.
-    Each measurement file is loaded once. Raises ``ValueError`` only if a side
-    has no measurements at all."""
+    Each measurement file is loaded/analysed once. Raises ``ValueError`` only if
+    a side has no measurements at all."""
     ref_side = reference.upper()
     oth_side = "R" if ref_side == "L" else "L"
     ref_set = left if ref_side == "L" else right
@@ -214,28 +221,59 @@ def generate_balance_batch(
     other_channel = effective_other_channel(reference, invert)
     ref_labels = _fallback_labels(ref_set)
     oth_labels = _fallback_labels(oth_set)
-    cache: dict = {}
 
-    def _load(path: Path):
+    # Load + analyse each unique measurement once: response, treble features
+    # (for the alignment score), and sub-bass metric (for seal detection).
+    loaded: dict = {}
+    feats: dict = {}
+    metrics: dict = {}  # (side, label) -> sub_bass_metric
+
+    def _prep(path: Path, side: str, label: int):
         key = str(path)
-        if key not in cache:
-            cache[key] = load_frequency_response(path)
-        return cache[key]
-
-    results: List[Tuple[str, ChannelEQ, float]] = []
-    skipped: List[Tuple[str, str]] = []
-    for ri, (_ridx, rpath) in enumerate(ref_set):
-        for oj, (_oidx, opath) in enumerate(oth_set):
-            name = f"bal {ref_side}{ref_labels[ri]}-{oth_side}{oth_labels[oj]}"
+        if key not in loaded:
             try:
-                ref_f, ref_db = _load(rpath)
-                oth_f, oth_db = _load(opath)
+                fd = load_frequency_response(path)
+            except (ValueError, OSError):
+                fd = None
+            loaded[key] = fd
+            if fd is not None:
+                feats[key] = detect_features(fd[0], fd[1])
+                metrics[(side, label)] = sub_bass_metric(fd[0], fd[1])
+        return loaded[key]
+
+    for i, (_idx, p) in enumerate(ref_set):
+        _prep(p, ref_side, ref_labels[i])
+    for j, (_idx, p) in enumerate(oth_set):
+        _prep(p, oth_side, oth_labels[j])
+    flagged = detect_seal_loss(metrics)
+
+    def _mark(side: str, label: int) -> str:
+        return f"{side}{label}{'!!!' if (side, label) in flagged else ''}"
+
+    scored: List[Tuple[bool, float, str, ChannelEQ, float]] = []
+    skipped: List[Tuple[str, str]] = []
+    for ri, (_r, rpath) in enumerate(ref_set):
+        for oj, (_o, opath) in enumerate(oth_set):
+            rl, ol = ref_labels[ri], oth_labels[oj]
+            # Name: other side first, reference second (e.g. "R1 L2").
+            base = f"{_mark(oth_side, ol)} {_mark(ref_side, rl)}"
+            ref_fd, oth_fd = loaded[str(rpath)], loaded[str(opath)]
+            if ref_fd is None or oth_fd is None:
+                skipped.append((base, "unreadable measurement"))
+                continue
+            try:
                 ceq, max_dev = generate_balance_eq(
-                    ref_f, ref_db, oth_f, oth_db, other_channel, sample_rate,
-                    match_level=match_level, tol_db=tol_db,
+                    ref_fd[0], ref_fd[1], oth_fd[0], oth_fd[1], other_channel,
+                    sample_rate, match_level=match_level, tol_db=tol_db,
                 )
             except (ValueError, OSError) as exc:
-                skipped.append((name, str(exc)))
+                skipped.append((base, str(exc)))
                 continue
-            results.append((name, ceq, max_dev))
+            score = alignment_score(feats[str(rpath)], feats[str(opath)])
+            any_seal = ((oth_side, ol) in flagged) or ((ref_side, rl) in flagged)
+            scored.append((any_seal, score, f"{base} ({score:.2f})", ceq, max_dev))
+
+    # No-seal-loss pairs first, then by score descending (stable within ties).
+    scored.sort(key=lambda t: (t[0], -t[1]))
+    results = [(name, ceq, md) for _seal, _sc, name, ceq, md in scored]
     return results, skipped

@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import numpy as np
 import pytest
+
+_CAND = re.compile(r"\(\d\.\d\d\)")  # batch candidate names end with a score
 
 pytest.importorskip("pytestqt")
 
@@ -73,11 +76,11 @@ def test_do_balance_batch_creates_presets_and_activates_first(tmp_path, qtbot):
 
     lib = PresetLibrary(tmp_path)
     presets = lib.list_presets("HD600")
-    bal = [p for p in presets if p.name.startswith("bal ")]
+    bal = [p for p in presets if _CAND.search(p.name)]
     assert len(bal) == 9
     # first candidate is the active one
     active = lib.active_preset("HD600")
-    assert active is not None and active.name.startswith("bal ")
+    assert active is not None and _CAND.search(active.name)
     # each candidate's EQ file is channel-scoped to R (reference L, no invert)
     content = Path(lib.list_eq_files(bal[0])[0].path).read_text(encoding="utf-8")
     assert "Channel: R" in content and content.rstrip().endswith("Channel: all")
@@ -112,7 +115,7 @@ def test_remove_other_candidates_keeps_active(tmp_path, qtbot, monkeypatch):
 
     lib = PresetLibrary(tmp_path)
     presets = lib.list_presets("HD600")
-    bal = [p for p in presets if p.name.startswith("bal ")]
+    bal = [p for p in presets if _CAND.search(p.name)]
     assert len(bal) == 1  # only the active candidate remains
     assert bal[0].is_active
 
@@ -130,11 +133,11 @@ def test_remove_other_candidates_never_deletes_all(tmp_path, qtbot, monkeypatch)
     panel._refresh_presets()
     # select the first candidate in the list
     for i in range(panel._presets.count()):
-        if panel._presets.item(i).data(Qt.UserRole).name.startswith("bal "):
+        if _CAND.search(panel._presets.item(i).data(Qt.UserRole).name):
             panel._presets.setCurrentRow(i)
             break
     monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.Yes)
     panel._on_remove_other_candidates()
 
-    bal = [p for p in lib.list_presets("HD600") if p.name.startswith("bal ")]
+    bal = [p for p in lib.list_presets("HD600") if _CAND.search(p.name)]
     assert len(bal) == 1  # exactly one kept, not zero
