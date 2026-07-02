@@ -6,6 +6,7 @@ from __future__ import annotations
 from typing import Optional
 
 from PySide6.QtWidgets import (
+    QButtonGroup,
     QCheckBox,
     QDialog,
     QDialogButtonBox,
@@ -59,10 +60,28 @@ class BalanceBatchDialog(QDialog):
         self._found_label = QLabel("")
         layout.addWidget(self._found_label)
 
+        method_row = QHBoxLayout()
+        method_row.addWidget(QLabel("Method:"))
+        self.method_reference = QRadioButton("Reference side")
+        self.method_midpoint = QRadioButton("Midpoint (both → average)")
+        self._method_group = QButtonGroup(self)  # independent of the ref group
+        self._method_group.addButton(self.method_reference)
+        self._method_group.addButton(self.method_midpoint)
+        self.method_reference.setChecked(True)
+        self.method_reference.toggled.connect(self._on_method_changed)
+        method_row.addWidget(self.method_reference)
+        method_row.addWidget(self.method_midpoint)
+        method_row.addStretch(1)
+        layout.addLayout(method_row)
+
         ref_row = QHBoxLayout()
-        ref_row.addWidget(QLabel("Reference side:"))
+        self._ref_label = QLabel("Reference side:")
+        ref_row.addWidget(self._ref_label)
         self.ref_left = QRadioButton("Left")
         self.ref_right = QRadioButton("Right")
+        self._ref_group = QButtonGroup(self)
+        self._ref_group.addButton(self.ref_left)
+        self._ref_group.addButton(self.ref_right)
         self.ref_left.setChecked(True)
         ref_row.addWidget(self.ref_left)
         ref_row.addWidget(self.ref_right)
@@ -114,5 +133,14 @@ class BalanceBatchDialog(QDialog):
     def reference(self) -> str:
         return "L" if self.ref_left.isChecked() else "R"
 
+    def method(self) -> str:
+        return "midpoint" if self.method_midpoint.isChecked() else "reference"
+
     def invert(self) -> bool:
         return self.invert_check.isChecked()
+
+    def _on_method_changed(self) -> None:
+        # The reference side is irrelevant to the midpoint method.
+        ref_relevant = self.method_reference.isChecked()
+        for w in (self._ref_label, self.ref_left, self.ref_right):
+            w.setEnabled(ref_relevant)

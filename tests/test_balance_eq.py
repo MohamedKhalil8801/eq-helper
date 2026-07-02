@@ -3,7 +3,11 @@
 import numpy as np
 import pytest
 
-from eq_helper.dsp.balance_eq import balance_correction, generate_balance_eq
+from eq_helper.dsp.balance_eq import (
+    balance_correction,
+    generate_balance_eq,
+    generate_midpoint_eqs,
+)
 from eq_helper.dsp.graphic_eq import graphic_eq_response
 
 
@@ -56,3 +60,35 @@ def test_overlap_clamps_to_shared_range():
     grid, corr = balance_correction(ref_f, 0 * ref_f, oth_f, 0 * oth_f)
     assert grid.min() >= 30 - 1e-6
     assert grid.max() <= 18000 + 1e-6
+
+
+def test_midpoint_moves_both_sides_to_average():
+    f = np.geomspace(20, 20000, 800)
+    lf = np.log10(f)
+    L = 4 * np.exp(-((lf - np.log10(3000)) ** 2) / (2 * 0.04 ** 2))   # L: peak
+    R = -3 * np.exp(-((lf - np.log10(6000)) ** 2) / (2 * 0.05 ** 2))  # R: dip
+    eqs, max_dev = generate_midpoint_eqs(f, L, f, R, 48000)
+    assert {e.channels for e in eqs} == {("L",), ("R",)}
+    assert max_dev < 0.1
+    by_chan = {e.channels[0]: e for e in eqs}
+    corr_L = graphic_eq_response(by_chan["L"].geq.bands, f)
+    corr_R = graphic_eq_response(by_chan["R"].geq.bands, f)
+    # exact negatives, and each side reaches the average (L+R)/2
+    assert np.max(np.abs(corr_L + corr_R)) < 0.05
+    mid = (L + R) / 2
+    assert np.max(np.abs((L + corr_L) - mid)) < 0.15
+    assert np.max(np.abs((R + corr_R) - mid)) < 0.15
+
+
+def test_midpoint_invert_swaps_channel_labels():
+    f = np.geomspace(20, 20000, 400)
+    lf = np.log10(f)
+    L = 5 * np.exp(-((lf - np.log10(3000)) ** 2) / (2 * 0.04 ** 2))
+    R = np.zeros_like(f)
+    normal, _ = generate_midpoint_eqs(f, L, f, R, 48000, invert=False)
+    inverted, _ = generate_midpoint_eqs(f, L, f, R, 48000, invert=True)
+    # the physical-L curve (-D/2) is written under Channel L normally, Channel R when inverted
+    n = {e.channels[0]: graphic_eq_response(e.geq.bands, f) for e in normal}
+    v = {e.channels[0]: graphic_eq_response(e.geq.bands, f) for e in inverted}
+    assert np.allclose(n["L"], v["R"], atol=1e-6)
+    assert np.allclose(n["R"], v["L"], atol=1e-6)

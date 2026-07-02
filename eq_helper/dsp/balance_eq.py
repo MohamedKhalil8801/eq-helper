@@ -173,6 +173,50 @@ def generate_balance_eq(
     return ChannelEQ(channels=(other_channel,), geq=geq), max_dev
 
 
+def generate_midpoint_eqs(
+    l_f: np.ndarray,
+    l_db: np.ndarray,
+    r_f: np.ndarray,
+    r_db: np.ndarray,
+    sample_rate: int,
+    *,
+    invert: bool = False,
+    match_level: bool = True,
+    tol_db: float = 0.02,
+) -> Tuple[List[ChannelEQ], float]:
+    """Meet-in-the-middle balance: move BOTH sides to the average ``(L+R)/2``.
+
+    With ``D = L − R``, apply ``−D/2`` to physical L and ``+D/2`` to physical R,
+    each as an exact GraphicEQ. Returns ``([ChannelEQ_L, ChannelEQ_R], max_dev)``
+    (L block first) plus the worse of the two channels' realization deviations.
+    Each side changes half as much as the reference method. ``invert`` swaps
+    which APO channel label each physical curve is written under (a config that
+    swaps L/R via ``Copy:``)."""
+    fit_grid, d = balance_correction(
+        l_f, l_db, r_f, r_db, match_level=match_level, n=8000
+    )  # d = L - R
+    ver_grid, ver_d = balance_correction(
+        l_f, l_db, r_f, r_db, match_level=match_level, n=40000
+    )
+    # Physical corrections: L moves down toward R by half, R moves up by half.
+    phys = {"L": -0.5 * d, "R": 0.5 * d}
+    phys_ver = {"L": -0.5 * ver_d, "R": 0.5 * ver_d}
+    # Map each physical curve to its APO channel label (swapped when inverted).
+    channel_for = {"L": "R", "R": "L"} if invert else {"L": "L", "R": "R"}
+
+    eqs: List[ChannelEQ] = []
+    max_dev = 0.0
+    for phys_side in ("L", "R"):
+        chan = channel_for[phys_side]
+        bands = fit_graphic_eq(fit_grid, phys[phys_side], tol_db=tol_db)
+        realized = realized_response_db(bands, ver_grid, sample_rate)
+        max_dev = max(max_dev, float(np.max(np.abs(realized - phys_ver[phys_side]))))
+        eqs.append(ChannelEQ(channels=(chan,), geq=GraphicEQ(name=f"midpoint {chan}", bands=bands)))
+    # Emit the Channel: L block first (cosmetic; matches the reference example).
+    eqs.sort(key=lambda e: e.channels)
+    return eqs, max_dev
+
+
 def _fallback_labels(side_set: List[Tuple[Optional[int], Path]]) -> List[int]:
     """Per-entry display index, **unique within the side**: the parsed index
     when present and not already taken, else the next free integer above the max
@@ -201,32 +245,29 @@ def generate_balance_batch(
     sample_rate: int,
     *,
     invert: bool = False,
+    method: str = "reference",
     match_level: bool = True,
     tol_db: float = 0.02,
-) -> Tuple[List[Tuple[str, ChannelEQ, float]], List[Tuple[str, str]]]:
-    """Generate all reference×other balance EQs.
+) -> Tuple[List[Tuple[str, List[ChannelEQ], float]], List[Tuple[str, str]]]:
+    """Generate a balance EQ for every left×right measurement pairing.
 
     ``left``/``right`` are ``(index, path)`` lists (from
-    :func:`detect_measurement_sets`). The reference side is fixed; every
-    reference measurement is paired with every other-side measurement. Returns
-    ``(results, skipped)`` where ``results`` is ``[(name, ChannelEQ, max_dev)]``
-    named ``<Oth><j>[!!!] <Ref><i>[!!!] (0.NN)`` — other side first, reference
-    second, ``!!!`` after a seal-flagged measurement, peak/dip alignment score
-    last — sorted no-seal-loss-first then by score descending. ``skipped`` is
-    ``[(name, reason)]`` for pairs that couldn't be generated (unreadable file,
-    no frequency overlap) — one bad measurement never aborts the whole batch.
-    Each measurement file is loaded/analysed once. Raises ``ValueError`` only if
-    a side has no measurements at all."""
-    ref_side = reference.upper()
-    oth_side = "R" if ref_side == "L" else "L"
-    ref_set = left if ref_side == "L" else right
-    oth_set = right if ref_side == "L" else left
-    if not ref_set or not oth_set:
-        raise ValueError("need at least one Left and one Right measurement")
+    :func:`detect_measurement_sets`). ``method`` selects the correction:
+    ``"reference"`` moves the non-reference side onto ``reference`` (one
+    ``Channel:`` block, named other-first ``R1 L2``); ``"midpoint"`` moves both
+    sides to the average (two blocks, named ``L1 R2``).
 
-    other_channel = effective_other_channel(reference, invert)
-    ref_labels = _fallback_labels(ref_set)
-    oth_labels = _fallback_labels(oth_set)
+    Returns ``(results, skipped)`` where ``results`` is
+    ``[(name, [ChannelEQ, ...], max_dev)]`` — name carries ``!!!`` after a
+    seal-flagged measurement and the peak/dip alignment score ``(0.NN)`` last —
+    sorted no-seal-loss-first then by score descending. ``skipped`` is
+    ``[(name, reason)]`` for pairs that couldn't be generated. Each measurement
+    file is loaded/analysed once. Raises ``ValueError`` only if a side is empty."""
+    if not left or not right:
+        raise ValueError("need at least one Left and one Right measurement")
+    ref_side = reference.upper()
+    left_labels = _fallback_labels(left)
+    right_labels = _fallback_labels(right)
 
     # Load + analyse each unique measurement once: response, treble features
     # (for the alignment score), and sub-bass metric (for seal detection).
@@ -247,45 +288,58 @@ def generate_balance_batch(
                 metrics[(side, label)] = sub_bass_metric(fd[0], fd[1])
         return loaded[key]
 
-    for i, (_idx, p) in enumerate(ref_set):
-        _prep(p, ref_side, ref_labels[i])
-    for j, (_idx, p) in enumerate(oth_set):
-        _prep(p, oth_side, oth_labels[j])
+    for i, (_idx, p) in enumerate(left):
+        _prep(p, "L", left_labels[i])
+    for j, (_idx, p) in enumerate(right):
+        _prep(p, "R", right_labels[j])
     # Detect seal loss WITHIN each side (an outlier among a side's own repeats),
     # not across sides — so a genuine L/R sub-bass difference is never mistaken
     # for a lost seal. Needs >=2 measurements on a side to have a reference.
     flagged: set = set()
-    for side in (ref_side, oth_side):
+    for side in ("L", "R"):
         side_metrics = {k: v for k, v in metrics.items() if k[0] == side}
         flagged |= detect_seal_loss(side_metrics)
 
     def _mark(side: str, label: int) -> str:
         return f"{side}{label}{'!!!' if (side, label) in flagged else ''}"
 
-    scored: List[Tuple[bool, float, str, ChannelEQ, float]] = []
+    scored: List[Tuple[bool, float, str, List[ChannelEQ], float]] = []
     skipped: List[Tuple[str, str]] = []
-    for ri, (_r, rpath) in enumerate(ref_set):
-        for oj, (_o, opath) in enumerate(oth_set):
-            rl, ol = ref_labels[ri], oth_labels[oj]
-            # Name: other side first, reference second (e.g. "R1 L2").
-            base = f"{_mark(oth_side, ol)} {_mark(ref_side, rl)}"
-            ref_fd, oth_fd = loaded[str(rpath)], loaded[str(opath)]
-            if ref_fd is None or oth_fd is None:
+    for i, (_l, lpath) in enumerate(left):
+        for j, (_r, rpath) in enumerate(right):
+            li, rj = left_labels[i], right_labels[j]
+            if method == "midpoint":
+                base = f"{_mark('L', li)} {_mark('R', rj)}"
+            elif ref_side == "L":  # reference L: other (R) first, ref (L) second
+                base = f"{_mark('R', rj)} {_mark('L', li)}"
+            else:                  # reference R: other (L) first, ref (R) second
+                base = f"{_mark('L', li)} {_mark('R', rj)}"
+            l_fd, r_fd = loaded[str(lpath)], loaded[str(rpath)]
+            if l_fd is None or r_fd is None:
                 skipped.append((base, "unreadable measurement"))
                 continue
             try:
-                ceq, max_dev = generate_balance_eq(
-                    ref_fd[0], ref_fd[1], oth_fd[0], oth_fd[1], other_channel,
-                    sample_rate, match_level=match_level, tol_db=tol_db,
-                )
+                if method == "midpoint":
+                    eqs, max_dev = generate_midpoint_eqs(
+                        l_fd[0], l_fd[1], r_fd[0], r_fd[1], sample_rate,
+                        invert=invert, match_level=match_level, tol_db=tol_db,
+                    )
+                else:
+                    other = effective_other_channel(reference, invert)
+                    ref_fd, oth_fd = (l_fd, r_fd) if ref_side == "L" else (r_fd, l_fd)
+                    ceq, max_dev = generate_balance_eq(
+                        ref_fd[0], ref_fd[1], oth_fd[0], oth_fd[1], other,
+                        sample_rate, match_level=match_level, tol_db=tol_db,
+                    )
+                    eqs = [ceq]
             except (ValueError, OSError) as exc:
                 skipped.append((base, str(exc)))
                 continue
-            score = alignment_score(feats[str(rpath)], feats[str(opath)])
-            any_seal = ((oth_side, ol) in flagged) or ((ref_side, rl) in flagged)
-            scored.append((any_seal, score, f"{base} ({score:.2f})", ceq, max_dev))
+            score = alignment_score(feats[str(lpath)], feats[str(rpath)])
+            any_seal = (("L", li) in flagged) or (("R", rj) in flagged)
+            scored.append((any_seal, score, f"{base} ({score:.2f})", eqs, max_dev))
 
     # No-seal-loss pairs first, then by score descending (stable within ties).
     scored.sort(key=lambda t: (t[0], -t[1]))
-    results = [(name, ceq, md) for _seal, _sc, name, ceq, md in scored]
+    results = [(name, eqs, md) for _seal, _sc, name, eqs, md in scored]
     return results, skipped

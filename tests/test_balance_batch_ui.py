@@ -64,6 +64,31 @@ def test_candidate_regex_rejects_normal_presets():
         assert not _CANDIDATE_RE.search(bad), bad
 
 
+def test_batch_dialog_method_disables_reference(tmp_path, qtbot):
+    dlg = BalanceBatchDialog()
+    qtbot.addWidget(dlg)
+    assert dlg.method() == "reference"
+    assert dlg.ref_left.isEnabled()
+    dlg.method_midpoint.setChecked(True)
+    assert dlg.method() == "midpoint"
+    assert not dlg.ref_left.isEnabled()  # reference irrelevant for midpoint
+
+
+def test_do_balance_batch_midpoint_two_blocks(tmp_path, qtbot):
+    folder = tmp_path / "meas"
+    _measurements(folder, 2, 2)
+    panel = _panel(tmp_path, qtbot)
+    created, worst, skipped = panel._do_balance_batch(
+        str(folder), "L", False, "midpoint"
+    )
+    assert len(created) == 4
+    lib = PresetLibrary(tmp_path)
+    cand = next(p for p in lib.list_presets("HD600") if _CAND.search(p.name))
+    content = Path(lib.list_eq_files(cand)[0].path).read_text(encoding="utf-8")
+    assert "Channel: L" in content and "Channel: R" in content
+    assert content.rstrip().endswith("Channel: all")
+
+
 def test_batch_dialog_counts_and_ok(tmp_path, qtbot):
     folder = tmp_path / "meas"
     _measurements(folder, 3, 2)

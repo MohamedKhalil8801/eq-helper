@@ -66,8 +66,8 @@ def test_generate_balance_batch_counts_and_names(tmp_path):
     assert all(re.match(r"^R\d L\d \(\d\.\d\d\)$", n) for n in names)
     assert any(n.startswith("R1 L1 ") for n in names)
     assert any(n.startswith("R2 L3 ") for n in names)
-    # reference=L, no invert -> EQ scoped to R
-    assert all(ceq.channels == ("R",) for _, ceq, _ in results)
+    # reference=L, no invert -> one block scoped to R
+    assert all(len(eqs) == 1 and eqs[0].channels == ("R",) for _, eqs, _ in results)
 
 
 def test_generate_balance_batch_invert_flips_channel(tmp_path):
@@ -77,7 +77,20 @@ def test_generate_balance_batch_invert_flips_channel(tmp_path):
     results, skipped = generate_balance_batch(left, right, "L", 48000, invert=True)
     # name still reflects the physical pairing, channel is inverted to L
     assert results[0][0].startswith("R1 L1 (")
-    assert results[0][1].channels == ("L",)
+    assert results[0][1][0].channels == ("L",)
+
+
+def test_generate_balance_batch_midpoint(tmp_path):
+    for i in (1, 2):
+        _write_meas(tmp_path / f"L {i}.txt", 1000 + 200 * i, 3.0)
+    _write_meas(tmp_path / "R 1.txt", 5000, -2.0)
+    left, right = detect_measurement_sets(tmp_path)
+    results, skipped = generate_balance_batch(left, right, "L", 48000, method="midpoint")
+    assert len(results) == 2 and skipped == []
+    for name, eqs, _md in results:
+        # two channel-scoped blocks (L and R), L-first name
+        assert {e.channels for e in eqs} == {("L",), ("R",)}
+        assert re.match(r"^L\d R\d \(\d\.\d\d\)$", name), name
 
 
 def test_generate_balance_batch_skips_bad_pair(tmp_path):

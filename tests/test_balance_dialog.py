@@ -65,8 +65,8 @@ def test_do_balance_adds_channel_scoped_eq(tmp_path, qtbot):
     _write_measurement(right, 6000, -3.0)  # R has a 6 kHz dip
     panel = _panel(tmp_path, qtbot)
 
-    eq, max_dev, other = panel._do_balance(str(left), str(right), "L")
-    assert other == "R"
+    eq, max_dev, desc = panel._do_balance(str(left), str(right), "L")
+    assert "Channel: R" in desc  # reference L -> corrects R
     assert max_dev < 0.1
 
     content = Path(eq.path).read_text(encoding="utf-8")
