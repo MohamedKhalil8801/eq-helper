@@ -339,7 +339,8 @@ def generate_balance_batch(
             any_seal = (("L", li) in flagged) or (("R", rj) in flagged)
             scored.append((any_seal, score, f"{base} ({score:.2f})", eqs, max_dev))
 
-    # No-seal-loss pairs first, then by score descending (stable within ties).
-    scored.sort(key=lambda t: (t[0], -t[1]))
+    # No-seal-loss pairs first, then by score descending; the name is a
+    # deterministic tie-breaker so ordering doesn't depend on iteration order.
+    scored.sort(key=lambda t: (t[0], -t[1], t[2]))
     results = [(name, eqs, md) for _seal, _sc, name, eqs, md in scored]
     return results, skipped

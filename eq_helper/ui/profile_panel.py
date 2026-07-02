@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Callable, Dict, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 from PySide6.QtCore import Qt, Signal
@@ -632,9 +632,14 @@ class ProfilePanel(QGroupBox):
             return
         self._refresh_lists()
         self._emit_curves_for_device(self._current_device())
+        how = (
+            "midpoint: both sides → average"
+            if dlg.method() == "midpoint"
+            else f"reference {dlg.reference()}"
+        )
         msg = (
-            f"Generated {len(created)} balance-EQ presets (reference "
-            f"{dlg.reference()}). Worst max deviation: {worst:.3f} dB.\n\n"
+            f"Generated {len(created)} balance-EQ presets ({how}). "
+            f"Worst max deviation: {worst:.3f} dB.\n\n"
             f"Click each in the switcher to audition, ↑/↓ to rank them, then "
             f"'Remove other candidates' to keep your favourite."
         )
