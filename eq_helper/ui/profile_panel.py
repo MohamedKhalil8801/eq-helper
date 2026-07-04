@@ -538,56 +538,243 @@ class ProfilePanel(QGroupBox):
             )
         QMessageBox.information(self, "Balance EQ created", msg)
 
-    def _do_balance_batch(
-        self, folder: str, reference: str, invert: bool,
-        method: str = "reference",
-    ) -> Tuple[List[str], float, int]:
-        """Rank every left×right pairing in ``folder``, create one preset for
-        the best-scoring usable pair, and activate it. ``method`` is
-        ``"reference"`` or ``"midpoint"``. Assumes an active preset exists
-        (for the device). Returns ``(preset_names, worst_max_dev, skipped)``.
-        Dialog-free for testability."""
+    def _on_remove_preset(self) -> None:
+        item = self._presets.currentItem()
+        lib = self._library()
+        if item is None or lib is None:
+            return
+        preset = item.data(Qt.UserRole)
+        if QMessageBox.question(
+            self, "Remove preset",
+            f"Remove preset '{preset.name}' from this device?",
+        ) != QMessageBox.Yes:
+            return
+        try:
+            lib.remove_preset(preset)
+        except (ApoError, OSError) as exc:
+            QMessageBox.critical(self, "Could not remove", str(exc))
+            return
+        self._refresh_lists()
+        self._emit_curves_for_device(self._current_device())
+
+    # --------------------------------------------------- optimize / bypass
+
+    def set_sample_rate(self, sample_rate: int) -> None:
+        """Sample rate used only for the optimize accuracy readout (the
+        GraphicEQ text itself is rate-independent; APO re-synthesizes per rate)."""
+        try:
+            self._sr = int(sample_rate)
+        except (TypeError, ValueError):
+            pass
+
+    def _do_optimize(self) -> Tuple[Preset, int, float, int]:
+        """Create the ``(optimized)`` preset + its GraphicEQ file (one bare
+        GraphicEQ, or per-channel scoped GraphicEQs when L/R differ).
+
+        Assumes an active preset exists. Returns ``(new_preset, n_points,
+        max_dev_db, n_channel_groups)``. Dialog-free so it is unit-testable;
+        ``_on_optimize`` wraps it with the user prompts."""
+        from eq_helper.apo.writer import atomic_write_with_backup
+        from eq_helper.dsp.eq_optimize import optimize_profile, render_channel_eqs
+
+        lib = self._library()
+        preset = self._active_preset()
+        if lib is None or preset is None:
+            raise ValueError("no active preset")
+        groups, max_dev = optimize_profile(Path(preset.path), self._sr)
+        content = render_channel_eqs(groups)
+        n_points = sum(len(g.geq.bands) for g in groups)
+        new = lib.create_preset(preset.device, f"{preset.name} (optimized)")
+        try:
+            eq = lib.create_eq_file(new, "optimized")
+            atomic_write_with_backup(Path(eq.path), content)
+        except Exception:
+            # Don't leave an orphan "(optimized)" preset if the EQ write fails.
+            try:
+                lib.remove_preset(new)
+            except Exception:
+                pass
+            raise
+        return new, n_points, max_dev, len(groups)
+
+    def _on_optimize(self) -> None:
+        lib = self._library()
+        preset = self._active_preset()
+        if lib is None or preset is None:
+            QMessageBox.information(
+                self, "No active preset", "Activate a preset to optimize."
+            )
+            return
+        try:
+            new, n_points, max_dev, n_groups = self._do_optimize()
+        except Exception as exc:  # DSP runs before any write, so no partial state
+            QMessageBox.critical(self, "Optimize failed", str(exc))
+            return
+        self._refresh_lists()
+        self._emit_curves_for_device(self._current_device())
+        if n_groups > 1:
+            head = (
+                f"Combined the stack into {n_groups} channel-scoped GraphicEQs "
+                f"({n_points} points total) — left/right EQ differ, so each side "
+                f"is reproduced separately."
+            )
+        else:
+            head = f"Combined the stack into one GraphicEQ ({n_points} points)."
+        msg = (
+            f"{head}\n"
+            f"Max deviation vs the original: {max_dev:.3f} dB.\n\n"
+            f"Created preset '{new.name}'. Click it to switch and compare."
+        )
+        if max_dev >= 0.1:
+            msg += (
+                "\n\nNote: deviation exceeds 0.1 dB — likely a very-high-Q "
+                "deep-bass feature near APO's 16384-tap FIR resolution limit "
+                "(inherent to any single-filter consolidation)."
+            )
+        QMessageBox.information(self, "Optimized", msg)
+
+    def _do_balance(
+        self, left_path: str, right_path: str, reference: str,
+        invert: bool = False, method: str = "reference",
+    ) -> Tuple[EqFile, float, str]:
+        """Generate a balance EQ and add it to the active preset. ``method``
+        ``"reference"`` corrects the non-reference side onto ``reference``;
+        ``"midpoint"`` moves both sides to the average. ``invert`` accounts for a
+        config that swaps L/R. Assumes an active preset exists. Returns
+        ``(eq_file, max_dev_db, description)``. Dialog-free for testability."""
         from eq_helper.apo.writer import atomic_write_with_backup
         from eq_helper.dsp.balance_eq import (
-            detect_measurement_sets,
-            generate_balance_batch,
+            effective_other_channel,
+            generate_balance_eq,
+            generate_midpoint_eqs,
         )
+        from eq_helper.dsp.eq_optimize import render_channel_eqs
+        from eq_helper.dsp.overlay import load_frequency_response
+
+        lib = self._library()
+        preset = self._active_preset()
+        if lib is None or preset is None:
+            raise ValueError("no active preset")
+        left_f, left_db = load_frequency_response(left_path)
+        right_f, right_db = load_frequency_response(right_path)
+
+        if method == "midpoint":
+            eqs, max_dev = generate_midpoint_eqs(
+                left_f, left_db, right_f, right_db, self._sr, invert=invert
+            )
+            content = render_channel_eqs(eqs)
+            eq = lib.create_eq_file(preset, "balance midpoint L-R")
+            atomic_write_with_backup(Path(eq.path), content)
+            return eq, max_dev, "both sides → average (midpoint)"
+
+        other = effective_other_channel(reference, invert)
+        phys_other = "R" if reference == "L" else "L"
+        if reference == "L":
+            ref_f, ref_db, oth_f, oth_db = left_f, left_db, right_f, right_db
+        else:
+            ref_f, ref_db, oth_f, oth_db = right_f, right_db, left_f, left_db
+        ceq, max_dev = generate_balance_eq(
+            ref_f, ref_db, oth_f, oth_db, other, self._sr
+        )
+        content = render_channel_eqs([ceq])
+        eq = lib.create_eq_file(preset, f"balance {phys_other} to {reference}")
+        atomic_write_with_backup(Path(eq.path), content)
+        return eq, max_dev, f"{reference}-referenced (Channel: {other})"
+
+    def _active_preset_swapped(self) -> bool:
+        """Whether the active preset's chain has an L/R channel swap in effect."""
+        from eq_helper.dsp.eq_response import load_profile_lr_swap
+
+        preset = self._active_preset()
+        if preset is None:
+            return False
+        try:
+            return load_profile_lr_swap(Path(preset.path))
+        except Exception:
+            return False
+
+    def _on_balance(self) -> None:
+        from eq_helper.ui.balance_eq_dialog import BalanceEqDialog
+
+        lib = self._library()
+        preset = self._active_preset()
+        if lib is None or preset is None:
+            QMessageBox.information(
+                self, "No active preset", "Activate a preset first."
+            )
+            return
+        swap = self._active_preset_swapped()
+        dlg = BalanceEqDialog(initial_invert=swap, swap_detected=swap, parent=self)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        left, right = dlg.left_path(), dlg.right_path()
+        if not left or not right:
+            return
+        try:
+            eq, max_dev, desc = self._do_balance(
+                left, right, dlg.reference(), dlg.invert(), dlg.method()
+            )
+        except Exception as exc:  # DSP runs before any write, so no partial state
+            QMessageBox.critical(self, "Balance EQ failed", str(exc))
+            return
+        self._refresh_stack()
+        self._emit_curves_for_device(self._current_device())
+        msg = (
+            f"Created '{eq.name}'. Balanced {desc} at every frequency.\n"
+            f"Max deviation: {max_dev:.3f} dB.\n\n"
+            f"It's an EQ file in this preset — toggle or remove it any time."
+        )
+        if max_dev >= 0.1:
+            msg += (
+                "\n\nNote: deviation exceeds 0.1 dB — a very narrow/deep feature "
+                "near APO's 16384-tap FIR resolution limit."
+            )
+        QMessageBox.information(self, "Balance EQ created", msg)
+
+    def _do_generate_balance_for_pair(
+        self,
+        name: str,
+        l_f: np.ndarray,
+        l_db: np.ndarray,
+        r_f: np.ndarray,
+        r_db: np.ndarray,
+        reference: str,
+        invert: bool,
+        method: str,
+    ) -> Tuple[str, float]:
+        """Generate the balance EQ preset from the given smoothed data."""
+        from eq_helper.apo.writer import atomic_write_with_backup
+        from eq_helper.dsp.balance_eq import generate_balance_for_pair
         from eq_helper.dsp.eq_optimize import render_channel_eqs
 
         lib = self._library()
         device = self._current_device()
         if lib is None or not device:
             raise ValueError("no device")
-        left, right = detect_measurement_sets(folder)
-        results, skipped = generate_balance_batch(
-            left, right, reference, self._sr, invert=invert, method=method
+            
+        name, eqs, max_dev = generate_balance_for_pair(
+            name, l_f, l_db, r_f, r_db, reference, self._sr,
+            invert=invert, method=method
         )
-
-        created: List[str] = []
-        worst = 0.0
-        first_preset = None
-        for name, eqs, max_dev in results[:1]:
-            content = render_channel_eqs(eqs)
-            new = lib.create_preset(device, name)
+        content = render_channel_eqs(eqs)
+        new = lib.create_preset(device, name)
+        try:
+            eq = lib.create_eq_file(new, name)
+            atomic_write_with_backup(Path(eq.path), content)
+        except Exception:
             try:
-                eq = lib.create_eq_file(new, name)
-                atomic_write_with_backup(Path(eq.path), content)
+                lib.remove_preset(new)
             except Exception:
-                try:
-                    lib.remove_preset(new)
-                except Exception:
-                    pass
-                raise
-            created.append(new.name)
-            worst = max(worst, max_dev)
-            if first_preset is None:
-                first_preset = new
-        if first_preset is not None:
-            lib.activate(first_preset)
-        return created, worst, len(skipped)
+                pass
+            raise
+        lib.activate(new)
+        return new.name, max_dev
 
     def _on_balance_batch(self) -> None:
         from eq_helper.ui.balance_batch_dialog import BalanceBatchDialog
+        from eq_helper.ui.balance_smoothing_dialog import BalanceSmoothingDialog
+        from eq_helper.dsp.balance_eq import detect_measurement_sets, find_best_balance_pair
+        from eq_helper.dsp.balance_smoothing import smooth_low_frequency_noise
 
         lib = self._library()
         if lib is None or not self._current_device():
@@ -602,26 +789,53 @@ class ProfilePanel(QGroupBox):
         folder = dlg.folder()
         if not folder:
             return
+            
+        reference = dlg.reference()
+        invert = dlg.invert()
+        method = dlg.method()
+        
         try:
-            created, worst, skipped = self._do_balance_batch(
-                folder, dlg.reference(), dlg.invert(), dlg.method()
+            left, right = detect_measurement_sets(folder)
+            best_match, skipped = find_best_balance_pair(
+                left, right, reference, invert=invert, method=method
             )
         except Exception as exc:
             QMessageBox.critical(self, "Balance batch failed", str(exc))
             return
-        if not created:
+            
+        if not best_match:
             QMessageBox.warning(
                 self, "Nothing generated",
-                "No candidates could be generated (no usable measurement "
-                "pairs).",
+                "No candidates could be found (no usable measurement pairs)."
             )
             return
+            
+        name, score, l_f, l_db, r_f, r_db = best_match
+        
+        smooth_dlg = BalanceSmoothingDialog(l_f, l_db, r_f, r_db, parent=self)
+        if smooth_dlg.exec() != QDialog.Accepted:
+            return
+            
+        cutoff_hz, smooth_oct = smooth_dlg.parameters()
+        
+        l_db_smoothed = smooth_low_frequency_noise(l_f, l_db, cutoff_hz, smooth_oct=smooth_oct)
+        r_db_smoothed = smooth_low_frequency_noise(r_f, r_db, cutoff_hz, smooth_oct=smooth_oct)
+        
+        try:
+            created_name, worst = self._do_generate_balance_for_pair(
+                name, l_f, l_db_smoothed, r_f, r_db_smoothed,
+                reference, invert, method
+            )
+        except Exception as exc:
+            QMessageBox.critical(self, "Balance batch failed", str(exc))
+            return
+
         self._refresh_lists()
         self._emit_curves_for_device(self._current_device())
         how = (
             "midpoint: both sides → average"
-            if dlg.method() == "midpoint"
-            else f"reference {dlg.reference()}"
+            if method == "midpoint"
+            else f"reference {reference}"
         )
         msg = (
             f"Created the best-scoring balance-EQ preset ({how}). "
@@ -631,7 +845,7 @@ class ProfilePanel(QGroupBox):
         )
         if skipped:
             msg += (
-                f"\n\n{skipped} pairing(s) were skipped (unreadable file or no "
+                f"\n\n{len(skipped)} pairing(s) were skipped (unreadable file or no "
                 f"overlapping frequency range)."
             )
         QMessageBox.information(self, "Balance candidates created", msg)

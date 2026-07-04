@@ -8,20 +8,21 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-_CAND = re.compile(  # batch candidate name shape (anchored)
-    r"^[LR]\d+(?:!!!)? [LR]\d+(?:!!!)? \(\d\.\d\d\)(?: \(\d+\))?$"
-)
-
 pytest.importorskip("pytestqt")
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QDialogButtonBox, QMessageBox
+from PySide6.QtWidgets import QDialogButtonBox
 
 from eq_helper.apo.presets import PresetLibrary
+from eq_helper.dsp.balance_eq import detect_measurement_sets, find_best_balance_pair
 from eq_helper.ui.balance_batch_dialog import BalanceBatchDialog
 from eq_helper.ui.profile_panel import ProfilePanel
 
 DEV = "Device: HD600 {0123abcd-0000-0000-0000-000000000000}"
+
+_CAND = re.compile(  # batch candidate name shape (anchored)
+    r"^[LR]\d+(?:!!!)? [LR]\d+(?:!!!)? \(\d\.\d\d\)(?: \(\d+\))?$"
+)
 
 
 def _write_meas(path: Path, peak_hz: float, peak_db: float) -> None:
@@ -54,6 +55,21 @@ def _panel(tmp_path: Path, qtbot) -> ProfilePanel:
     return panel
 
 
+def _do_batch_helper(panel, folder, reference, invert, method="reference"):
+    """Replaces the removed _do_balance_batch: find best pair and generate."""
+    left, right = detect_measurement_sets(folder)
+    best, skipped = find_best_balance_pair(
+        left, right, reference, invert=invert, method=method
+    )
+    if not best:
+        return [], 0.0, len(skipped)
+    name, score, l_f, l_db, r_f, r_db = best
+    created, worst = panel._do_generate_balance_for_pair(
+        name, l_f, l_db, r_f, r_db, reference, invert, method
+    )
+    return [created], worst, len(skipped)
+
+
 def test_batch_dialog_method_disables_reference(tmp_path, qtbot):
     dlg = BalanceBatchDialog()
     qtbot.addWidget(dlg)
@@ -68,9 +84,7 @@ def test_do_balance_batch_midpoint_two_blocks(tmp_path, qtbot):
     folder = tmp_path / "meas"
     _measurements(folder, 2, 2)
     panel = _panel(tmp_path, qtbot)
-    created, worst, skipped = panel._do_balance_batch(
-        str(folder), "L", False, "midpoint"
-    )
+    created, worst, skipped = _do_batch_helper(panel, folder, "L", False, "midpoint")
     assert len(created) == 1
     lib = PresetLibrary(tmp_path)
     cand = next(p for p in lib.list_presets("HD600") if _CAND.search(p.name))
@@ -97,7 +111,7 @@ def test_do_balance_batch_creates_only_best_preset_and_activates_it(tmp_path, qt
     _measurements(folder, 3, 3)
     panel = _panel(tmp_path, qtbot)
 
-    created, worst, skipped = panel._do_balance_batch(str(folder), "L", False)
+    created, worst, skipped = _do_batch_helper(panel, folder, "L", False)
     assert len(created) == 1
     assert re.search(r"\(\d\.\d\d\)$", created[0])
     assert skipped == 0
@@ -116,7 +130,7 @@ def test_move_preset_reorders(tmp_path, qtbot):
     folder = tmp_path / "meas"
     _measurements(folder, 2, 1)
     panel = _panel(tmp_path, qtbot)
-    panel._do_balance_batch(str(folder), "L", False)  # 2 candidates
+    _do_batch_helper(panel, folder, "L", False)
     panel._refresh_presets()
     # select the last preset and move it up
     last = panel._presets.count() - 1

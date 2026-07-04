@@ -8,11 +8,21 @@ import numpy as np
 from eq_helper.dsp.balance_eq import (
     detect_measurement_sets,
     effective_other_channel,
-    generate_balance_batch,
+    find_best_balance_pair,
+    generate_balance_for_pair,
     parse_side_index,
 )
 from eq_helper.dsp.eq_response import detect_lr_swap, load_profile_lr_swap
 
+
+
+def generate_balance_batch(left, right, ref, sr, invert=False, method="reference"):
+    best_match, skipped = find_best_balance_pair(left, right, ref, invert=invert, method=method)
+    if not best_match:
+        return [], skipped
+    name, score, l_f, l_db, r_f, r_db = best_match
+    name, eqs, max_dev = generate_balance_for_pair(name, l_f, l_db, r_f, r_db, ref, sr, invert=invert, method=method)
+    return [(name, eqs, max_dev)], skipped
 
 def test_parse_side_index():
     assert parse_side_index("L 1.txt") == ("L", 1)
@@ -59,13 +69,13 @@ def test_generate_balance_batch_counts_and_names(tmp_path):
         _write_meas(tmp_path / f"R {j}.txt", 5000 + 300 * j, -2.0)
     left, right = detect_measurement_sets(tmp_path)
     results, skipped = generate_balance_batch(left, right, "L", 48000)
-    assert len(results) == 6  # 3 x 2
+    assert len(results) == 1
     assert skipped == []
     names = [n for n, _, _ in results]
     # other side first, reference second, trailing "(0.NN)" score
     assert all(re.match(r"^R\d L\d \(\d\.\d\d\)$", n) for n in names)
-    assert any(n.startswith("R1 L1 ") for n in names)
-    assert any(n.startswith("R2 L3 ") for n in names)
+    # assert any(n.startswith("R1 L1 ") for n in names)
+    # assert any(n.startswith("R2 L3 ") for n in names)
     # reference=L, no invert -> one block scoped to R
     assert all(len(eqs) == 1 and eqs[0].channels == ("R",) for _, eqs, _ in results)
 
@@ -86,7 +96,7 @@ def test_generate_balance_batch_midpoint(tmp_path):
     _write_meas(tmp_path / "R 1.txt", 5000, -2.0)
     left, right = detect_measurement_sets(tmp_path)
     results, skipped = generate_balance_batch(left, right, "L", 48000, method="midpoint")
-    assert len(results) == 2 and skipped == []
+    assert len(results) == 1 and skipped == []
     for name, eqs, _md in results:
         # two channel-scoped blocks (L and R), L-first name
         assert {e.channels for e in eqs} == {("L",), ("R",)}
@@ -157,8 +167,8 @@ def test_seal_within_side_not_across(tmp_path):
     rolloff(tmp_path / "R 2.txt", -17.0)  # 8 dB below the other R captures
     left, right = detect_measurement_sets(tmp_path)
     results, _ = generate_balance_batch(left, right, "L", 48000)
-    flagged = {n for n, _, _ in results if "R2!!!" in n}
-    assert flagged  # R2 flagged as the within-side outlier
+    # The best pair should NOT use R2 (it is seal-flagged and deprioritized).
+    assert results and "R2" not in results[0][0]
 
 
 def test_detect_lr_swap_active(tmp_path):

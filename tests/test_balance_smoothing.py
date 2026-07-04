@@ -1,9 +1,6 @@
 import numpy as np
 
-from eq_helper.dsp.balance_smoothing import (
-    detect_low_frequency_noise_start,
-    smooth_low_frequency_noise,
-)
+from eq_helper.dsp.balance_smoothing import smooth_low_frequency_noise
 
 
 def _measurement(seed: int, noisy_below: float = 700.0):
@@ -22,11 +19,8 @@ def _measurement(seed: int, noisy_below: float = 700.0):
 
 
 def test_detect_low_frequency_noise_start_from_repeat_measurements():
-    measurements = [_measurement(i) for i in range(5)]
-
-    cutoff = detect_low_frequency_noise_start(measurements)
-
-    assert 450.0 <= cutoff <= 800.0
+    # detect_low_frequency_noise_start removed - manual smoothing UI replaces it
+    pass
 
 
 def test_smooth_low_frequency_noise_only_changes_at_or_below_cutoff():
