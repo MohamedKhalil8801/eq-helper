@@ -306,23 +306,24 @@ def generate_balance_batch(
         flagged |= detect_seal_loss(side_metrics)
 
     if smooth_bass:
+        all_measurements = []
         for _side, side_set in (("L", left), ("R", right)):
-            side_measurements = [
+            all_measurements.extend([
                 loaded[str(path)]
                 for _idx, path in side_set
                 if loaded.get(str(path)) is not None
-            ]
-            cutoff = detect_low_frequency_noise_start(side_measurements)
-            if cutoff <= 0.0:
-                continue
-            for _idx, path in side_set:
-                fd = loaded.get(str(path))
-                if fd is None:
-                    continue
-                loaded[str(path)] = (
-                    fd[0],
-                    smooth_low_frequency_noise(fd[0], fd[1], cutoff),
-                )
+            ])
+        cutoff = detect_low_frequency_noise_start(all_measurements)
+        if cutoff > 0.0:
+            for _side, side_set in (("L", left), ("R", right)):
+                for _idx, path in side_set:
+                    fd = loaded.get(str(path))
+                    if fd is None:
+                        continue
+                    loaded[str(path)] = (
+                        fd[0],
+                        smooth_low_frequency_noise(fd[0], fd[1], cutoff),
+                    )
 
     def _mark(side: str, label: int) -> str:
         return f"{side}{label}{'!!!' if (side, label) in flagged else ''}"
