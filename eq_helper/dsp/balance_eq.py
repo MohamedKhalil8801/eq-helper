@@ -31,6 +31,10 @@ from eq_helper.dsp.balance_score import (
     detect_seal_loss,
     sub_bass_metric,
 )
+from eq_helper.dsp.balance_smoothing import (
+    detect_low_frequency_noise_start,
+    smooth_low_frequency_noise,
+)
 from eq_helper.dsp.graphic_eq import GraphicEQ
 from eq_helper.dsp.overlay import load_frequency_response
 
@@ -248,6 +252,7 @@ def generate_balance_batch(
     method: str = "reference",
     match_level: bool = True,
     tol_db: float = 0.02,
+    smooth_bass: bool = True,
 ) -> Tuple[List[Tuple[str, List[ChannelEQ], float]], List[Tuple[str, str]]]:
     """Generate a balance EQ for every left×right measurement pairing.
 
@@ -299,6 +304,25 @@ def generate_balance_batch(
     for side in ("L", "R"):
         side_metrics = {k: v for k, v in metrics.items() if k[0] == side}
         flagged |= detect_seal_loss(side_metrics)
+
+    if smooth_bass:
+        for _side, side_set in (("L", left), ("R", right)):
+            side_measurements = [
+                loaded[str(path)]
+                for _idx, path in side_set
+                if loaded.get(str(path)) is not None
+            ]
+            cutoff = detect_low_frequency_noise_start(side_measurements)
+            if cutoff <= 0.0:
+                continue
+            for _idx, path in side_set:
+                fd = loaded.get(str(path))
+                if fd is None:
+                    continue
+                loaded[str(path)] = (
+                    fd[0],
+                    smooth_low_frequency_noise(fd[0], fd[1], cutoff),
+                )
 
     def _mark(side: str, label: int) -> str:
         return f"{side}{label}{'!!!' if (side, label) in flagged else ''}"

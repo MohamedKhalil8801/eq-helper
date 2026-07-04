@@ -8,7 +8,6 @@ remove. Per-device measurement CSVs and the graph curve-sets are preserved.
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -38,13 +37,6 @@ from eq_helper.dsp.overlay import OverlayLoadError, load_measurement_csv, normal
 
 _EQ_FREQS = np.geomspace(20.0, 20000.0, 500)
 _APO_FILTER = "EQ / APO text (*.txt);;All files (*.*)"
-# Batch balance-EQ candidate presets are named "<Oth><j>[!!!] <Ref><i>[!!!]
-# (0.NN)" (with an optional " (N)" de-dup suffix). Anchored so a normal user
-# preset that merely contains a score-like "(1.00)" isn't treated as a candidate.
-_CANDIDATE_RE = re.compile(
-    r"^[LR]\d+(?:!!!)? [LR]\d+(?:!!!)? \(\d\.\d\d\)(?: \(\d+\))?$"
-)
-
 
 class ProfilePanel(QGroupBox):
     """Device-aware preset switcher with a stacked EQ-file editor surface."""
@@ -120,22 +112,16 @@ class ProfilePanel(QGroupBox):
             "one side identical to the other (chases every peak/dip exactly)."
         )
         self.btn_balance.clicked.connect(self._on_balance)
-        layout.addWidget(self.btn_balance)
 
         bbtns = QHBoxLayout()
         self.btn_balance_batch = QPushButton("Balance EQ batch…")
         self.btn_balance_batch.setToolTip(
-            "Generate every reference×other balance EQ from a folder of "
-            "Left/Right measurements, each as its own preset to audition."
-        )
-        self.btn_remove_others = QPushButton("Remove other candidates")
-        self.btn_remove_others.setToolTip(
-            "Remove all balance-EQ candidate presets except the selected one."
+            "Find the best-scoring Left/Right measurement pair from a folder "
+            "and create one balance-EQ preset from that pair."
         )
         self.btn_balance_batch.clicked.connect(self._on_balance_batch)
-        self.btn_remove_others.clicked.connect(self._on_remove_other_candidates)
+        bbtns.addWidget(self.btn_balance)
         bbtns.addWidget(self.btn_balance_batch)
-        bbtns.addWidget(self.btn_remove_others)
         layout.addLayout(bbtns)
 
         # --- Stack (active preset's EQ files) ---
@@ -556,9 +542,9 @@ class ProfilePanel(QGroupBox):
         self, folder: str, reference: str, invert: bool,
         method: str = "reference",
     ) -> Tuple[List[str], float, int]:
-        """Generate a balance EQ for every left×right pairing in ``folder`` as
-        its own preset under the active device; activate the first. ``method``
-        is ``"reference"`` or ``"midpoint"``. Assumes an active preset exists
+        """Rank every left×right pairing in ``folder``, create one preset for
+        the best-scoring usable pair, and activate it. ``method`` is
+        ``"reference"`` or ``"midpoint"``. Assumes an active preset exists
         (for the device). Returns ``(preset_names, worst_max_dev, skipped)``.
         Dialog-free for testability."""
         from eq_helper.apo.writer import atomic_write_with_backup
@@ -580,7 +566,7 @@ class ProfilePanel(QGroupBox):
         created: List[str] = []
         worst = 0.0
         first_preset = None
-        for name, eqs, max_dev in results:
+        for name, eqs, max_dev in results[:1]:
             content = render_channel_eqs(eqs)
             new = lib.create_preset(device, name)
             try:
@@ -638,10 +624,10 @@ class ProfilePanel(QGroupBox):
             else f"reference {dlg.reference()}"
         )
         msg = (
-            f"Generated {len(created)} balance-EQ presets ({how}). "
-            f"Worst max deviation: {worst:.3f} dB.\n\n"
-            f"Click each in the switcher to audition, ↑/↓ to rank them, then "
-            f"'Remove other candidates' to keep your favourite."
+            f"Created the best-scoring balance-EQ preset ({how}). "
+            f"Max deviation: {worst:.3f} dB.\n\n"
+            f"The batch ranked all usable Left/Right pairings internally, then "
+            f"kept the top one."
         )
         if skipped:
             msg += (
@@ -671,49 +657,6 @@ class ProfilePanel(QGroupBox):
             return
         self._refresh_presets()
         self._presets.setCurrentRow(new_row)
-
-    def _on_remove_other_candidates(self) -> None:
-        lib = self._library()
-        device = self._current_device()
-        if lib is None or not device:
-            return
-        presets = lib.list_presets(device)
-        candidates = [p for p in presets if _CANDIDATE_RE.search(p.name)]
-        if not candidates:
-            QMessageBox.information(
-                self, "No candidates", "No balance-EQ candidate presets found."
-            )
-            return
-        # Pick the one to KEEP — never delete all. Prefer the selected
-        # candidate, then the active candidate, else the first candidate.
-        sel_item = self._presets.currentItem()
-        sel = sel_item.data(Qt.UserRole) if sel_item is not None else None
-        keep = None
-        if sel is not None and _CANDIDATE_RE.search(sel.name):
-            keep = sel
-        if keep is None:
-            keep = next((p for p in candidates if p.is_active), None)
-        if keep is None:
-            keep = candidates[0]
-        losers = [p for p in candidates if p.path != keep.path]
-        if not losers:
-            QMessageBox.information(
-                self, "Only one candidate",
-                f"'{keep.name}' is the only candidate — nothing to remove.",
-            )
-            return
-        if QMessageBox.question(
-            self, "Remove other candidates",
-            f"Remove {len(losers)} candidate preset(s)? Keeping '{keep.name}'.",
-        ) != QMessageBox.Yes:
-            return
-        for p in losers:
-            try:
-                lib.remove_preset(p)
-            except (ApoError, OSError):
-                pass
-        self._refresh_lists()
-        self._emit_curves_for_device(self._current_device())
 
     def _do_bypass(self, lo: float, hi: float) -> EqFile:
         """Create a region-bypass correction EQ (per-channel aware) and move it

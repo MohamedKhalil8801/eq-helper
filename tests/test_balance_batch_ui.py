@@ -54,16 +54,6 @@ def _panel(tmp_path: Path, qtbot) -> ProfilePanel:
     return panel
 
 
-def test_candidate_regex_rejects_normal_presets():
-    from eq_helper.ui.profile_panel import _CANDIDATE_RE
-    for good in ("R1 L1 (0.94)", "R1!!! L1 (0.95)", "L2 R3!!! (0.00)",
-                 "R1 L1 (0.94) (2)", "R10 L2 (1.00)"):
-        assert _CANDIDATE_RE.search(good), good
-    for bad in ("Harman (1.00)", "JM-1 (0.71)", "Base", "Base (optimized)",
-                "My EQ (v0.95)", "L1 (0.9)"):
-        assert not _CANDIDATE_RE.search(bad), bad
-
-
 def test_batch_dialog_method_disables_reference(tmp_path, qtbot):
     dlg = BalanceBatchDialog()
     qtbot.addWidget(dlg)
@@ -81,7 +71,7 @@ def test_do_balance_batch_midpoint_two_blocks(tmp_path, qtbot):
     created, worst, skipped = panel._do_balance_batch(
         str(folder), "L", False, "midpoint"
     )
-    assert len(created) == 4
+    assert len(created) == 1
     lib = PresetLibrary(tmp_path)
     cand = next(p for p in lib.list_presets("HD600") if _CAND.search(p.name))
     content = Path(lib.list_eq_files(cand)[0].path).read_text(encoding="utf-8")
@@ -102,23 +92,22 @@ def test_batch_dialog_counts_and_ok(tmp_path, qtbot):
     assert dlg.reference() == "L"
 
 
-def test_do_balance_batch_creates_presets_and_activates_first(tmp_path, qtbot):
+def test_do_balance_batch_creates_only_best_preset_and_activates_it(tmp_path, qtbot):
     folder = tmp_path / "meas"
     _measurements(folder, 3, 3)
     panel = _panel(tmp_path, qtbot)
 
     created, worst, skipped = panel._do_balance_batch(str(folder), "L", False)
-    assert len(created) == 9
+    assert len(created) == 1
+    assert re.search(r"\(\d\.\d\d\)$", created[0])
     assert skipped == 0
 
     lib = PresetLibrary(tmp_path)
     presets = lib.list_presets("HD600")
     bal = [p for p in presets if _CAND.search(p.name)]
-    assert len(bal) == 9
-    # first candidate is the active one
+    assert len(bal) == 1
     active = lib.active_preset("HD600")
     assert active is not None and _CAND.search(active.name)
-    # each candidate's EQ file is channel-scoped to R (reference L, no invert)
     content = Path(lib.list_eq_files(bal[0])[0].path).read_text(encoding="utf-8")
     assert "Channel: R" in content and content.rstrip().endswith("Channel: all")
 
@@ -142,39 +131,8 @@ def test_move_preset_reorders(tmp_path, qtbot):
     assert before[last] == after[last - 1]  # moved up one
 
 
-def test_remove_other_candidates_keeps_active(tmp_path, qtbot, monkeypatch):
-    folder = tmp_path / "meas"
-    _measurements(folder, 3, 1)  # 3 candidates
+def test_balance_buttons_share_row_and_remove_candidates_is_gone(tmp_path, qtbot):
     panel = _panel(tmp_path, qtbot)
-    panel._do_balance_batch(str(folder), "L", False)
-    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.Yes)
-    panel._on_remove_other_candidates()
-
-    lib = PresetLibrary(tmp_path)
-    presets = lib.list_presets("HD600")
-    bal = [p for p in presets if _CAND.search(p.name)]
-    assert len(bal) == 1  # only the active candidate remains
-    assert bal[0].is_active
-
-
-def test_remove_other_candidates_never_deletes_all(tmp_path, qtbot, monkeypatch):
-    # Footgun guard: even when a NON-candidate preset is active, one candidate
-    # must be kept (the selected one), never all removed.
-    folder = tmp_path / "meas"
-    _measurements(folder, 3, 1)  # 3 candidates
-    panel = _panel(tmp_path, qtbot)
-    panel._do_balance_batch(str(folder), "L", False)
-    lib = PresetLibrary(tmp_path)
-    base = next(p for p in lib.list_presets("HD600") if p.name == "Base")
-    lib.activate(base)  # active preset is NOT a candidate
-    panel._refresh_presets()
-    # select the first candidate in the list
-    for i in range(panel._presets.count()):
-        if _CAND.search(panel._presets.item(i).data(Qt.UserRole).name):
-            panel._presets.setCurrentRow(i)
-            break
-    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.Yes)
-    panel._on_remove_other_candidates()
-
-    bal = [p for p in lib.list_presets("HD600") if _CAND.search(p.name)]
-    assert len(bal) == 1  # exactly one kept, not zero
+    assert not hasattr(panel, "btn_remove_others")
+    assert panel.btn_balance.parentWidget() is panel
+    assert panel.btn_balance_batch.parentWidget() is panel
