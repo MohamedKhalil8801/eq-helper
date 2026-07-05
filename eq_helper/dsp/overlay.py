@@ -107,3 +107,13 @@ def normalize_at_1khz(freqs: np.ndarray, db: np.ndarray) -> np.ndarray:
         return db
     ref = float(np.interp(1000.0, freqs, db))
     return db - ref
+
+
+def save_measurement_csv(path: str | Path, freqs: np.ndarray, db: np.ndarray) -> None:
+    """Write a measurement file in REW/AutoEQ compatible CSV format."""
+    p = Path(path)
+    if freqs.ndim != 1 or db.ndim != 1 or freqs.size != db.size:
+        raise ValueError("freqs and db must be 1-D arrays of equal length")
+    lines = ["Frequency (Hz),Raw (dB)"]
+    lines.extend(f"{float(f):.6f},{float(d):.6f}" for f, d in zip(freqs, db))
+    p.write_text("\n".join(lines) + "\n", encoding="utf-8")

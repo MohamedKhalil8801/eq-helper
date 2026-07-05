@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Optional
+import tempfile
+import uuid
 
 import numpy as np
 from PySide6.QtCore import QTimer
@@ -22,7 +24,11 @@ from PySide6.QtWidgets import (
 from eq_helper.audio.engine import AudioEngine
 from eq_helper.dsp.balance_score import alignment_score_from_measurements
 from eq_helper.dsp.fft import compute_spectrum
-from eq_helper.dsp.overlay import OverlayLoadError, load_measurement_csv
+from eq_helper.dsp.overlay import (
+    OverlayLoadError,
+    load_measurement_csv,
+    save_measurement_csv,
+)
 from eq_helper.ui.spectrum_view import SpectrumView
 
 _MIC_WINDOW = 2048
@@ -39,6 +45,13 @@ class LiveBalanceDialog(QDialog):
         self._ref_path: Optional[str] = None
         self._ref_freqs = np.array([], dtype=np.float64)
         self._ref_db = np.array([], dtype=np.float64)
+        self._best_score = 0.0
+        self._best_freqs = np.array([], dtype=np.float64)
+        self._best_db = np.array([], dtype=np.float64)
+        self._best_path: Optional[str] = None
+        self._run_id = uuid.uuid4().hex
+        self._temp_dir = Path(tempfile.gettempdir()) / "eq_helper_live_balance"
+        self._temp_dir.mkdir(parents=True, exist_ok=True)
 
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel("Load a REW or CSV reference measurement and play pink "
@@ -61,9 +74,22 @@ class LiveBalanceDialog(QDialog):
         self._score_label.setStyleSheet("font-size: 1.2em; font-weight: bold;")
         layout.addWidget(self._score_label)
 
+        self._best_score_label = QLabel("Best score: —")
+        self._best_score_label.setStyleSheet("color: #555;")
+        layout.addWidget(self._best_score_label)
+
         self._status_label = QLabel("Load a reference measurement and play pink noise in REW.")
         self._status_label.setStyleSheet("color: #666;")
         layout.addWidget(self._status_label)
+
+        self._best_file_label = QLabel("")
+        self._best_file_label.setStyleSheet("color: #666;")
+        layout.addWidget(self._best_file_label)
+
+        self._export_button = QPushButton("Export best measurement…")
+        self._export_button.setEnabled(False)
+        self._export_button.clicked.connect(self._export_best_measurement)
+        layout.addWidget(self._export_button)
 
         self._spectrum = SpectrumView(self._engine)
         layout.addWidget(self._spectrum, 1)
@@ -95,6 +121,13 @@ class LiveBalanceDialog(QDialog):
         self._ref_path = path
         self._ref_freqs = freqs
         self._ref_db = db
+        self._best_score = 0.0
+        self._best_freqs = np.array([], dtype=np.float64)
+        self._best_db = np.array([], dtype=np.float64)
+        self._best_path = None
+        self._export_button.setEnabled(False)
+        self._best_score_label.setText("Best score: —")
+        self._best_file_label.setText("")
         self._ref_label.setText(f"Reference: {Path(path).name}")
         self._clear_button.setEnabled(True)
         self._spectrum.set_overlay(freqs, db)
@@ -104,10 +137,17 @@ class LiveBalanceDialog(QDialog):
         self._ref_path = None
         self._ref_freqs = np.array([], dtype=np.float64)
         self._ref_db = np.array([], dtype=np.float64)
+        self._best_score = 0.0
+        self._best_freqs = np.array([], dtype=np.float64)
+        self._best_db = np.array([], dtype=np.float64)
+        self._best_path = None
         self._ref_label.setText("Reference: (none)")
         self._clear_button.setEnabled(False)
+        self._export_button.setEnabled(False)
         self._spectrum.clear_overlay()
         self._score_label.setText("Score: —")
+        self._best_score_label.setText("Best score: —")
+        self._best_file_label.setText("")
         self._status_label.setText("Load a reference measurement and play pink noise in REW.")
 
     def _update_match_score(self) -> None:
@@ -136,6 +176,22 @@ class LiveBalanceDialog(QDialog):
         )
         self._score_label.setText(f"Score: {score:.2f}")
 
+        if score > self._best_score:
+            self._best_score = score
+            self._best_freqs = mic_freqs
+            self._best_db = mic_db
+            self._best_path = str(
+                self._temp_dir / f"live_balance_best_{self._run_id}.csv"
+            )
+            save_measurement_csv(self._best_path, self._best_freqs, self._best_db)
+            self._export_button.setEnabled(True)
+            self._best_score_label.setText(f"Best score: {self._best_score:.2f}")
+            self._best_file_label.setText(f"Saved best measurement to {Path(self._best_path).name}")
+        else:
+            self._best_score_label.setText(
+                f"Best score: {self._best_score:.2f}" if self._best_score > 0 else "Best score: —"
+            )
+
         if score >= 0.95:
             self._status_label.setText("Excellent match — ready to capture.")
         elif score >= 0.75:
@@ -144,6 +200,27 @@ class LiveBalanceDialog(QDialog):
             self._status_label.setText("Adjust insertion until the live curve aligns more closely.")
         else:
             self._status_label.setText("No strong feature alignment detected yet.")
+
+    def _export_best_measurement(self) -> None:
+        if self._best_path is None:
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export best measurement",
+            "best_measurement.csv",
+            "CSV files (*.csv *.txt);;All files (*.*)",
+        )
+        if not path:
+            return
+        try:
+            save_measurement_csv(path, self._best_freqs, self._best_db)
+            QMessageBox.information(
+                self,
+                "Exported",
+                f"Best measurement exported to {Path(path).name}",
+            )
+        except Exception as exc:
+            QMessageBox.warning(self, "Export failed", str(exc))
 
     def closeEvent(self, event) -> None:
         self._timer.stop()

@@ -10,7 +10,7 @@ import pytest
 pytest.importorskip("pytestqt")
 
 from eq_helper.audio.engine import AudioEngine
-from eq_helper.dsp.overlay import load_measurement_csv
+from eq_helper.dsp.overlay import load_measurement_csv, save_measurement_csv
 from eq_helper.ui.live_balance_dialog import LiveBalanceDialog
 from eq_helper.ui.profile_panel import ProfilePanel
 
@@ -55,3 +55,32 @@ def test_live_balance_dialog_scores_same_frequency(qtbot, tmp_path):
     assert score_text.startswith("Score:")
     score = float(score_text.split(": ")[1])
     assert score > 0.9
+
+
+def test_live_balance_dialog_saves_best_measurement(qtbot, tmp_path):
+    ref_path = tmp_path / "ref.csv"
+    _write_measurement(ref_path, 10000.0, 12.0)
+
+    engine = AudioEngine()
+    dlg = LiveBalanceDialog(engine)
+    qtbot.addWidget(dlg)
+    dlg.load_reference_measurement(str(ref_path))
+
+    t = np.arange(2048, dtype=np.float32) / 48000.0
+    mic = np.sin(2.0 * np.pi * 10000.0 * t).astype(np.float32)
+    engine.simulate_mic_input(mic)
+
+    dlg._update_match_score()
+    assert dlg._best_score > 0.0
+    assert dlg._best_path is not None
+    assert Path(dlg._best_path).exists()
+
+
+def test_save_measurement_csv_roundtrips(tmp_path):
+    path = tmp_path / "out.csv"
+    f = np.geomspace(20.0, 20000.0, 10)
+    db = np.linspace(-5.0, 5.0, len(f))
+    save_measurement_csv(path, f, db)
+    f2, db2 = load_measurement_csv(path)
+    assert np.allclose(f2, f)
+    assert np.allclose(db2, db)
