@@ -76,6 +76,7 @@ class MainWindow(QMainWindow):
             ),
         )
         self.profile_panel.set_sample_rate(self.engine.sample_rate)
+        self.profile_panel.liveMatchRequested.connect(self._open_live_balance_dialog)
         self.spectrum_view = SpectrumView(self.engine)
         self.mic_panel = MicPanel(self.engine)
         self.test_songs_panel = TestSongsPanel()
@@ -538,6 +539,18 @@ class MainWindow(QMainWindow):
                 self.spectrum_view.set_eq2_response(eq_freqs, eq_db)
             else:
                 self.spectrum_view.clear_eq2_response()
+
+    def _open_live_balance_dialog(self) -> None:
+        from eq_helper.ui.live_balance_dialog import LiveBalanceDialog
+
+        dlg = LiveBalanceDialog(self.engine, parent=self)
+        dlg.exec()
+
+    def _open_live_balance_dialog(self) -> None:
+        from eq_helper.ui.live_balance_dialog import LiveBalanceDialog
+
+        dlg = LiveBalanceDialog(self.engine, parent=self)
+        dlg.exec()
 
     # -------- APO path
 

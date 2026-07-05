@@ -108,6 +108,19 @@ def alignment_score(
     return float(np.sum(w * s) / np.sum(w))
 
 
+def alignment_score_from_measurements(
+    ref_freqs: np.ndarray,
+    ref_db: np.ndarray,
+    mic_freqs: np.ndarray,
+    mic_db: np.ndarray,
+    **kwargs,
+) -> float:
+    """Compute the same 0–1 alignment score used by balance generation."""
+    ref_feats = detect_features(ref_freqs, ref_db)
+    mic_feats = detect_features(mic_freqs, mic_db)
+    return alignment_score(ref_feats, mic_feats, **kwargs)
+
+
 def sub_bass_metric(
     freqs: np.ndarray,
     db: np.ndarray,

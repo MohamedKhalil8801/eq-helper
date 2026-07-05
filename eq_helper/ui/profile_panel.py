@@ -43,6 +43,8 @@ class ProfilePanel(QGroupBox):
 
     # (slot, overlay_freqs|None, overlay_db|None, eq_freqs|None, eq_db|None)
     curvesChanged = Signal(int, object, object, object, object)
+    # Live-balance match request from the measurements section.
+    liveMatchRequested = Signal()
     # Absolute path of an EQ file the user wants to edit.
     editEqFileRequested = Signal(str)
 
@@ -157,10 +159,17 @@ class ProfilePanel(QGroupBox):
         mbtns = QHBoxLayout()
         self.btn_load_meas = QPushButton("Load Measurement…")
         self.btn_clear_meas = QPushButton("Clear Measurement")
+        self.btn_live_match = QPushButton("Live match…")
+        self.btn_live_match.setToolTip(
+            "Open a live matching dialog to compare a reference measurement "
+            "against current mic input."
+        )
         self.btn_load_meas.clicked.connect(self._on_load_measurement)
         self.btn_clear_meas.clicked.connect(self._on_clear_measurement)
+        self.btn_live_match.clicked.connect(self._on_live_match)
         mbtns.addWidget(self.btn_load_meas)
         mbtns.addWidget(self.btn_clear_meas)
+        mbtns.addWidget(self.btn_live_match)
         layout.addLayout(mbtns)
 
     # ------------------------------------------------------------ settings
@@ -1044,6 +1053,9 @@ class ProfilePanel(QGroupBox):
         self._measurements[device] = None
         self._update_meas_label()
         self._emit_curves_for_device(device)
+
+    def _on_live_match(self) -> None:
+        self.liveMatchRequested.emit()
 
     # --------------------------------------------------------- curve emission
 
