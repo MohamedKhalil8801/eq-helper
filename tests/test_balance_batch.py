@@ -8,7 +8,7 @@ import numpy as np
 from eq_helper.dsp.balance_eq import (
     detect_measurement_sets,
     effective_other_channel,
-    find_best_balance_pair,
+    find_best_balance_pairs,
     generate_balance_for_pair,
     parse_side_index,
 )
@@ -17,12 +17,12 @@ from eq_helper.dsp.eq_response import detect_lr_swap, load_profile_lr_swap
 
 
 def generate_balance_batch(left, right, ref, sr, invert=False, method="reference"):
-    best_match, skipped = find_best_balance_pair(left, right, ref, invert=invert, method=method)
-    if not best_match:
-        return [], skipped
-    name, score, l_f, l_db, r_f, r_db = best_match
-    name, eqs, max_dev = generate_balance_for_pair(name, l_f, l_db, r_f, r_db, ref, sr, invert=invert, method=method)
-    return [(name, eqs, max_dev)], skipped
+    matches, skipped = find_best_balance_pairs(left, right, ref, invert=invert, method=method)
+    results = []
+    for name, _score, l_f, l_db, r_f, r_db in matches:
+        name, eqs, max_dev = generate_balance_for_pair(name, l_f, l_db, r_f, r_db, ref, sr, invert=invert, method=method)
+        results.append((name, eqs, max_dev))
+    return results, skipped
 
 def test_parse_side_index():
     assert parse_side_index("L 1.txt") == ("L", 1)
@@ -69,13 +69,14 @@ def test_generate_balance_batch_counts_and_names(tmp_path):
         _write_meas(tmp_path / f"R {j}.txt", 5000 + 300 * j, -2.0)
     left, right = detect_measurement_sets(tmp_path)
     results, skipped = generate_balance_batch(left, right, "L", 48000)
-    assert len(results) == 1
+    # no features in either detection band -> every pair scores 0.00 and all
+    # tied pairs are kept (no alphabetic single pick)
+    assert len(results) == 6
     assert skipped == []
     names = [n for n, _, _ in results]
     # other side first, reference second, trailing "(0.NN)" score
     assert all(re.match(r"^R\d L\d \(\d\.\d\d\)$", n) for n in names)
-    # assert any(n.startswith("R1 L1 ") for n in names)
-    # assert any(n.startswith("R2 L3 ") for n in names)
+    assert all("(0.00)" in n for n in names)
     # reference=L, no invert -> one block scoped to R
     assert all(len(eqs) == 1 and eqs[0].channels == ("R",) for _, eqs, _ in results)
 
@@ -96,7 +97,8 @@ def test_generate_balance_batch_midpoint(tmp_path):
     _write_meas(tmp_path / "R 1.txt", 5000, -2.0)
     left, right = detect_measurement_sets(tmp_path)
     results, skipped = generate_balance_batch(left, right, "L", 48000, method="midpoint")
-    assert len(results) == 1 and skipped == []
+    # both L files tie at 0.00 with R1 -> both kept
+    assert len(results) == 2 and skipped == []
     for name, eqs, _md in results:
         # two channel-scoped blocks (L and R), L-first name
         assert {e.channels for e in eqs} == {("L",), ("R",)}
@@ -117,6 +119,45 @@ def test_generate_balance_batch_skips_bad_pair(tmp_path):
     # R1 L1 still generated; R2 L1 skipped, not the whole batch
     assert len(results) == 1 and results[0][0].startswith("R1 L1 (")
     assert len(skipped) == 1 and skipped[0][0] == "R2 L1"
+
+
+def _write_resonance(path, peak_hz, peak_db=6.0):
+    """Flat response + one sharp resonance (used inside the fallback band)."""
+    f = np.geomspace(20, 20000, 3000)
+    lf = np.log10(f)
+    db = 85 + peak_db * np.exp(-((lf - np.log10(peak_hz)) ** 2) / (2 * 0.03 ** 2))
+    path.write_text(
+        "Frequency (Hz),Raw (dB)\n"
+        + "\n".join(f"{a:.3f},{b:.4f}" for a, b in zip(f, db)),
+        encoding="utf-8",
+    )
+
+
+def test_scoring_falls_back_to_wide_band(tmp_path):
+    # Smooth treble: the only detectable feature is the ~3 kHz canal resonance,
+    # outside the primary 6-14kHz band. Without the fallback every pair would
+    # score 0.00; with it, aligned pairs rank (and tie when exact).
+    for i, hz in ((1, 3200.0), (2, 3900.0)):
+        _write_resonance(tmp_path / f"L {i}.txt", hz)
+    _write_resonance(tmp_path / "R 1.txt", 3200.0)
+    _write_resonance(tmp_path / "R 2.txt", 3900.0)
+    left, right = detect_measurement_sets(tmp_path)
+    matches, skipped = find_best_balance_pairs(left, right, "L")
+    assert skipped == []
+    assert [n for n, *_ in matches] == ["R1 L1 (1.00)", "R2 L2 (1.00)"]
+
+
+def test_find_best_pairs_keeps_every_tied_best(tmp_path):
+    # Two identical L files both match R1 perfectly; R2 is off-band. Both tied
+    # best pairs must be returned instead of one alphabetic pick.
+    for i in (1, 2):
+        _write_resonance(tmp_path / f"L {i}.txt", 3200.0)
+    _write_resonance(tmp_path / "R 1.txt", 3200.0)
+    _write_resonance(tmp_path / "R 2.txt", 9000.0)
+    left, right = detect_measurement_sets(tmp_path)
+    matches, skipped = find_best_balance_pairs(left, right, "L")
+    assert skipped == []
+    assert [n for n, *_ in matches] == ["R1 L1 (1.00)", "R1 L2 (1.00)"]
 
 
 def test_detect_lr_swap_duplicate_include_parity(tmp_path):

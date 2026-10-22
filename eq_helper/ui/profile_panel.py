@@ -460,6 +460,7 @@ class ProfilePanel(QGroupBox):
         ``(eq_file, max_dev_db, description)``. Dialog-free for testability."""
         from eq_helper.apo.writer import atomic_write_with_backup
         from eq_helper.dsp.balance_eq import (
+            balance_target_note,
             effective_other_channel,
             generate_balance_eq,
             generate_midpoint_eqs,
@@ -478,7 +479,11 @@ class ProfilePanel(QGroupBox):
             eqs, max_dev = generate_midpoint_eqs(
                 left_f, left_db, right_f, right_db, self._sr, invert=invert
             )
-            content = render_channel_eqs(eqs)
+            content = (
+                balance_target_note(reference, invert, method)
+                + '\n'
+                + render_channel_eqs(eqs)
+            )
             eq = lib.create_eq_file(preset, "balance midpoint L-R")
             atomic_write_with_backup(Path(eq.path), content)
             return eq, max_dev, "both sides → average (midpoint)"
@@ -492,7 +497,11 @@ class ProfilePanel(QGroupBox):
         ceq, max_dev = generate_balance_eq(
             ref_f, ref_db, oth_f, oth_db, other, self._sr
         )
-        content = render_channel_eqs([ceq])
+        content = (
+            balance_target_note(reference, invert, method)
+            + '\n'
+            + render_channel_eqs([ceq])
+        )
         eq = lib.create_eq_file(preset, f"balance {phys_other} to {reference}")
         atomic_write_with_backup(Path(eq.path), content)
         return eq, max_dev, f"{reference}-referenced (Channel: {other})"
@@ -653,6 +662,7 @@ class ProfilePanel(QGroupBox):
         ``(eq_file, max_dev_db, description)``. Dialog-free for testability."""
         from eq_helper.apo.writer import atomic_write_with_backup
         from eq_helper.dsp.balance_eq import (
+            balance_target_note,
             effective_other_channel,
             generate_balance_eq,
             generate_midpoint_eqs,
@@ -671,7 +681,11 @@ class ProfilePanel(QGroupBox):
             eqs, max_dev = generate_midpoint_eqs(
                 left_f, left_db, right_f, right_db, self._sr, invert=invert
             )
-            content = render_channel_eqs(eqs)
+            content = (
+                balance_target_note(reference, invert, method)
+                + '\n'
+                + render_channel_eqs(eqs)
+            )
             eq = lib.create_eq_file(preset, "balance midpoint L-R")
             atomic_write_with_backup(Path(eq.path), content)
             return eq, max_dev, "both sides → average (midpoint)"
@@ -685,7 +699,11 @@ class ProfilePanel(QGroupBox):
         ceq, max_dev = generate_balance_eq(
             ref_f, ref_db, oth_f, oth_db, other, self._sr
         )
-        content = render_channel_eqs([ceq])
+        content = (
+            balance_target_note(reference, invert, method)
+            + '\n'
+            + render_channel_eqs([ceq])
+        )
         eq = lib.create_eq_file(preset, f"balance {phys_other} to {reference}")
         atomic_write_with_backup(Path(eq.path), content)
         return eq, max_dev, f"{reference}-referenced (Channel: {other})"
@@ -750,10 +768,12 @@ class ProfilePanel(QGroupBox):
         reference: str,
         invert: bool,
         method: str,
+        *,
+        activate: bool = True,
     ) -> Tuple[str, float]:
         """Generate the balance EQ preset from the given smoothed data."""
         from eq_helper.apo.writer import atomic_write_with_backup
-        from eq_helper.dsp.balance_eq import generate_balance_for_pair
+        from eq_helper.dsp.balance_eq import balance_target_note, generate_balance_for_pair
         from eq_helper.dsp.eq_optimize import render_channel_eqs
 
         lib = self._library()
@@ -765,7 +785,11 @@ class ProfilePanel(QGroupBox):
             name, l_f, l_db, r_f, r_db, reference, self._sr,
             invert=invert, method=method
         )
-        content = render_channel_eqs(eqs)
+        content = (
+            balance_target_note(reference, invert, method)
+            + "\n"
+            + render_channel_eqs(eqs)
+        )
         new = lib.create_preset(device, name)
         try:
             eq = lib.create_eq_file(new, name)
@@ -776,13 +800,14 @@ class ProfilePanel(QGroupBox):
             except Exception:
                 pass
             raise
-        lib.activate(new)
+        if activate:
+            lib.activate(new)
         return new.name, max_dev
 
     def _on_balance_batch(self) -> None:
         from eq_helper.ui.balance_batch_dialog import BalanceBatchDialog
         from eq_helper.ui.balance_smoothing_dialog import BalanceSmoothingDialog
-        from eq_helper.dsp.balance_eq import detect_measurement_sets, find_best_balance_pair
+        from eq_helper.dsp.balance_eq import detect_measurement_sets, find_best_balance_pairs
         from eq_helper.dsp.balance_smoothing import smooth_low_frequency_noise
 
         lib = self._library()
@@ -805,21 +830,21 @@ class ProfilePanel(QGroupBox):
         
         try:
             left, right = detect_measurement_sets(folder)
-            best_match, skipped = find_best_balance_pair(
+            matches, skipped = find_best_balance_pairs(
                 left, right, reference, invert=invert, method=method
             )
         except Exception as exc:
             QMessageBox.critical(self, "Balance batch failed", str(exc))
             return
             
-        if not best_match:
+        if not matches:
             QMessageBox.warning(
                 self, "Nothing generated",
                 "No candidates could be found (no usable measurement pairs)."
             )
             return
             
-        name, score, l_f, l_db, r_f, r_db = best_match
+        _name, score, l_f, l_db, r_f, r_db = matches[0]
         
         smooth_dlg = BalanceSmoothingDialog(l_f, l_db, r_f, r_db, parent=self)
         if smooth_dlg.exec() != QDialog.Accepted:
@@ -827,30 +852,47 @@ class ProfilePanel(QGroupBox):
             
         cutoff_hz, smooth_oct = smooth_dlg.parameters()
         
-        l_db_smoothed = smooth_low_frequency_noise(l_f, l_db, cutoff_hz, smooth_oct=smooth_oct)
-        r_db_smoothed = smooth_low_frequency_noise(r_f, r_db, cutoff_hz, smooth_oct=smooth_oct)
-        
+        created: List[str] = []
+        worst = 0.0
         try:
-            created_name, worst = self._do_generate_balance_for_pair(
-                name, l_f, l_db_smoothed, r_f, r_db_smoothed,
-                reference, invert, method
-            )
+            for index, (name, _score, l_f, l_db, r_f, r_db) in enumerate(matches):
+                l_db_smoothed = smooth_low_frequency_noise(
+                    l_f, l_db, cutoff_hz, smooth_oct=smooth_oct
+                )
+                r_db_smoothed = smooth_low_frequency_noise(
+                    r_f, r_db, cutoff_hz, smooth_oct=smooth_oct
+                )
+                # Only the best (first) preset gets activated; the rest land
+                # disabled so you can audition them with the switcher.
+                created_name, max_dev = self._do_generate_balance_for_pair(
+                    name, l_f, l_db_smoothed, r_f, r_db_smoothed,
+                    reference, invert, method, activate=(index == 0),
+                )
+                created.append(created_name)
+                worst = max(worst, max_dev)
         except Exception as exc:
             QMessageBox.critical(self, "Balance batch failed", str(exc))
             return
 
         self._refresh_lists()
         self._emit_curves_for_device(self._current_device())
-        how = (
-            "midpoint: both sides → average"
-            if method == "midpoint"
-            else f"reference {reference}"
-        )
+        if method == "midpoint":
+            how = "midpoint: both sides → average"
+        else:
+            from eq_helper.dsp.balance_eq import effective_other_channel
+            target = effective_other_channel(reference, invert)
+            how = f"reference {reference} → correcting Channel: {target}"
+        if len(created) == 1:
+            head = f"Created the best-scoring balance-EQ preset ({how})"
+        else:
+            head = (
+                f"Created {len(created)} balance-EQ presets tied at score "
+                f"{score:.2f} ({how})"
+            )
         msg = (
-            f"Created the best-scoring balance-EQ preset ({how}). "
-            f"Max deviation: {worst:.3f} dB.\n\n"
-            f"The batch ranked all usable Left/Right pairings internally, then "
-            f"kept the top one."
+            f"{head}. Max deviation: {worst:.3f} dB.\n\n"
+            f"The batch ranked all usable Left/Right pairings internally and kept "
+            f"every pairing tied for the best score."
         )
         if skipped:
             msg += (

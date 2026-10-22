@@ -27,6 +27,11 @@ Feature = Tuple[float, float, int]
 _F_MIN, _F_MAX = 20.0, 20000.0
 _LOG2 = math.log10(2.0)
 
+# Detection band used first (sharp treble features). When it holds no features
+# at all — a smooth treble whose only insertion-sensitive feature is the
+# ~3 kHz canal resonance — scoring retries from FALLBACK_LO_HZ.
+FALLBACK_LO_HZ = 2000.0
+
 
 def detect_features(
     freqs: np.ndarray,
@@ -108,6 +113,22 @@ def alignment_score(
     return float(np.sum(w * s) / np.sum(w))
 
 
+def alignment_score_from_features(
+    feats_a: List[Feature],
+    wide_feats_a: List[Feature],
+    feats_b: List[Feature],
+    wide_feats_b: List[Feature],
+    **kwargs,
+) -> float:
+    """Alignment score with a band fallback: score the primary 6–14 kHz
+    features first; only when they match nothing at all (score ``0.0``), retry
+    on the wider-band features so smooth-treble measurements still rank."""
+    score = alignment_score(feats_a, feats_b, **kwargs)
+    if score > 0.0:
+        return score
+    return alignment_score(wide_feats_a, wide_feats_b, **kwargs)
+
+
 def alignment_score_from_measurements(
     ref_freqs: np.ndarray,
     ref_db: np.ndarray,
@@ -115,10 +136,15 @@ def alignment_score_from_measurements(
     mic_db: np.ndarray,
     **kwargs,
 ) -> float:
-    """Compute the same 0–1 alignment score used by balance generation."""
-    ref_feats = detect_features(ref_freqs, ref_db)
-    mic_feats = detect_features(mic_freqs, mic_db)
-    return alignment_score(ref_feats, mic_feats, **kwargs)
+    """Compute the same 0–1 alignment score used by balance generation
+    (including its wider-band fallback)."""
+    return alignment_score_from_features(
+        detect_features(ref_freqs, ref_db),
+        detect_features(ref_freqs, ref_db, lo=FALLBACK_LO_HZ),
+        detect_features(mic_freqs, mic_db),
+        detect_features(mic_freqs, mic_db, lo=FALLBACK_LO_HZ),
+        **kwargs,
+    )
 
 
 def sub_bass_metric(

@@ -4,10 +4,20 @@ import numpy as np
 
 from eq_helper.dsp.balance_score import (
     alignment_score,
+    alignment_score_from_measurements,
     detect_features,
     detect_seal_loss,
     sub_bass_metric,
 )
+
+
+def _meas_multi(*peaks):
+    f = np.geomspace(20, 20000, 3000)
+    lf = np.log10(f)
+    db = np.full_like(f, 80.0)
+    for hz in peaks:
+        db += 6 * np.exp(-((lf - np.log10(hz)) ** 2) / (2 * 0.02 ** 2))
+    return f, db
 
 
 def _meas_with_features(peak_hz=None, dip_hz=None, gain=0.0, noise=0.0):
@@ -86,6 +96,24 @@ def test_alignment_shared_resonance_optimal_not_greedy():
     b = [(10500.0, 4.0, 1), (12500.0, 4.0, 1)]
     assert alignment_score(a, b) > 0.9
     assert alignment_score(a, b) == alignment_score(b, a)  # symmetric
+
+
+def test_alignment_measurements_falls_back_to_wide_band():
+    # Only a ~3.2 kHz resonance: nothing in the primary 6-14kHz band, so the
+    # wide-band fallback must still produce a (perfect) score.
+    fa, da = _meas_multi(3200)
+    fb, db = _meas_multi(3200)
+    assert detect_features(fa, da) == [] and detect_features(fb, db) == []
+    assert alignment_score_from_measurements(fa, da, fb, db) > 0.99
+
+
+def test_alignment_measurements_prefers_primary_band():
+    # Shared exact 9 kHz peak + disagreeing 3.2/3.6 kHz peaks: the primary
+    # band's perfect match wins, so the shifted canal resonance can't drag the
+    # score down (and the fallback must not run).
+    fa, da = _meas_multi(3200, 9000)
+    fb, db = _meas_multi(3600, 9000)
+    assert alignment_score_from_measurements(fa, da, fb, db) > 0.99
 
 
 def _bass(sub_db, mid_db=0.0):

@@ -14,7 +14,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QDialogButtonBox
 
 from eq_helper.apo.presets import PresetLibrary
-from eq_helper.dsp.balance_eq import detect_measurement_sets, find_best_balance_pair
+from eq_helper.dsp.balance_eq import detect_measurement_sets, find_best_balance_pairs
 from eq_helper.ui.balance_batch_dialog import BalanceBatchDialog
 from eq_helper.ui.profile_panel import ProfilePanel
 
@@ -56,18 +56,21 @@ def _panel(tmp_path: Path, qtbot) -> ProfilePanel:
 
 
 def _do_batch_helper(panel, folder, reference, invert, method="reference"):
-    """Replaces the removed _do_balance_batch: find best pair and generate."""
+    """Replaces the removed _do_balance_batch: find best pairs and generate."""
     left, right = detect_measurement_sets(folder)
-    best, skipped = find_best_balance_pair(
+    matches, skipped = find_best_balance_pairs(
         left, right, reference, invert=invert, method=method
     )
-    if not best:
-        return [], 0.0, len(skipped)
-    name, score, l_f, l_db, r_f, r_db = best
-    created, worst = panel._do_generate_balance_for_pair(
-        name, l_f, l_db, r_f, r_db, reference, invert, method
-    )
-    return [created], worst, len(skipped)
+    created: list = []
+    worst = 0.0
+    for index, (name, _score, l_f, l_db, r_f, r_db) in enumerate(matches):
+        created_name, max_dev = panel._do_generate_balance_for_pair(
+            name, l_f, l_db, r_f, r_db, reference, invert, method,
+            activate=(index == 0),
+        )
+        created.append(created_name)
+        worst = max(worst, max_dev)
+    return created, worst, len(skipped)
 
 
 def test_batch_dialog_method_disables_reference(tmp_path, qtbot):
@@ -85,12 +88,13 @@ def test_do_balance_batch_midpoint_two_blocks(tmp_path, qtbot):
     _measurements(folder, 2, 2)
     panel = _panel(tmp_path, qtbot)
     created, worst, skipped = _do_batch_helper(panel, folder, "L", False, "midpoint")
-    assert len(created) == 1
+    # no detectable features -> all 4 pairings tie at 0.00 and are kept
+    assert len(created) == 4
     lib = PresetLibrary(tmp_path)
-    cand = next(p for p in lib.list_presets("HD600") if _CAND.search(p.name))
-    content = Path(lib.list_eq_files(cand)[0].path).read_text(encoding="utf-8")
-    assert "Channel: L" in content and "Channel: R" in content
-    assert content.rstrip().endswith("Channel: all")
+    for cand in (p for p in lib.list_presets("HD600") if _CAND.search(p.name)):
+        content = Path(lib.list_eq_files(cand)[0].path).read_text(encoding="utf-8")
+        assert "Channel: L" in content and "Channel: R" in content
+        assert content.rstrip().endswith("Channel: all")
 
 
 def test_batch_dialog_counts_and_ok(tmp_path, qtbot):
@@ -104,24 +108,55 @@ def test_batch_dialog_counts_and_ok(tmp_path, qtbot):
     assert "3 Left" in dlg._found_label.text()
     assert "2 Right" in dlg._found_label.text()
     assert dlg.reference() == "L"
+    assert "Channel: R" in dlg.target_label.text()
+    dlg.ref_right.setChecked(True)
+    assert "Channel: L" in dlg.target_label.text()  # reference R -> correct L
+    dlg.invert_check.setChecked(True)
+    assert "Channel: R" in dlg.target_label.text()
 
 
-def test_do_balance_batch_creates_only_best_preset_and_activates_it(tmp_path, qtbot):
+def _preset_eq_text(tmp_path: Path, name: str) -> str:
+    lib = PresetLibrary(tmp_path)
+    preset = next(p for p in lib.list_presets("HD600") if p.name == name)
+    return Path(lib.list_eq_files(preset)[0].path).read_text(encoding="utf-8")
+
+
+def test_batch_reference_right_corrects_left_channel(tmp_path, qtbot):
+    folder = tmp_path / "meas"
+    _measurements(folder, 1, 1)
+    panel = _panel(tmp_path, qtbot)
+
+    created, _worst, _skipped = _do_batch_helper(panel, folder, "R", False)
+    content = _preset_eq_text(tmp_path, created[0])
+    lines = content.splitlines()
+    assert lines[0].startswith("# Balance: reference side R")
+    assert "Channel: L" in lines
+    assert "Channel: R" not in lines  # reference side must stay untouched
+    assert lines[-1] == "Channel: all"
+
+    created, _worst, _skipped = _do_batch_helper(panel, folder, "R", True)
+    content = _preset_eq_text(tmp_path, created[0])
+    assert "Channel: R" in content.splitlines()  # config swap -> opposite APO channel
+
+
+def test_do_balance_batch_creates_tied_presets_and_activates_first(tmp_path, qtbot):
     folder = tmp_path / "meas"
     _measurements(folder, 3, 3)
     panel = _panel(tmp_path, qtbot)
 
     created, worst, skipped = _do_batch_helper(panel, folder, "L", False)
-    assert len(created) == 1
-    assert re.search(r"\(\d\.\d\d\)$", created[0])
+    # synthetic measurements have no detectable features -> all 9 pairings tie
+    # at 0.00; every tied pairing is kept instead of one alphabetic pick
+    assert len(created) == 9
+    assert all(re.search(r"\(\d\.\d\d\)$", name) for name in created)
     assert skipped == 0
 
     lib = PresetLibrary(tmp_path)
     presets = lib.list_presets("HD600")
     bal = [p for p in presets if _CAND.search(p.name)]
-    assert len(bal) == 1
+    assert len(bal) == 9
     active = lib.active_preset("HD600")
-    assert active is not None and _CAND.search(active.name)
+    assert active is not None and active.name == created[0]
     content = Path(lib.list_eq_files(bal[0])[0].path).read_text(encoding="utf-8")
     assert "Channel: R" in content and content.rstrip().endswith("Channel: all")
 

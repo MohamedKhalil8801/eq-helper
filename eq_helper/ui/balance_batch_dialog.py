@@ -90,11 +90,24 @@ class BalanceBatchDialog(QDialog):
 
         self.invert_check = QCheckBox("Invert L/R (config swaps channels)")
         self.invert_check.setChecked(initial_invert)
+        self.invert_check.setToolTip(
+            "Check when the APO config swaps L/R (Copy: L=R R=L): the EQ is"
+            " then written for the opposite APO channel so it still reaches"
+            " the intended earpiece."
+        )
         if swap_detected:
             self.invert_check.setText(
                 "Invert L/R (channel swap detected in this preset)"
             )
         layout.addWidget(self.invert_check)
+
+        self.target_label = QLabel("")
+        self.target_label.setWordWrap(True)
+        layout.addWidget(self.target_label)
+        for radio in (self.ref_left, self.ref_right):
+            radio.toggled.connect(self._update_target_hint)
+        self.invert_check.toggled.connect(self._update_target_hint)
+        self._update_target_hint()
 
         self._buttons = QDialogButtonBox(
             QDialogButtonBox.Ok | QDialogButtonBox.Cancel
@@ -144,3 +157,18 @@ class BalanceBatchDialog(QDialog):
         ref_relevant = self.method_reference.isChecked()
         for w in (self._ref_label, self.ref_left, self.ref_right):
             w.setEnabled(ref_relevant)
+        self._update_target_hint()
+
+    def _update_target_hint(self) -> None:
+        from eq_helper.dsp.balance_eq import effective_other_channel
+
+        if self.method_midpoint.isChecked():
+            self.target_label.setText(
+                "Both sides will be corrected halfway toward the average."
+            )
+            return
+        ref = self.reference()
+        other = effective_other_channel(ref, self.invert_check.isChecked())
+        self.target_label.setText(
+            f"Will correct Channel: {other} — reference side {ref} stays untouched."
+        )

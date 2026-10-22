@@ -6,6 +6,7 @@ import pytest
 from eq_helper.dsp.balance_eq import (
     balance_correction,
     generate_balance_eq,
+    generate_balance_for_pair,
     generate_midpoint_eqs,
 )
 from eq_helper.dsp.graphic_eq import graphic_eq_response
@@ -92,3 +93,33 @@ def test_midpoint_invert_swaps_channel_labels():
     v = {e.channels[0]: graphic_eq_response(e.geq.bands, f) for e in inverted}
     assert np.allclose(n["L"], v["R"], atol=1e-6)
     assert np.allclose(n["R"], v["L"], atol=1e-6)
+
+
+def _asymmetric_sides():
+    f = np.geomspace(20, 20000, 800)
+    lf = np.log10(f)
+    L = 3.0 + 2 * np.exp(-((lf - np.log10(3000)) ** 2) / (2 * 0.04 ** 2))
+    R = 1.0 - 2 * np.exp(-((lf - np.log10(6000)) ** 2) / (2 * 0.05 ** 2))
+    return f, L, R
+
+
+def test_reference_right_corrects_left_only():
+    f, L, R = _asymmetric_sides()
+    _, eqs, _ = generate_balance_for_pair("p", f, L, f, R, "R", 48000)
+    assert [e.channels for e in eqs] == [("L",)]  # R stays untouched
+    corr = graphic_eq_response(eqs[0].geq.bands, f)
+    assert np.max(np.abs((L + corr) - R)) < 0.15  # L moved onto R
+
+
+def test_reference_right_with_invert_targets_right():
+    f, L, R = _asymmetric_sides()
+    _, eqs, _ = generate_balance_for_pair("p", f, L, f, R, "R", 48000, invert=True)
+    assert [e.channels for e in eqs] == [("R",)]
+
+
+def test_reference_left_corrects_right_only():
+    f, L, R = _asymmetric_sides()
+    _, eqs, _ = generate_balance_for_pair("p", f, L, f, R, "L", 48000)
+    assert [e.channels for e in eqs] == [("R",)]
+    corr = graphic_eq_response(eqs[0].geq.bands, f)
+    assert np.max(np.abs((R + corr) - L)) < 0.15  # R moved onto L

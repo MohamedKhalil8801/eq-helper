@@ -26,7 +26,8 @@ from eq_helper.dsp.eq_optimize import (
     realized_response_db,
 )
 from eq_helper.dsp.balance_score import (
-    alignment_score,
+    FALLBACK_LO_HZ,
+    alignment_score_from_features,
     detect_features,
     detect_seal_loss,
     sub_bass_metric,
@@ -89,6 +90,25 @@ def effective_other_channel(reference: str, invert: bool = False) -> str:
     if invert:
         other = "L" if other == "R" else "R"
     return other
+
+
+def balance_target_note(reference: str, invert: bool = False, method: str = "reference") -> str:
+    """One-line APO comment stating which side the generated EQ corrects.
+
+    Written into the EQ file header so the intent survives hand-edits and is
+    visible when opening the file: with ``reference R`` the R side is untouched
+    and ``Channel: L`` is corrected (flipped when ``invert`` is set).
+    """
+    if method == "midpoint":
+        return "# Balance: midpoint - both sides moved halfway toward the average"
+    ref = reference.upper()
+    other = effective_other_channel(ref, invert)
+    swapped = " (invert: L/R are swapped by the APO config)" if invert else ""
+    return (
+        f"# Balance: reference side {ref} stays untouched - "
+        f"correction applied to Channel: {other}{swapped}"
+    )
+
 
 
 def _interp_db_loglinear(freqs: np.ndarray, db: np.ndarray, grid: np.ndarray) -> np.ndarray:
@@ -239,7 +259,7 @@ def _fallback_labels(side_set: List[Tuple[Optional[int], Path]]) -> List[int]:
     return labels
 
 
-def find_best_balance_pair(
+def find_best_balance_pairs(
     left: List[Tuple[Optional[int], Path]],
     right: List[Tuple[Optional[int], Path]],
     reference: str,
@@ -247,13 +267,16 @@ def find_best_balance_pair(
     invert: bool = False,
     method: str = "reference",
 ) -> Tuple[
-    Optional[Tuple[str, float, np.ndarray, np.ndarray, np.ndarray, np.ndarray]],
+    List[Tuple[str, float, np.ndarray, np.ndarray, np.ndarray, np.ndarray]],
     List[Tuple[str, str]]
 ]:
-    """Find the best-scoring Left/Right measurement pair.
-    
-    Returns ``(best_match, skipped)`` where ``best_match`` is 
-    ``(name, score, l_f, l_db, r_f, r_db)`` or None if no valid pairs exist."""
+    """Find the best-scoring Left/Right measurement pairs.
+
+    Returns ``(best_matches, skipped)`` where ``best_matches`` are ALL pairs tied
+    at the top score (same seal status and same displayed 0.00–1.00 score, name
+    order), each ``(name, score, l_f, l_db, r_f, r_db)``; empty when no valid
+    pair exists. Keeping every tied pair stops a single alphabetic pick from
+    silently standing in for equally-scored candidates."""
     if not left or not right:
         raise ValueError("need at least one Left and one Right measurement")
     ref_side = reference.upper()
@@ -262,6 +285,7 @@ def find_best_balance_pair(
 
     loaded: dict = {}
     feats: dict = {}
+    wide_feats: dict = {}
     metrics: dict = {}
 
     def _prep(path: Path, side: str, label: int):
@@ -274,6 +298,7 @@ def find_best_balance_pair(
             loaded[key] = fd
             if fd is not None:
                 feats[key] = detect_features(fd[0], fd[1])
+                wide_feats[key] = detect_features(fd[0], fd[1], lo=FALLBACK_LO_HZ)
                 metrics[(side, label)] = sub_bass_metric(fd[0], fd[1])
         return loaded[key]
 
@@ -315,17 +340,26 @@ def find_best_balance_pair(
                 skipped.append((base, str(exc)))
                 continue
                 
-            score = alignment_score(feats[str(lpath)], feats[str(rpath)])
+            score = alignment_score_from_features(
+                feats[str(lpath)], wide_feats[str(lpath)],
+                feats[str(rpath)], wide_feats[str(rpath)],
+            )
             any_seal = (("L", li) in flagged) or (("R", rj) in flagged)
             scored.append((any_seal, score, f"{base} ({score:.2f})", l_fd[0], l_fd[1], r_fd[0], r_fd[1]))
 
     scored.sort(key=lambda t: (t[0], -t[1], t[2]))
-    
+
     if not scored:
-        return None, skipped
-        
-    _seal, score, name, l_f, l_db, r_f, r_db = scored[0]
-    return (name, score, l_f, l_db, r_f, r_db), skipped
+        return [], skipped
+
+    top_seal, top_score = scored[0][0], scored[0][1]
+    top_key = f"{top_score:.2f}"
+    matches = [
+        (name, score, l_f, l_db, r_f, r_db)
+        for seal, score, name, l_f, l_db, r_f, r_db in scored
+        if seal == top_seal and f"{score:.2f}" == top_key
+    ]
+    return matches, skipped
 
 
 def generate_balance_for_pair(

@@ -80,6 +80,44 @@ def test_do_balance_adds_channel_scoped_eq(tmp_path, qtbot):
     assert any("balance R to L" in n for n in names)
 
 
+def test_dialog_target_hint_follows_reference_and_invert(qtbot):
+    dlg = BalanceEqDialog()
+    qtbot.addWidget(dlg)
+    assert "Channel: R" in dlg.target_label.text()  # ref L default -> correct R
+    dlg.ref_right.setChecked(True)
+    assert "Channel: L" in dlg.target_label.text()  # ref R -> correct L
+    dlg.invert_check.setChecked(True)
+    assert "Channel: R" in dlg.target_label.text()  # swapped config flips back
+    dlg.method_midpoint.setChecked(True)
+    assert "average" in dlg.target_label.text()
+
+
+def test_do_balance_reference_right_corrects_left_only(tmp_path, qtbot):
+    left = tmp_path / "L.csv"
+    right = tmp_path / "R.csv"
+    _write_measurement(left, 3000, 4.0)
+    _write_measurement(right, 6000, -3.0)
+    panel = _panel(tmp_path, qtbot)
+
+    eq, max_dev, desc = panel._do_balance(str(left), str(right), "R")
+    assert "Channel: L" in desc  # reference R -> corrects L, R untouched
+    content = Path(eq.path).read_text(encoding="utf-8")
+    lines = content.splitlines()
+    assert lines[0].startswith("# Balance: reference side R")
+    assert "Channel: L" in lines
+    assert "Channel: R" not in lines  # the reference side must never be targeted
+    assert max_dev < 0.1
+
+    lib = PresetLibrary(tmp_path)
+    preset = lib.active_preset("HD600")
+    names = [e.name for e in lib.list_eq_files(preset)]
+    assert any("balance L to R" in n for n in names)
+
+    eq_r, _, desc_r = panel._do_balance(str(left), str(right), "R", invert=True)
+    assert "Channel: R" in desc_r  # swapped config: target the opposite APO channel
+    assert "Channel: R" in Path(eq_r.path).read_text(encoding="utf-8")
+
+
 def test_do_balance_without_active_preset_raises(tmp_path, qtbot):
     (tmp_path / "config.txt").write_text(f"{DEV}\n", encoding="utf-8")
     panel = ProfilePanel(get_override=lambda: str(tmp_path))
