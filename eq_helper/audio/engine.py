@@ -272,6 +272,12 @@ class AudioEngine:
                 callback=callback,
             )
             stream.start()
+            actual_rate = getattr(stream, "samplerate", None)
+            if actual_rate is not None:
+                try:
+                    self.sample_rate = int(actual_rate)
+                except (TypeError, ValueError):
+                    pass
             return stream
         except Exception:  # noqa: BLE001
             return None

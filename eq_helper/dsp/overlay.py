@@ -110,10 +110,25 @@ def normalize_at_1khz(freqs: np.ndarray, db: np.ndarray) -> np.ndarray:
 
 
 def save_measurement_csv(path: str | Path, freqs: np.ndarray, db: np.ndarray) -> None:
-    """Write a measurement file in REW/AutoEQ compatible CSV format."""
+    """Write a measurement file in REW/AutoEQ compatible format.
+
+    If the target path has a ``.txt`` suffix, the file is written in REW
+    export text format. Otherwise it is written as a standard AutoEQ-style CSV.
+    """
     p = Path(path)
     if freqs.ndim != 1 or db.ndim != 1 or freqs.size != db.size:
         raise ValueError("freqs and db must be 1-D arrays of equal length")
-    lines = ["Frequency (Hz),Raw (dB)"]
-    lines.extend(f"{float(f):.6f},{float(d):.6f}" for f, d in zip(freqs, db))
+
+    if p.suffix.lower() == ".txt":
+        lines = [
+            "* Measurement data measured by REW V5",
+            "* Freq(Hz) SPL(dB) Phase(degrees)",
+        ]
+        lines.extend(
+            f"{float(f):.3f}\t{float(d):.2f}\t0.0" for f, d in zip(freqs, db)
+        )
+    else:
+        lines = ["Frequency (Hz),Raw (dB)"]
+        lines.extend(f"{float(f):.6f},{float(d):.6f}" for f, d in zip(freqs, db))
+
     p.write_text("\n".join(lines) + "\n", encoding="utf-8")

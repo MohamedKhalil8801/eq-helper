@@ -10,7 +10,13 @@ import pytest
 pytest.importorskip("pytestqt")
 
 from eq_helper.audio.engine import AudioEngine
-from eq_helper.dsp.overlay import load_measurement_csv, save_measurement_csv
+from eq_helper.audio.generators import LogSweepGenerator
+from eq_helper.dsp.overlay import (
+    load_frequency_response,
+    load_measurement_csv,
+    save_measurement_csv,
+)
+from eq_helper.dsp.sweep_measurement import measurement_from_sweep_recording
 from eq_helper.ui.live_balance_dialog import LiveBalanceDialog
 from eq_helper.ui.profile_panel import ProfilePanel
 
@@ -74,6 +80,30 @@ def test_live_balance_dialog_saves_best_measurement(qtbot, tmp_path):
     assert dlg._best_score > 0.0
     assert dlg._best_path is not None
     assert Path(dlg._best_path).exists()
+    assert Path(dlg._best_path).suffix == ".txt"
+
+
+def test_live_balance_dialog_enables_mic_monitoring(qtbot, tmp_path):
+    ref_path = tmp_path / "ref.csv"
+    _write_measurement(ref_path, 10000.0, 12.0)
+
+    engine = AudioEngine()
+    assert not engine.state.snapshot().mic_monitoring
+    dlg = LiveBalanceDialog(engine)
+    qtbot.addWidget(dlg)
+    dlg.load_reference_measurement(str(ref_path))
+
+    assert engine.state.snapshot().mic_monitoring is True
+
+
+def test_save_measurement_txt_roundtrips(tmp_path):
+    path = tmp_path / "out.txt"
+    f = np.geomspace(20.0, 20000.0, 10)
+    db = np.linspace(-5.0, 5.0, len(f))
+    save_measurement_csv(path, f, db)
+    f2, db2 = load_frequency_response(path)
+    assert np.allclose(f2, f, atol=1e-3)
+    assert np.allclose(db2, db, atol=1e-2)
 
 
 def test_save_measurement_csv_roundtrips(tmp_path):
@@ -84,3 +114,30 @@ def test_save_measurement_csv_roundtrips(tmp_path):
     f2, db2 = load_measurement_csv(path)
     assert np.allclose(f2, f)
     assert np.allclose(db2, db)
+
+
+def test_sweep_measurement_preserves_peak_frequency() -> None:
+    sr = 48000
+    f_start = 20.0
+    f_end = 20000.0
+    duration = 8.0
+
+    sweep = LogSweepGenerator(f_start, f_end, duration, sr, loop=False)
+    n = int(sr * duration)
+    out = np.empty(n, dtype=np.float64)
+    written = 0
+    while written < n:
+        frames = min(2048, n - written)
+        out[written : written + frames] = sweep.next_block(frames).astype(np.float64)
+        written += frames
+
+    freqs = np.fft.rfftfreq(n, d=1.0 / sr)
+    mag = np.ones_like(freqs, dtype=np.float64)
+    mag[(freqs > 7000) & (freqs < 9000)] *= 2.0
+    ir = np.fft.irfft(mag)
+    response = np.convolve(out, ir, mode="full")[:n] + 0.001 * np.random.randn(n)
+
+    measured_freqs, _ = measurement_from_sweep_recording(response, sr, f_start, f_end, duration)
+    idx = int(np.argmin(np.abs(measured_freqs - 8000.0)))
+
+    assert measured_freqs[idx] == pytest.approx(8000.0, rel=0.05)
