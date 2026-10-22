@@ -39,13 +39,17 @@ from eq_helper.dsp.biquad import (
 _FILTER_BUILDERS = {
     "PK": lambda f, fs: peaking_sos(f.fc_hz, f.gain_db, f.q, fs),
     "LS": lambda f, fs: low_shelf_sos(f.fc_hz, f.gain_db, f.q, fs),
+    "LSC": lambda f, fs: low_shelf_sos(f.fc_hz, f.gain_db, f.q, fs),
     "HS": lambda f, fs: high_shelf_sos(f.fc_hz, f.gain_db, f.q, fs),
+    "HSC": lambda f, fs: high_shelf_sos(f.fc_hz, f.gain_db, f.q, fs),
     "LP": lambda f, fs: lowpass_sos(f.fc_hz, f.q, fs),
+    "LPQ": lambda f, fs: lowpass_sos(f.fc_hz, f.q, fs),
     "HP": lambda f, fs: highpass_sos(f.fc_hz, f.q, fs),
+    "HPQ": lambda f, fs: highpass_sos(f.fc_hz, f.q, fs),
 }
 
 _FILTER_RE = re.compile(
-    r"^\s*Filter\s*\d*\s*:\s*(?P<on>ON|OFF)\s+"
+    r"^\s*Filter\s*(?P<index>\d*)\s*:\s*(?P<on>ON|OFF)\s+"
     r"(?P<type>[A-Za-z]+)\s+"
     r"Fc\s+(?P<fc>[-+0-9.eE]+)\s*Hz"
     r"(?:\s+Gain\s+(?P<gain>[-+0-9.eE]+)\s*dB)?"
@@ -137,23 +141,49 @@ def filters_to_apo_text(
 
 def parse_apo_filters(text: str) -> List[EQFilter]:
     """Parse APO-format text into a list of EQFilter objects."""
-    filters = []
-    for line in text.splitlines():
-        m = _FILTER_RE.match(line)
-        if not m:
-            continue
-        gain_str = m.group("gain")
-        q_str = m.group("q")
-        filters.append(
-            EQFilter(
-                filter_type=m.group("type").upper(),
-                fc_hz=float(m.group("fc")),
-                gain_db=float(gain_str) if gain_str else 0.0,
-                q=float(q_str) if q_str else 0.707,
-                enabled=m.group("on").upper() == "ON",
-            )
-        )
-    return filters
+    return [f for _index, f in parse_apo_filters_with_lines(text)]
+
+
+def parse_apo_filters_with_lines(text: str) -> List[tuple[int, EQFilter]]:
+    """Parse filters and keep the 0-based line index each one came from."""
+    out: List[tuple[int, EQFilter]] = []
+    for i, line in enumerate(text.splitlines()):
+        f = _filter_from_line(line)
+        if f is not None:
+            out.append((i, f))
+    return out
+
+
+def match_filter_line(line: str) -> Optional[re.Match]:
+    """Return the regex match for a ``Filter N: ...`` line, if any."""
+    return _FILTER_RE.match(line)
+
+
+def _filter_from_line(line: str) -> Optional[EQFilter]:
+    m = _FILTER_RE.match(line)
+    if not m:
+        return None
+    gain_str = m.group("gain")
+    q_str = m.group("q")
+    return EQFilter(
+        filter_type=m.group("type").upper(),
+        fc_hz=float(m.group("fc")),
+        gain_db=float(gain_str) if gain_str else 0.0,
+        q=float(q_str) if q_str else 0.707,
+        enabled=m.group("on").upper() == "ON",
+    )
+
+
+def format_apo_number(value: float) -> str:
+    """Shortest text that parses back to exactly ``value``.
+
+    Unlike ``str(float)`` this keeps integers integral (``20`` not ``20.0``)
+    and unlike ``f"{v:g}"`` it never silently rounds to 6 significant digits.
+    """
+    value = float(value)
+    if value.is_integer():
+        return str(int(value))
+    return repr(value)
 
 
 def write_apo_file(

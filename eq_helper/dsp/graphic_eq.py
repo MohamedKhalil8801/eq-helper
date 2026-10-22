@@ -252,12 +252,12 @@ def graphic_eq_to_apo_text(geq: GraphicEQ) -> str:
     sorted_bands = sorted(geq.bands, key=lambda b: b.freq_hz)
     pairs = []
     for b in sorted_bands:
-        # APO uses integer Hz for whole numbers, decimals otherwise.
-        if b.freq_hz == int(b.freq_hz):
+        # Whole Hz stays integral; anything else keeps full float precision.
+        if float(b.freq_hz).is_integer():
             f_str = str(int(b.freq_hz))
         else:
-            f_str = f"{b.freq_hz:.1f}"
-        pairs.append(f"{f_str} {b.gain_db}")
+            f_str = repr(float(b.freq_hz))
+        pairs.append(f"{f_str} {repr(float(b.gain_db))}")
     return "GraphicEQ: " + "; ".join(pairs)
 
 

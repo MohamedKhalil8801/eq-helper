@@ -43,13 +43,16 @@ def set_write_observer(observer: Optional[Callable[[Path, str], None]]) -> None:
     _write_observer = observer
 
 
-def atomic_write_with_backup(path: Path, content: str) -> None:
+def atomic_write_with_backup(
+    path: Path, content: str, *, encoding: str = "utf-8"
+) -> None:
     """Write ``content`` to ``path`` atomically, backing up the original once.
 
     If ``path`` already exists and no ``.eqhelper.bak`` is present yet, copy it
     to the backup first (so the user's pre-edit content is always recoverable).
-    New files are written without a backup (nothing to preserve). Notifies the
-    write observer (if any) after a successful write.
+    New files are written without a backup (nothing to preserve). ``encoding``
+    lets callers round-trip files that are not UTF-8 (legacy APO configs are
+    often ANSI). Notifies the write observer (if any) after a successful write.
     """
     if path.exists():
         backup = path.with_suffix(path.suffix + _BACKUP_SUFFIX)
@@ -58,7 +61,7 @@ def atomic_write_with_backup(path: Path, content: str) -> None:
                 shutil.copy2(path, backup)
             except OSError as exc:
                 raise ApoWriteError(f"cannot back up {path}: {exc}") from exc
-    _atomic_write_text(path, content)
+    _atomic_write_text(path, content, encoding)
     if _write_observer is not None:
         try:
             _write_observer(path, content)
@@ -113,7 +116,7 @@ def toggle_includes(
     )
 
 
-def _atomic_write_text(target: Path, content: str) -> None:
+def _atomic_write_text(target: Path, content: str, encoding: str = "utf-8") -> None:
     """Write ``content`` to ``target`` via tempfile + os.replace, with retries.
 
     On Windows, ``os.replace`` can fail with ``WinError 5 (Access denied)``
@@ -129,7 +132,7 @@ def _atomic_write_text(target: Path, content: str) -> None:
         dir=str(target_dir),
     )
     try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
+        with os.fdopen(fd, "w", encoding=encoding, newline="") as f:
             f.write(content)
         last_exc: Optional[OSError] = None
         for attempt in range(_RETRY_ATTEMPTS):
