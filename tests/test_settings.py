@@ -7,6 +7,17 @@ from pathlib import Path
 from eq_helper.storage.settings import DEFAULTS, load_settings, save_settings
 
 
+def test_personal_treble_settings_defaults_and_round_trip(tmp_path: Path) -> None:
+    target = tmp_path / 'settings.json'
+    loaded = load_settings(target)
+    assert loaded['resonance_personal_treble_enabled'] is False
+    assert loaded['resonance_personal_treble_peaks_hz'] == {}
+    loaded['resonance_personal_treble_enabled'] = True
+    loaded['resonance_personal_treble_peaks_hz'] = {'L': 13500.0}
+    save_settings(loaded, target)
+    assert load_settings(target)['resonance_personal_treble_peaks_hz'] == {'L': 13500.0}
+
+
 def test_load_defaults_when_missing(tmp_path: Path) -> None:
     target = tmp_path / "nope.json"
     s = load_settings(target)

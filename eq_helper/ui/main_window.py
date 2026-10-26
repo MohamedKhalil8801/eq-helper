@@ -82,6 +82,9 @@ class MainWindow(QMainWindow):
         self.test_songs_panel = TestSongsPanel()
         self.test_songs_dialog = TestSongsDialog(self.test_songs_panel, self)
         self.test_songs_button = QPushButton("Test Songs…")
+        self.resonance_button = QPushButton("Resonance EQ…")
+        self.resonance_button.clicked.connect(self._open_resonance_dialog)
+        self._resonance_dialog = None
         self.eq_panel = EQModePanel(self.engine)
         self.graphic_eq_panel = GraphicEQPanel()
 
@@ -112,6 +115,7 @@ class MainWindow(QMainWindow):
         left_col.addWidget(self.mic_section)
         left_col.addWidget(self.band_section)
         left_col.addWidget(self.eq_library, 1)
+        left_col.addWidget(self.resonance_button)
         left_col.addWidget(self.test_songs_button)
         left_container = QWidget()
         left_container.setLayout(left_col)
@@ -505,6 +509,8 @@ class MainWindow(QMainWindow):
         if self.engine.state.snapshot().mode != Mode.SINE:
             self.audio_panel._on_play_sine()
             self.audio_panel._set_active(self.audio_panel.btn_sine)
+        # The slider is coarser than graph clicks; keep the audition exact.
+        self.engine.set_freq(hz)
 
     def _on_focus_sweep_requested(self, hz: float) -> None:
         """Shift+click on the spectrum: centre on this frequency and start a
@@ -513,7 +519,9 @@ class MainWindow(QMainWindow):
         hz = max(20.0, min(20000.0, hz))
         self.engine.set_freq(hz)
         self.audio_panel.freq_slider.set_value(math.log10(hz))
-        self.audio_panel.trigger_focus_sweep()
+        self.audio_panel.trigger_focus_sweep_band(
+            hz, self.audio_panel._focus_width_octaves()
+        )
 
     # -------- curves (measurement + EQ from profile panel)
 
@@ -551,6 +559,21 @@ class MainWindow(QMainWindow):
 
         dlg = LiveBalanceDialog(self.engine, parent=self)
         dlg.exec()
+
+    def _open_resonance_dialog(self) -> None:
+        from eq_helper.ui.resonance_dialog import ResonanceDialog
+
+        if self._resonance_dialog is None:
+            self._resonance_dialog = ResonanceDialog(self)
+            self._resonance_dialog.finished.connect(self._on_resonance_closed)
+        self._resonance_dialog.show()
+        self._resonance_dialog.raise_()
+        self._resonance_dialog.activateWindow()
+
+    def _on_resonance_closed(self, _result) -> None:
+        self._resonance_dialog.deleteLater()
+        self._resonance_dialog = None
+        self.profile_panel._refresh_lists()
 
     # -------- APO path
 
@@ -594,6 +617,11 @@ class MainWindow(QMainWindow):
             pass
 
     def closeEvent(self, event) -> None:  # noqa: D401
+        if self._resonance_dialog is not None:
+            self._resonance_dialog.reject()
+            if self._resonance_dialog is not None:
+                event.ignore()
+                return
         self._save_timer.stop()
         self._save_now()
         try:

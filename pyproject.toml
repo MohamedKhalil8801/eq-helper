@@ -30,6 +30,9 @@ where = ["."]
 include = ["eq_helper*"]
 exclude = ["tests*"]
 
+[tool.setuptools.package-data]
+"eq_helper.dsp" = ["nova_w1.npz"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 qt_api = "pyside6"

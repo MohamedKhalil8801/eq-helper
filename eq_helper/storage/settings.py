@@ -38,6 +38,8 @@ DEFAULTS: Dict[str, Any] = {
 
     "test_songs": [],  # list of {"label": str, "path_or_url": str, "type": "file"|"link"}
     "mic_monitoring": False,
+    "resonance_personal_treble_enabled": False,
+    "resonance_personal_treble_peaks_hz": {},
 }
 
 
