@@ -10,6 +10,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QPalette
 
 from eq_helper.audio.shared_state import ChannelMode, Mode
+from eq_helper.audio.generators import BandNoiseGenerator
 from resonancefit.audio import AudioService
 from resonancefit.guided_test import LOUDER, SMOOTHNESS, UPPER
 from resonancefit.ui import guided_test_view
@@ -98,13 +99,17 @@ def test_first_play_selects_a_and_switching_keeps_the_tone_going(view):
     started(view)
     engine = view.audio.engine
     view.play()
-    assert view.selected == 0 and view.audio.playing == "tone"
+    assert view.selected == 0 and view.audio.playing == "band"
     snap = engine.state.snapshot()
     assert snap.mode == Mode.SINE and snap.channel_mode == ChannelMode.LEFT
     assert snap.freq == pytest.approx(view._round.options[0])
     engine.process_block(480)
+    voice = engine._voices[-1][0]
+    assert isinstance(voice, BandNoiseGenerator) and voice.width_oct == pytest.approx(view._round.band)
+    assert voice.center_hz == pytest.approx(view._round.options[0])
+    engine.process_block(480)
     view.select(1)
-    assert view.audio.playing == "tone" and view.playing
+    assert view.audio.playing == "band" and view.playing
     assert engine.state.snapshot().freq == pytest.approx(view._round.options[1])
     out = np.concatenate([engine.process_block(480)[:, 0] for _ in range(6)])
     assert np.min([np.abs(out[i:i + 240]).max() for i in range(0, len(out), 240)]) > 0  # no gap
@@ -134,7 +139,7 @@ def test_clicking_a_card_starts_playing_it(view, clock):
     started(view)
     assert not view.playing
     view.cards[1].click()
-    assert view.playing and view.selected == 1 and view.audio.playing == "tone"
+    assert view.playing and view.selected == 1 and view.audio.playing == "band"
     assert view.audio.engine.state.snapshot().freq == pytest.approx(view._round.options[1])
 
 
@@ -206,11 +211,11 @@ def test_card_animation_is_blind_to_the_option(view, clock):
     engine = view.audio.engine
     levels = []
     for index in (0, 1):
-        view.audio.switch_tone(view._round.options[index], "L")
-        for _ in range(10):
+        view.audio.switch_band(view._round.options[index], view._round.band, "L")
+        for _ in range(40):
             engine.process_block(480)
-        levels.append(view.measure_level(engine.pop_recent_samples(1024)))
-    assert levels[0] == pytest.approx(levels[1], abs=0.01)
+        levels.append(view.measure_level(engine.pop_recent_samples(16384)))
+    assert levels[0] == pytest.approx(levels[1], abs=0.05)  # equal-RMS bands (noise wobbles a little)
     assert 0.5 < levels[0] <= 1.0
     a, b = OptionCard("A", "Play A"), OptionCard("B", "Play B")
     a.set_accent(QColor("#7c6cff"))

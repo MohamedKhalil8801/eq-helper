@@ -2,16 +2,17 @@
 
 Drives a :class:`~resonancefit.guided_test.GuidedTest`. One Play/Pause bar
 plays the selected option continuously; clicking a card switches the sound
-at once (tones crossfade in the engine, EQs crossfade in ``StereoFIR``).
+at once (noise bands crossfade in the engine, EQs crossfade in ``StereoFIR``).
 An answer unlocks once every option has been heard for a moment. Option
 order is shuffled each round and only letters are shown; the cards'
 animation follows the overall level only, so nothing gives the answer away.
 
-Stage 1 (Louder test) plays tones with the EQ preview off; Stage 2
+Stage 1 (Louder test) plays narrow noise bands (the search picks their
+width) with the EQ preview off; Stage 2
 (Smoothness check) plays pink noise or a slow focused sweep (the customer
 switches between them at will) through three EQs designed on a worker
 thread. After both primary resonances the upper treble is offered, found
-the same way (higher tones; EQs that move only the upper resonance). The
+the same way (higher bands; EQs that move only the upper resonance). The
 EQ preview is put back as it was when the test closes.
 """
 
@@ -93,7 +94,7 @@ class GuidedTestView(StageBackground):
         self._heard_for: dict[int, float] = {}
         self._since: float | None = None
         self._level = 0.0
-        self._sound = None            # "tone" / "pink" / "focus" (sweep) while this view's sound plays
+        self._sound = None            # "band" / "pink" / "focus" (sweep) while this view's sound plays
         self.stage2_sound = "pink"    # what the smoothness check plays: "pink" or "focus"
         self._starting = False        # starting our own sound: its change notices aren't a stop
         self._eqs: dict[int, tuple] = {}
@@ -170,8 +171,8 @@ class GuidedTestView(StageBackground):
         self._header(layout, self.intro_title)
         tips = [
             tr("Put both IEMs in as you normally wear them, with the ear tips you were measured with."),
-            tr("Turn your volume low: some tones can be piercing. Press Space at any time to stop the sound."),
-            tr("For each ear you'll hear two or three sounds at a time. First pick the louder tone, then "
+            tr("Turn your volume low: some sounds can be piercing. Press Space at any time to stop the sound."),
+            tr("For each ear you'll hear two or three sounds at a time. First pick the louder sound, then "
                "the smoothest noise. It takes about 2 minutes in all."),
         ]
         for text in tips:
@@ -301,7 +302,7 @@ class GuidedTestView(StageBackground):
         self._header(layout, self.unsure_title)
         self.unsure_text = self._label(tr(
             "Some answers pointed to different places, so the result for this ear may be off. That happens "
-            "when tones sound close, or after a slip of the mouse. You can do this ear again, carry on from "
+            "when sounds are close, or after a slip of the mouse. You can do this ear again, carry on from "
             "the best guess (the next part checks it with noise), or adjust it by hand."))
         layout.addLayout(self._padded(self.unsure_text))
         row = QHBoxLayout()
@@ -368,8 +369,8 @@ class GuidedTestView(StageBackground):
         layout.addLayout(self._padded(self.upper_summary))
         self.upper_text = self._label(tr(
             "Some IEMs have a second, higher peak (above about 10.5 kHz) that can sound sharp or hissy. "
-            "The same two steps can find it for each ear: which high tone is louder, then which noise is "
-            "smoothest. About 2 minutes. If you can barely hear the high tones, answer About the same: the "
+            "The same two steps can find it for each ear: which high sound is louder, then which noise is "
+            "smoothest. About 2 minutes. If you can barely hear the high sounds, answer About the same: the "
             "upper treble then stays as it is."))
         layout.addLayout(self._padded(self.upper_text))
         row = QHBoxLayout()
@@ -514,10 +515,10 @@ class GuidedTestView(StageBackground):
             self.stage_label.setText(tr("Louder test") if louder else tr("Smoothness check"))
         ear = _ear(test.side).lower()
         if louder and upper:
-            self.instructions.setText(tr("Two high tones in your {ear}. Which one sounds louder? If you can "
+            self.instructions.setText(tr("Two high sounds in your {ear}. Which one is louder? If you can "
                                          "barely hear them, choose About the same.").format(ear=ear))
         elif louder:
-            self.instructions.setText(tr("Two tones in your {ear}. Which one sounds louder? Click a card (or "
+            self.instructions.setText(tr("Two sounds in your {ear}. Which one is louder? Click a card (or "
                                          "press 1 or 2) to switch between them as often as you like.").format(
                 ear=ear))
         elif upper:
@@ -532,7 +533,7 @@ class GuidedTestView(StageBackground):
         self._sync_sound_buttons()
         if louder:
             self.same_button.setText(tr("About the same"))
-            self._enter_tone_stage()
+            self._enter_louder_stage()
         else:
             self.same_button.setText(tr("Can't tell them apart"))
             self._enter_noise_stage()
@@ -557,17 +558,17 @@ class GuidedTestView(StageBackground):
             card.set_accent(color)
         self._sync_answers()
 
-    def _enter_tone_stage(self) -> None:
+    def _enter_louder_stage(self) -> None:
         if self._saved_eq_enabled is None:
             self._saved_eq_enabled = self.audio.eq_enabled
         if self.audio.eq_enabled:
-            self.audio.set_eq_enabled(False)  # tones are judged without the EQ
+            self.audio.set_eq_enabled(False)  # the louder test is judged without the EQ
         if self._sound in ("pink", "focus"):  # Stage 2 → (back to) Stage 1: switch the sound type
             self._sound = None
             self.audio.stop_all()
 
     def _enter_noise_stage(self) -> None:
-        if self._sound == "tone":
+        if self._sound == "band":
             self._sound = None
             self.audio.stop_all()
         elif self._sound == "focus":
@@ -671,8 +672,8 @@ class GuidedTestView(StageBackground):
             self._sync_cards()
         side, index = self.test.side, self.selected
         if self.test.kind == LOUDER:
-            self.audio.switch_tone(self._round.options[index], side)
-            sound = "tone"
+            self.audio.switch_band(self._round.options[index], self._round.band, side)
+            sound = "band"
         else:
             self._apply_option(index)
             if not self.audio.eq_enabled:
@@ -713,8 +714,8 @@ class GuidedTestView(StageBackground):
             self.play()
             self._sync_answers()
             return
-        if self._sound == "tone":
-            self.audio.switch_tone(self._round.options[index], self.test.side)
+        if self._sound == "band":
+            self.audio.switch_band(self._round.options[index], self._round.band, self.test.side)
         elif self._sound in ("pink", "focus"):
             self._apply_option(index)  # the noise or sweep keeps going; only the EQ changes
         self._since = self._clock() if self._sound is not None else None
@@ -735,7 +736,7 @@ class GuidedTestView(StageBackground):
         """The selected option is what's playing right now."""
         if self._sound is None or self.selected is None:
             return False
-        return self._sound == "tone" or self._applied == self.selected
+        return self._sound == "band" or self._applied == self.selected
 
     def _account(self) -> None:
         """Add the time the selected option has been playing to its listening time."""
@@ -842,12 +843,12 @@ class GuidedTestView(StageBackground):
         self.done_title.setText(tr("{ear} done").format(ear=_ear(side)))
         if target == UPPER and hz is None:
             self.result_label.setText(tr("{ear}: no clear upper peak").format(ear=_ear(side)))
-            note = tr("The high tones sounded alike, so your upper treble stays as it is.")
+            note = tr("The high sounds were alike, so your upper treble stays as it is.")
         else:
             label = tr("{ear} upper treble: {hz} Hz") if target == UPPER else tr("{ear} resonance: {hz} Hz")
             self.result_label.setText(label.format(ear=side_name(side), hz=f"{int(round(hz)):,}"))
             if louder is not None and louder.done and louder.result().fell_back:
-                note = tr("The tones sounded alike, so this comes from the smoothness check alone "
+                note = tr("The sounds were alike, so this comes from the smoothness check alone "
                           "({n} rounds of noise through your EQ).").format(n=smooth_rounds)
             else:
                 note = tr("Found with {louder} rounds of the louder test, then {smooth} rounds of the smoothness "
