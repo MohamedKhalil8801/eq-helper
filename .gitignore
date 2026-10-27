@@ -190,5 +190,6 @@ dist-customers/
 
 # Customer app build: keep its spec, ignore build outputs
 !resonancefit.spec
+!packaging/eq_helper.spec
 release/
 resonancefit/assets/version.txt

@@ -1,0 +1,49 @@
+name: Build EQ Helper (Windows)
+
+# Manual: Actions → "Build EQ Helper (Windows)" → Run workflow (pick the branch).
+# Produces the "EQ Helper" onedir build as an artifact (EQ Helper-windows.zip).
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - packaging/eq_helper.spec
+      - .github/workflows/eq-helper-build.yml
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: pip install -e . pyinstaller
+      - run: pyinstaller --noconfirm --clean packaging/eq_helper.spec
+      - name: Check bundled data
+        shell: bash
+        run: |
+          d="dist/EQ Helper/_internal"
+          for f in "eq_helper/dsp/nova_w1.npz" "eq_helper/exports/catalog.json" "assets/targets/PEQdB Diamond.txt" \
+                   "assets/grey_noise.wav" "resonancefit/assets/branding.json"; do
+            test -f "$d/$f" || { echo "missing $f"; exit 1; }
+          done
+      - name: Smoke launch (stays up 25 s)
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+          EQ_HELPER_NO_AUDIO: "1"
+        run: |
+          $p = Start-Process -FilePath "dist/EQ Helper/EQ Helper.exe" -PassThru
+          Start-Sleep -Seconds 25
+          if ($p.HasExited) { Write-Error "EQ Helper exited early with code $($p.ExitCode)"; exit 1 }
+          Stop-Process -Id $p.Id -Force
+      - name: Zip
+        shell: pwsh
+        run: Compress-Archive -Path "dist/EQ Helper" -DestinationPath "EQ Helper-windows.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: EQ Helper-windows
+          path: EQ Helper-windows.zip
+          retention-days: 14
