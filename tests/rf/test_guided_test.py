@@ -8,23 +8,32 @@ import pytest
 
 from eq_helper.dsp.resonance import CONTROL_RANGE, PERSONAL_TREBLE_RANGE
 from resonancefit.guided_test import (
-    LOUDER, LOUDER_MAX_ROUNDS, PRIMARY, SMOOTH_DELTA, SMOOTH_WIDE_DELTA, SMOOTHNESS, UPPER, UPPER_PEAK_WIDTHS,
+    BANDS, LOUDER, LOUDER_MAX_ROUNDS, PRIMARY, SMOOTH_DELTA, SMOOTH_WIDE_DELTA, SMOOTHNESS, UPPER, UPPER_PEAK_WIDTHS,
     GuidedTest, LouderSearch, SmoothnessSearch,
 )
 
 
-def ear(f0, width=0.1, height=8.0, noise=0.6, jnd=1.0, slope=0.0, slip=0.0, rng=None):
+def ear(f0, width=0.1, height=8.0, noise=0.6, jnd=1.0, slope=0.0, slip=0.0, ripple=0.0, rng=None):
     """A simulated listener: a peak at ``f0`` (σ ``width`` octaves, ``height`` dB) on a flat or sloped
-    background; differences below ``jnd`` dB are heard as "About the same"."""
+    background, plus ``ripple`` dB (RMS) of fine dips and bumps 0.03–0.1 octave wide; a band's loudness
+    is the power average over it. Differences below ``jnd`` dB are heard as "About the same"."""
     rng = rng or random.Random(1)
+    ripples = [(rng.uniform(0.03, 0.1), rng.uniform(0, 2 * math.pi)) for _ in range(3)]
 
-    def level(hz):
-        return height * math.exp(-0.5 * (math.log2(hz / f0) / width) ** 2) + slope * math.log2(hz / 7500)
+    def level(x):  # x: log2 Hz
+        peak = height * np.exp(-0.5 * ((x - math.log2(f0)) / width) ** 2) + slope * (x - math.log2(7500))
+        bumps = sum(np.sin(2 * np.pi * x / period + phase) for period, phase in ripples)
+        return peak + ripple * bumps / math.sqrt(1.5)  # three unit sines: RMS √1.5
+
+    def heard(hz, band):
+        x = math.log2(hz) + (np.linspace(-band / 2, band / 2, 41) if band > 0 else np.zeros(1))
+        return float(10 * np.log10(np.mean(10 ** (level(x) / 10))))
 
     def answer(round_):
         if rng.random() < slip:
             return rng.choice([0, 1, None])
-        d = level(round_.options[0]) - level(round_.options[1]) + rng.gauss(0, noise)
+        band = getattr(round_, "band", 0.0)
+        d = heard(round_.options[0], band) - heard(round_.options[1], band) + rng.gauss(0, noise)
         if abs(d) < jnd:
             return None
         return 0 if d > 0 else 1
@@ -58,21 +67,50 @@ def test_robust_to_peak_width_and_a_sloped_background(width, slope):
     assert misses <= 1
 
 
-def test_same_for_two_tones_beside_a_narrow_peak_keeps_the_far_region():
-    """Two tones on the flat part sound alike: "About the same" must not rule out a peak far from both."""
+def test_ripple_in_the_ear_misleads_tones_but_not_bands():
+    """Why the louder test plays noise bands: fine dips and bumps in a sealed ear canal (here 2.5 dB)
+    send a tone search astray; bands average over them."""
+    misses = {"tones": 0, "bands": 0}
+    for seed in range(30):
+        f0 = math.exp(random.Random(seed).uniform(math.log(6000), math.log(9000)))
+        for name, bands in (("tones", (0.0,)), ("bands", BANDS)):
+            search = LouderSearch(rng=random.Random(seed), bands=bands)
+            result = run(search, ear(f0, width=0.15, ripple=2.5, rng=random.Random(seed + 50)))
+            misses[name] += abs(result.hz / f0 - 1) >= 0.03
+    assert misses["bands"] <= 1
+    assert misses["tones"] >= misses["bands"] + 3
+
+
+def test_wide_bands_first_narrow_bands_later():
+    first, last = [], []
+    for seed in range(10):
+        search = LouderSearch(rng=random.Random(seed))
+        listener = ear(7600, rng=random.Random(seed))
+        bands = []
+        while not search.done:
+            bands.append(search.options().band)
+            search.answer(listener(search.options()))
+        assert set(bands) <= set(BANDS)
+        first.append(bands[0])
+        last.append(bands[-1])
+    assert np.mean(first) > np.mean(last)
+
+
+def test_same_for_two_sounds_beside_a_narrow_peak_keeps_the_far_region():
+    """Two sounds on the flat part sound alike: "About the same" must not rule out a peak far from both."""
     search = LouderSearch(rng=random.Random(3))
     search.options()
-    search._round = type(search.options())((7005.0, 7709.0))  # the pair a midpoint search would ask first
+    search._round = type(search.options())((7005.0, 7709.0), 1 / 12)  # the pair a midpoint search asks first
     search._index.setdefault(7005.0, int(np.argmin([abs(c - 7005) for c in search.candidates])))
     search._index.setdefault(7709.0, int(np.argmin([abs(c - 7709) for c in search.candidates])))
     search.answer(None)
-    marginal = search.posterior().sum(axis=0)
+    marginal = search._place(search.posterior())
     hz = 2.0 ** search.grid
     far = marginal[hz > 8300].sum() / (hz > 8300).mean()
     between = marginal[(hz > 7200) & (hz < 7500)].sum() / ((hz > 7200) & (hz < 7500)).mean()
     near_tones = marginal[(hz > 6950) & (hz < 7060)].sum() / ((hz > 6950) & (hz < 7060)).mean()
     assert far > 0.5 * between     # a peak far from both stays likely
-    assert near_tones < 0.5 * far  # a peak right at one of the tones would have been heard
+    assert near_tones < far        # a peak right at one of the sounds would more likely have been heard
 
 
 def test_narrow_peak_at_the_top_is_found_even_after_same_answers():
@@ -103,14 +141,15 @@ def test_a_listener_who_hears_no_difference_falls_back_quickly():
     assert CONTROL_RANGE[0] <= result.hz <= CONTROL_RANGE[1]
 
 
-def test_options_are_playable_tones_in_random_order():
+def test_options_are_playable_bands_in_random_order():
     orders = set()
     for seed in range(20):
         round_ = LouderSearch(rng=random.Random(seed)).options()
         assert len(round_.options) == 2 and round_.options[0] != round_.options[1]
         assert all(CONTROL_RANGE[0] <= hz <= CONTROL_RANGE[1] for hz in round_.options)
         ratio = max(round_.options) / min(round_.options)
-        assert 2 ** 0.039 <= ratio <= 2 ** 0.401
+        assert round_.band in BANDS
+        assert 2 ** max(0.039, round_.band / 2 - 0.001) <= ratio <= 2 ** 0.401
         orders.add(round_.options[0] < round_.options[1])
     assert orders == {True, False}
 
@@ -291,10 +330,11 @@ def unsure_test():
     for seed in range(200):
         test = GuidedTest(("L", "R"), rng=random.Random(seed))
         rng = random.Random(seed)
+        n = 0
         while test.kind == LOUDER and test.status == "testing":
             # an ear that contradicts itself: a peak that jumps between two places
-            f0 = 6400 if rng.random() < 0.5 else 8600
-            test.answer(ear(f0, rng=rng)(test.options()))
+            test.answer(ear(6300 if n % 2 else 8700, rng=rng)(test.options()))
+            n += 1
         if test.status == "unsure":
             return test
     raise AssertionError("never unsure")
@@ -328,3 +368,41 @@ def test_flow_fallback_starts_smoothness_wide_from_the_default():
         test.answer(None)
     assert test.kind == SMOOTHNESS
     assert test.stage.search.center == 7700 and test.stage.search.delta == SMOOTH_WIDE_DELTA
+
+
+def test_always_same_means_no_clear_peak_not_a_confident_middle():
+    """"About the same" around a real peak is information, but a listener who never hears a
+    difference must not be pulled to wherever the pairs happened to balance."""
+    for seed in range(4):
+        search = LouderSearch(rng=random.Random(seed))
+        while not search.done:
+            search.options()
+            search.answer(None)
+        result = search.result()
+        assert result.fell_back and not result.confident and result.rounds <= 6
+
+
+def test_same_answers_around_a_real_peak_still_count():
+    for seed in range(4):
+        result = run(LouderSearch(rng=random.Random(seed)), ear(7300, jnd=2.0, rng=random.Random(seed)))
+        assert result.confident and abs(result.hz / 7300 - 1) < 0.03
+
+
+def test_answers_that_contradict_each_other_are_unsure():
+    for seed in range(6):
+        search, rng, n = LouderSearch(rng=random.Random(seed)), random.Random(seed), 0
+        while not search.done:
+            search.answer(ear(6300 if n % 2 else 8700, rng=rng)(search.options()))
+            n += 1
+        assert not search.result().confident
+
+
+def test_check_rounds_catch_most_random_clicking():
+    unsure = 0
+    for seed in range(12):
+        search, rng = LouderSearch(rng=random.Random(seed)), random.Random(seed + 5)
+        while not search.done:
+            search.options()
+            search.answer(rng.choice([0, 1]))
+        unsure += not search.result().confident
+    assert unsure >= 7

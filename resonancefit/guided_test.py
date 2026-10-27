@@ -2,12 +2,16 @@
 
 Two listening stages per ear find a resonance (see GLOSSARY):
 
-- :class:`LouderSearch` ("Louder test"): A/B rounds of equal-level tones.
-  It keeps a belief over where the peak is (and how wide), updated after
-  every answer with a simple listener model, and asks the pair that should
-  teach it most. "About the same" is information too: the peak lies midway
-  between the two tones, *or far from both* — two tones on the flat part
-  beside a narrow peak sound alike, so that region is never thrown away.
+- :class:`LouderSearch` ("Louder test"): A/B rounds of two equal-level
+  noise bands. It keeps a belief over where the peak is (and how wide),
+  updated after every answer with a simple listener model, and asks the
+  pair — place *and* band width — that should teach it most: wide bands
+  while it knows little, narrow ones as it closes in. Bands rather than pure
+  tones because a sealed ear canal adds fine dips and bumps that a single
+  tone can land on; a band averages over them. "About the same" is
+  information too: the peak lies midway between the two bands, *or far from
+  both* — two sounds on the flat part beside a narrow peak sound alike, so
+  that region is never thrown away.
 - :class:`SmoothnessSearch` ("Smoothness check"): A/B/C rounds of pink
   noise through three EQs whose resonance sits just below, at and just
   above the current guess; the smoothest one wins.
@@ -30,15 +34,24 @@ from scipy.special import ndtr
 from eq_helper.dsp.resonance import CONTROL_RANGE, PERSONAL_TREBLE_RANGE
 
 # ── the listener model behind the louder test ───────────────────────────────
-PEAK_DB = 6.0                # how much louder a tone right on the peak sounds than the flat part
+PEAK_HEIGHTS = (4.0, 8.0)    # dB: how much louder a sound right on the peak may be than the flat part
+NO_PEAK_PRIOR = 0.2          # belief, before any answer, that no peak will be heard at all
+GUESS_PRIOR = 0.1            # … that the answers will be guesses (unrelated to what's played)
+GUESS_ANSWERS = (0.4, 0.4, 0.2)  # how a guesser answers: first / second louder / about the same
+GUESS_DOUBT = 0.3            # this likely that the answers are guesses: not done / unsure
+CHECK_EVERY = 3              # every third round is a check: the pair whose answer is most predictable
 PEAK_WIDTHS = (0.06, 0.1, 0.18)        # octaves (Gaussian σ) a primary resonance may have
 UPPER_PEAK_WIDTHS = (0.08, 0.14, 0.24)
 JND_DB = 1.0                 # smaller differences are heard as "About the same"
 NOISE_DB = 0.8               # how much the impression wobbles from round to round
 LAPSE = 0.05                 # a slip: any answer, whatever was heard
+RIPPLE_DB = 1.5              # fine dips and bumps in the ear (unknown): extra noise for narrow sounds
+RIPPLE_OCTAVES = 0.04        # their typical width; a band this wide or wider averages them out
+BANDS = (1 / 3, 1 / 6, 1 / 12)  # octaves; the search picks the width each round (0 would be a tone)
+BAND_POINTS = 9              # how finely the model averages over a band
 GRID_OCTAVES = 1 / 192       # resolution of the belief over the peak's place
-CANDIDATE_OCTAVES = 1 / 48   # spacing of the tones the test can play
-PAIR_OCTAVES = (0.04, 0.4)   # how far apart the two tones of a round may be
+CANDIDATE_OCTAVES = 1 / 48   # spacing of the band centres the test can play
+PAIR_OCTAVES = (0.04, 0.4)   # how far apart the two centres of a round may be (at least half a band)
 
 LOUDER_MAX_ROUNDS = 12
 LOUDER_MIN_ROUNDS = 6
@@ -48,7 +61,9 @@ LOUDER_CONFIDENT_RATIO = 1.08
 CREDIBLE = 0.8
 NO_PEAK_SAME_SHARE = 0.6     # this share of "About the same": no clear peak heard
 KEEP_ESTIMATE_RATIO = 1.15   # leaving mid-test keeps the louder test's estimate once it's this narrow
-OPENING_SAMES = 4            # this many opening "About the same" answers end the louder test
+NO_PEAK_DONE = 0.85          # this sure that nothing is heard (after a few rounds): stop
+NO_PEAK_DOUBT = 0.3          # this likely that nothing is heard: not done / not confident yet
+LOUDER_MIN_NO_PEAK_ROUNDS = 4
 
 SMOOTH_DELTA = 0.06          # octaves between the options
 SMOOTH_WIDE_DELTA = 0.12     # when the louder test wasn't sure: start wider
@@ -64,9 +79,14 @@ PRIMARY, UPPER = "primary", "upper"
 
 @dataclass(frozen=True)
 class Round:
-    """One question: ``options`` in display order (A, B, C) as frequencies in Hz."""
+    """One question: ``options`` in display order (A, B, C) as frequencies in Hz.
+
+    ``band``: for the louder test, the width (octaves) of the noise band
+    played around each option; 0 = a tone.
+    """
 
     options: tuple[float, ...]
+    band: float = 0.0
 
     def letter(self, index: int) -> str:
         return "ABC"[index]
@@ -85,21 +105,35 @@ def _clip(hz: float, lo: float, hi: float) -> float:
     return float(min(max(hz, lo), hi))
 
 
-def outcome_probabilities(difference_db):
+def band_noise_db(band: float) -> float:
+    """How much a round's impression wobbles for sounds ``band`` octaves wide (0 = a tone): the
+    listener's own wobble plus the ear's fine ripple on both sounds, which a wider band averages out."""
+    ripple = 2 * RIPPLE_DB ** 2 * min(1.0, RIPPLE_OCTAVES / max(band, RIPPLE_OCTAVES))
+    return math.sqrt(NOISE_DB ** 2 + ripple)
+
+
+def outcome_probabilities(difference_db, noise_db: float = NOISE_DB):
     """P(first louder), P(second louder), P(about the same) for a level difference (first − second)."""
     d = np.asarray(difference_db, dtype=float)
-    first = ndtr((d - JND_DB) / NOISE_DB)
-    second = ndtr((-d - JND_DB) / NOISE_DB)
+    first = ndtr((d - JND_DB) / noise_db)
+    second = ndtr((-d - JND_DB) / noise_db)
     same = np.clip(1.0 - first - second, 0.0, 1.0)
     return (1.0 - LAPSE) * np.stack([first, second, same]) + LAPSE / 3.0
 
 
 class LouderSearch:
-    """Which of two equal-level tones is louder: a Bayesian search for the peak in log frequency."""
+    """Which of two equal-level noise bands is louder: a Bayesian search for the peak in log frequency.
+
+    The belief covers every peak place × width × height, plus two more
+    possibilities: "no audible peak", so a listener who hears no difference
+    at all ends up there instead of being pulled to wherever the pairs
+    happened to balance; and "guessing", answers unrelated to the sounds,
+    which is how answers that contradict each other show up.
+    """
 
     def __init__(self, hz_range=CONTROL_RANGE, rng: random.Random | None = None,
                  max_rounds: int = LOUDER_MAX_ROUNDS, stop_ratio: float = LOUDER_STOP_RATIO,
-                 widths=PEAK_WIDTHS):
+                 widths=PEAK_WIDTHS, bands=BANDS):
         self.lo, self.hi = (float(v) for v in hz_range)
         self.rng = rng or random.Random()
         self.max_rounds = max_rounds
@@ -109,39 +143,82 @@ class LouderSearch:
         cand = np.linspace(lo2, hi2, max(2, round((hi2 - lo2) / CANDIDATE_OCTAVES) + 1))
         self.candidates = tuple(float(2.0 ** c) for c in cand)
         self._index = {hz: i for i, hz in enumerate(self.candidates)}
-        w = np.asarray(widths, dtype=float)[:, None, None]
-        # perceived level (dB above the flat part) of each candidate tone, for every peak place and width
-        self._levels = PEAK_DB * np.exp(-0.5 * ((cand[None, None, :] - self.grid[None, :, None]) / w) ** 2)
+        self.bands = tuple(float(b) for b in bands)
+        self._band_index = {b: k for k, b in enumerate(self.bands)}
+        n_f = len(self.grid)
+        shapes = [(h, w) for h in PEAK_HEIGHTS for w in widths]
+        # states: (height, width, place) …, then "no audible peak", then "guessing"
+        self._n_peak = len(shapes) * n_f
+        prior = np.full(self._n_peak + 2, (1.0 - NO_PEAK_PRIOR - GUESS_PRIOR) / self._n_peak)
+        prior[-2], prior[-1] = NO_PEAK_PRIOR, GUESS_PRIOR
+        self._log_prior = np.log(prior)
+        # perceived level (dB above the flat part) of each candidate sound in every state: the power
+        # average of the peak over the band (one point for a tone); 0 everywhere without a peak
+        self._levels, self._noise, self._pairs = [], [], []
         i, j = np.triu_indices(len(cand), k=1)
         apart = cand[j] - cand[i]
-        keep = (apart >= PAIR_OCTAVES[0] - 1e-9) & (apart <= PAIR_OCTAVES[1] + 1e-9)
-        self._pairs = (i[keep], j[keep])
+        for band in self.bands:
+            offsets = np.linspace(-band / 2, band / 2, BAND_POINTS) if band > 0 else np.zeros(1)
+            points = cand[:, None] + offsets[None, :]                                    # (C, P)
+            rows = []
+            for height, width in shapes:
+                peak = height * np.exp(-0.5 * ((points[None] - self.grid[:, None, None]) / width) ** 2)
+                rows.append(10 * np.log10(np.mean(10 ** (peak / 10), axis=-1)))          # (F, C)
+            rows.append(np.zeros((1, len(cand))))
+            self._levels.append(np.concatenate(rows))                                    # (S, C)
+            self._noise.append(band_noise_db(band))
+            keep = (apart >= max(PAIR_OCTAVES[0], band / 2) - 1e-9) & (apart <= PAIR_OCTAVES[1] + 1e-9)
+            self._pairs.append((i[keep], j[keep]))
         self.answers: list[tuple[Round, float | None]] = []  # (round, louder Hz or None = "About the same")
         self._round: Round | None = None
         self._posterior = None
 
     # ── belief ─────────────────────────────────────────────────────────────
+    def _outcomes(self, k: int, a, b) -> np.ndarray:
+        """(3, states, …) P(first louder / second louder / same) for band ``k`` and option indices."""
+        heard = outcome_probabilities(self._levels[k][:, a] - self._levels[k][:, b], self._noise[k])
+        guess = np.broadcast_to(np.asarray(GUESS_ANSWERS).reshape((3, 1) + (1,) * (heard.ndim - 2)),
+                                (3, 1) + heard.shape[2:])
+        return np.concatenate([heard, guess], axis=1)
+
+    def _answer_probabilities(self, round_: Round, louder: float | None) -> np.ndarray:
+        """P(this answer) in every state."""
+        k = self._band_index[round_.band]
+        a, b = (self._index[hz] for hz in round_.options)
+        return self._outcomes(k, a, b)[2 if louder is None else (0 if louder == round_.options[0] else 1)]
+
     def posterior(self) -> np.ndarray:
-        """P(width, peak place) after the answers so far (cached)."""
+        """P(state) after the answers so far (cached); the last two are "no audible peak" and "guessing"."""
         if self._posterior is None:
-            log_p = np.zeros(self._levels.shape[:2])
+            log_p = self._log_prior.copy()
             for round_, louder in self.answers:
-                a, b = (self._index[hz] for hz in round_.options)
-                probs = outcome_probabilities(self._levels[:, :, a] - self._levels[:, :, b])
-                outcome = 2 if louder is None else (0 if louder == round_.options[0] else 1)
-                log_p += np.log(probs[outcome])
+                log_p += np.log(self._answer_probabilities(round_, louder))
             p = np.exp(log_p - log_p.max())
             self._posterior = p / p.sum()
         return self._posterior
 
+    @property
+    def no_peak(self) -> float:
+        """How likely it is that no peak is heard at all."""
+        return float(self.posterior()[-2])
+
+    @property
+    def guessing(self) -> float:
+        """How likely it is that the answers don't follow the sounds (they contradict each other)."""
+        return float(self.posterior()[-1])
+
+    def _place(self, p: np.ndarray) -> np.ndarray:
+        """P(place), given that there is a peak."""
+        marginal = p[:self._n_peak].reshape(-1, len(self.grid)).sum(axis=0)
+        return marginal / max(marginal.sum(), 1e-300)
+
     def _quantiles(self, *qs: float) -> list[float]:
-        marginal = self.posterior().sum(axis=0)
-        cdf = np.cumsum(marginal)
+        cdf = np.cumsum(self._place(self.posterior()))
         return [float(np.interp(q, cdf, self.grid)) for q in qs]
 
     @property
     def spread(self) -> float:
-        """Frequency ratio holding the middle 80 % of the belief."""
+        """Frequency ratio holding the middle 80 % of the belief (given a peak)."""
         low, high = self._quantiles((1 - CREDIBLE) / 2, (1 + CREDIBLE) / 2)
         return 2.0 ** (high - low)
 
@@ -158,49 +235,66 @@ class LouderSearch:
     def surprises(self) -> int:
         """Answers the current belief finds very unlikely: slips, or answers that disagree."""
         p = self.posterior()
-        count = 0
-        for round_, louder in self.answers:
-            a, b = (self._index[hz] for hz in round_.options)
-            probs = outcome_probabilities(self._levels[:, :, a] - self._levels[:, :, b])
-            outcome = 2 if louder is None else (0 if louder == round_.options[0] else 1)
-            count += float((probs[outcome] * p).sum()) < SURPRISE
-        return count
+        return sum(float((self._answer_probabilities(r, louder) * p).sum()) < SURPRISE for r, louder in self.answers)
 
     @property
     def done(self) -> bool:
         n = len(self.answers)
         if n >= self.max_rounds:
             return True
-        if n >= OPENING_SAMES and all(louder is None for _r, louder in self.answers):
-            return True
-        # a surprising answer keeps the test going: more rounds settle which answers to trust
-        return n >= LOUDER_MIN_ROUNDS and self.spread < self.stop_ratio and self.surprises() == 0
+        if n >= LOUDER_MIN_NO_PEAK_ROUNDS and self.no_peak >= NO_PEAK_DONE:
+            return True  # nothing sounds louder than anything: no point going on
+        # a surprising answer, or answers that look like guesses, keep the test going: more rounds
+        # settle which answers to trust
+        return (n >= LOUDER_MIN_ROUNDS and self.spread < self.stop_ratio and self.no_peak < NO_PEAK_DOUBT
+                and self.guessing < GUESS_DOUBT and self.surprises() == 0)
 
     # ── rounds ─────────────────────────────────────────────────────────────
-    def _best_pair(self) -> tuple[int, int]:
-        """The pair whose answer is expected to narrow the peak's place most."""
+    @property
+    def checking(self) -> bool:
+        """This round is a check (see :meth:`_best_pair`)."""
+        return len(self.answers) % CHECK_EVERY == CHECK_EVERY - 1
+
+    def _best_pair(self) -> tuple[float, int, int]:
+        """(band, i, j): the pair whose answer is expected to tell most about where the peak is
+        (and whether there is one).
+
+        Every third round is a check instead: the pair that best tells listening from guessing —
+        one whose answer the belief so far can predict. The most informative pairs are the
+        uncertain ones, where any answer looks plausible; only predictable pairs catch guesses.
+        """
         p = self.posterior()
-        pi, pj = self._pairs
-        probs = outcome_probabilities(self._levels[:, :, pi] - self._levels[:, :, pj])  # (3, W, F, P)
-        joint = (probs * p[None, :, :, None]).sum(axis=1)                               # (3, F, P)
-        p_outcome = joint.sum(axis=1)                                                    # (3, P)
-        cond = joint / np.maximum(p_outcome[:, None, :], 1e-300)
-        entropy = -(cond * np.log(np.maximum(cond, 1e-300))).sum(axis=1)               # (3, P)
-        expected = (p_outcome * entropy).sum(axis=0)
-        best = float(expected.min())
-        near = np.flatnonzero(expected <= best + 1e-3)
-        k = int(near[self.rng.randrange(len(near))])
-        return int(pi[k]), int(pj[k])
+        n_f = len(self.grid)
+        checking = self.checking
+        choices = []
+        for k, band in enumerate(self.bands):
+            pi, pj = self._pairs[k]
+            probs = self._outcomes(k, pi, pj)                                                 # (3, S, P)
+            weighted = probs * p[None, :, None]
+            if checking:  # two "places": listening (peak or no peak) or guessing
+                joint = np.stack([weighted[:, :-1].sum(axis=1), weighted[:, -1]], axis=1)     # (3, 2, P)
+            else:  # where the peak is, with "no peak" and "guessing" as two more places
+                joint = np.concatenate([weighted[:, :self._n_peak].reshape(3, -1, n_f, len(pi)).sum(axis=1),
+                                        weighted[:, self._n_peak:]], axis=1)                # (3, F+2, P)
+            p_outcome = joint.sum(axis=1)                                                    # (3, P)
+            cond = joint / np.maximum(p_outcome[:, None, :], 1e-300)
+            entropy = -(cond * np.log(np.maximum(cond, 1e-300))).sum(axis=1)               # (3, P)
+            expected = (p_outcome * entropy).sum(axis=0)
+            choices += [(float(e), band, int(a), int(b)) for e, a, b in zip(expected, pi, pj)]
+        best = min(c[0] for c in choices)
+        near = [c for c in choices if c[0] <= best + 1e-3]
+        _e, band, i, j = near[self.rng.randrange(len(near))]
+        return band, i, j
 
     def options(self) -> Round:
         """The current round (stable until it's answered or undone)."""
         if self.done:
             raise RuntimeError("The louder test is finished.")
         if self._round is None:
-            i, j = self._best_pair()
+            band, i, j = self._best_pair()
             pair = [self.candidates[i], self.candidates[j]]
             self.rng.shuffle(pair)
-            self._round = Round(tuple(pair))
+            self._round = Round(tuple(pair), band)
         return self._round
 
     def answer(self, louder: int | None) -> None:
@@ -222,8 +316,9 @@ class LouderSearch:
         if not self.done:
             raise RuntimeError("The louder test isn't finished yet.")
         spread = self.spread
-        heard_nothing = self.same_share == 1.0  # a belief from "same" alone only says where the peak isn't
-        confident = not heard_nothing and spread <= LOUDER_CONFIDENT_RATIO and self.surprises() <= 1
+        heard_nothing = self.no_peak >= NO_PEAK_DOUBT and self.no_peak >= self.guessing
+        confident = (not heard_nothing and spread <= LOUDER_CONFIDENT_RATIO and self.guessing < GUESS_DOUBT
+                     and self.surprises() <= 1)
         fell_back = heard_nothing or (not confident and self.same_share >= NO_PEAK_SAME_SHARE)
         return LouderResult(self.estimate(), confident, fell_back, len(self.answers), spread)
 
