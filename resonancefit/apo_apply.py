@@ -2,15 +2,20 @@
 
 The customer picks their output device once. The app keeps exactly one
 entry on that device, "Resonance EQ – <IEM>": a preset (managed by
-:class:`~eq_helper.apo.presets.PresetLibrary`) holding one EQ file. Applying
-a tuning rewrites that EQ file and makes the entry the device's active
-preset; nothing else in ``config.txt`` changes. When Windows won't let the
+:class:`~eq_helper.apo.presets.PresetLibrary`) holding one include file.
+Applying a tuning writes a convolution file per sample rate next to it and
+rewrites the include so ``If: sampleRate == …`` loads the one the device runs
+at (APO can't resample convolution files); any other rate falls back to the
+same EQ as GraphicEQ. The entry becomes the device's active preset; nothing
+else in ``config.txt`` changes. New file names on every apply, so APO never
+reads a half-written file; the previous ones are removed afterwards. When Windows won't let the
 app write APO's config folder, :class:`ApoUnwritable` carries a plain fix
 instead of failing silently.
 """
 
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 
 from eq_helper.apo.errors import ApoError, ApoNotFoundError
@@ -18,6 +23,8 @@ from eq_helper.apo.include_file import set_include_enabled
 from eq_helper.apo.paths import MAIN_CONFIG_NAME, resolve_apo_config_dir
 from eq_helper.apo.presets import PresetLibrary
 from eq_helper.apo.writer import atomic_write_with_backup, edit_include_file, poke
+from eq_helper.dsp.predicted_export import safe_file_part
+from eq_helper.exports.formats.convolution import APO_RATES, apo_convolution_lines, render_rates
 
 SETTINGS_KEY = "apo"
 
@@ -43,6 +50,10 @@ def unwritable_fix(config_dir: Path) -> str:
 
 
 class ApoApplier:
+    name = "Equalizer APO"
+    app_id = "equalizer-apo"
+    uses_devices = True
+
     def __init__(self, platform: str, settings, config_dir: Path | None = None):
         self.platform = platform
         self.settings = settings
@@ -51,6 +62,7 @@ class ApoApplier:
         self.device: str | None = state.get("device")
         self.preset_path: str | None = state.get("preset_path")
         self.eq_path: str | None = state.get("eq_path")
+        self.wavs: list[str] = list(state.get("wavs") or [])
 
     # ── availability ───────────────────────────────────────────────────────
     @property
@@ -88,7 +100,13 @@ class ApoApplier:
 
     def _save(self) -> None:
         self.settings.set(SETTINGS_KEY, {"device": self.device, "preset_path": self.preset_path,
-                                         "eq_path": self.eq_path})
+                                         "eq_path": self.eq_path, "wavs": self.wavs})
+
+    def unavailable_text(self) -> str:
+        if self.platform == "windows":
+            return ("Equalizer APO isn't available on this computer. Install it to apply your EQ to everything "
+                    "you play, or export for another app.")
+        return "Applying directly isn't available on this system yet. Use “Export for my EQ app…” instead."
 
     # ── applying ───────────────────────────────────────────────────────────
     def _managed(self, lib: PresetLibrary, iem_name: str):
@@ -114,13 +132,24 @@ class ApoApplier:
         lib = self._library()
         try:
             preset, eq_path = self._managed(lib, iem_name)
-            text = (f"# {entry_name(iem_name)}\n# {tuning_text}\n"
-                    "# Managed by the customer app: Apply replaces this file.\n" + channel_eq.apo_text())
-            atomic_write_with_backup(eq_path, text)
+            stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+            base = f"{safe_file_part(entry_name(iem_name))} {stamp}"
+            written = render_rates(channel_eq, APO_RATES, eq_path.parent, base)
+            lines = [f"# {entry_name(iem_name)}", f"# {tuning_text}",
+                     "# Managed by the customer app: Apply replaces this file and its .wav files."]
+            lines += apo_convolution_lines(base, APO_RATES, fallback=channel_eq.apo_text())
+            atomic_write_with_backup(eq_path, "\n".join(lines) + "\n")
             lib.activate(preset)
             poke(self.config_dir / MAIN_CONFIG_NAME)
         except (ApoError, OSError) as exc:
             raise ApoUnwritable(str(exc), unwritable_fix(self.config_dir)) from exc
+        old, self.wavs = self.wavs, [str(p) for p in written]
+        self._save()
+        for path in old:  # the include no longer points at these
+            try:
+                Path(path).unlink()
+            except OSError:
+                pass  # in use or gone: harmless, retried never
         return eq_path
 
     def is_on(self) -> bool:

@@ -62,6 +62,11 @@ class ListenSaveCard(Card):
         self.status = hint("")
         self.body.addWidget(self.status)
 
+    def set_apply_target(self, app: str) -> None:
+        self.apply_button.setText(tr("Apply to {app}").format(app=app))
+        self.switch_combo.setAccessibleName(tr("Apply a saved tuning to {app}").format(app=app))
+        self.switch_combo.setToolTip(tr("Apply one of your saved tunings to {app}.").format(app=app))
+
     def set_apply_available(self, available: bool) -> None:
         self.apply_button.setVisible(available)
         self._apply_available = available

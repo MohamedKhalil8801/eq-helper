@@ -143,7 +143,8 @@ class ExportFlow(QDialog):
         self.cards = {}
         jobs = []
         for app in apps:
-            card = AppCard(app, app.id in installed, self.job.channel_eq, self.device_rate)
+            card = AppCard(app, app.id in installed, self.job.channel_eq, self.device_rate,
+                           others_installed=installed)
             card.exportRequested.connect(self.run_export)
             layout.addWidget(card)
             self.cards[app.id] = card

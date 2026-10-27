@@ -57,13 +57,26 @@ def test_apply_creates_one_managed_entry_and_swaps_contents(tmp_path):
     active = lib.active_preset("Headphones DAWN")
     assert active.name == entry_name("Truthear Nova")
     text = first.read_text(encoding="utf-8")
-    assert "Channel: L" in text and "GraphicEQ:" in text and "Left 7700 Hz" in text
+    lines = text.splitlines()
+    assert "Left 7700 Hz" in text
+    # convolution per rate, chosen by APO's sampleRate; GraphicEQ only for any other rate
+    assert "If: sampleRate == 44100" in lines and "ElseIf: sampleRate == 192000" in lines
+    conv = [line.split(": ", 1)[1] for line in lines if line.startswith("Convolution: ")]
+    assert len(conv) == 6 and all((first.parent / name).exists() for name in conv)
+    assert lines.index("Else:") < lines.index(next(l for l in lines if l.startswith("GraphicEQ:"))) < \
+        lines.index("EndIf:")
+    assert "Channel: L" in text
     # other device untouched
     assert lib.active_preset("Speakers").name == "spk"
     # apply again: same files, new contents, no duplicate entry
     second = applier.apply(eq, "Truthear Nova", "Left 8000 Hz, Right 8000 Hz")
     assert second == first
-    assert "Left 8000 Hz" in second.read_text(encoding="utf-8")
+    text2 = second.read_text(encoding="utf-8")
+    assert "Left 8000 Hz" in text2
+    conv2 = [line.split(": ", 1)[1] for line in text2.splitlines() if line.startswith("Convolution: ")]
+    assert set(conv2).isdisjoint(conv)                              # new names every apply
+    assert all((first.parent / n).exists() for n in conv2)
+    assert not any((first.parent / n).exists() for n in conv)       # old files removed
     assert [p.name for p in lib.list_presets("Headphones DAWN")].count(entry_name("Truthear Nova")) == 1
     # device remembered
     assert ApoApplier("windows", Settings(tmp_path / "s.json"), apo).device == "Headphones DAWN"

@@ -109,7 +109,7 @@ class AppCard(Card):
     exportRequested = Signal(str, int)  # app id, format index
 
     def __init__(self, app, installed: bool, channel_eq=None, device_rate: int | None = None,
-                 can_export: bool = True, parent=None):
+                 can_export: bool = True, parent=None, others_installed=frozenset()):
         super().__init__(parent=parent)
         self.app = app
         title = QHBoxLayout()
@@ -123,6 +123,13 @@ class AppCard(Card):
         self.body.addLayout(title)
         self.description = hint(app.description)
         self.body.addWidget(self.description)
+        self.conflict_notes = [app.notes_if_installed[other] for other in sorted(others_installed)
+                               if other in app.notes_if_installed]
+        for note in self.conflict_notes:  # e.g. Peace also drives Equalizer APO
+            label = QLabel("⚠ " + tr(note))
+            label.setObjectName("warning")
+            label.setWordWrap(True)
+            self.body.addWidget(label)
         facts = QHBoxLayout()
         self.scope = chip(tr(SCOPE_LABELS.get(app.scope, app.scope)))
         facts.addWidget(self.scope)

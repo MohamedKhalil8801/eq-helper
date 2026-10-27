@@ -175,3 +175,13 @@ def test_export_button_on_main_window_opens_flow(qtbot, win, monkeypatch):
     monkeypatch.setattr(module.ExportFlow, "exec", lambda self: shown.append(self) or 0)
     win.listen.export_button.click()
     assert shown and shown[0].job.channel_eq is win.tuning.channel_eq
+
+
+def test_peace_is_not_offered_but_its_presence_is_flagged_on_the_apo_card(qtbot):
+    catalog = load_catalog()
+    assert "peace" not in [a.id for a in catalog.for_listening("this_computer", "windows")]
+    page = AppCatalogPage(catalog, platform="windows", installed={"equalizer-apo", "peace"})
+    qtbot.addWidget(page)
+    page.choose("this_computer", "windows")
+    assert "peace" not in page.card_ids()
+    assert any("Peace" in note for note in page.cards["equalizer-apo"].conflict_notes)

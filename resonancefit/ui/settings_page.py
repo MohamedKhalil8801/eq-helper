@@ -1,4 +1,4 @@
-"""Settings: output device, Equalizer APO, folders, version."""
+"""Settings: output device, system-wide EQ (Equalizer APO / EasyEffects), folders, version."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QCheckBox, QHBoxLayout, QLabel, QMessageBox, QPushButton, QVBoxLayout, QWidget
 
 from ..apo_apply import ApoUnwritable
+from ..easyeffects_apply import EasyEffectsProblem
 from ..version import app_version
 from .common import Card, hint, tr
 from .sound_bar import OutputPicker
@@ -32,7 +33,7 @@ class SettingsPage(QWidget):
         out.body.addWidget(hint(tr("Choose the output your IEMs are plugged into. The app remembers it.")))
         layout.addWidget(out)
 
-        apo_card = Card(tr("Equalizer APO"))
+        apo_card = Card(tr(apo.name))
         self.apo_status = QLabel()
         self.apo_status.setWordWrap(True)
         apo_card.body.addWidget(self.apo_status)
@@ -40,7 +41,7 @@ class SettingsPage(QWidget):
         self.apo_change = QPushButton(tr("Change APO output…"))
         self.apo_change.clicked.connect(self.apoDeviceChangeRequested)
         row.addWidget(self.apo_change)
-        self.apo_off = QPushButton(tr("Turn the EQ off in Equalizer APO"))
+        self.apo_off = QPushButton(tr("Turn the EQ off in {app}").format(app=apo.name))
         self.apo_off.clicked.connect(self._apo_off)
         row.addWidget(self.apo_off)
         row.addStretch(1)
@@ -144,26 +145,28 @@ class SettingsPage(QWidget):
     # ── APO ────────────────────────────────────────────────────────────────
     def refresh_apo(self) -> None:
         available = self.apo.available()
+        name = self.apo.name
         if available:
-            device = self.apo.device or tr("not chosen yet")
             state = tr("on") if self.apo.is_on() else tr("off")
-            self.apo_status.setText(tr("Equalizer APO is installed. Output: {device}. Your EQ there is {state}.")
-                                    .format(device=device, state=state))
-        elif self.ctx.paths.platform == "windows":
-            self.apo_status.setText(tr("Equalizer APO isn't available on this computer. Install it to apply your "
-                                       "EQ to everything you play, or export for another app."))
+            if self.apo.uses_devices:
+                device = self.apo.device or tr("not chosen yet")
+                self.apo_status.setText(tr("{app} is installed. Output: {device}. Your EQ there is {state}.")
+                                        .format(app=name, device=device, state=state))
+            else:
+                self.apo_status.setText(tr("{app} is installed. Your EQ there is {state}. Applying replaces "
+                                           "the effects running in {app} with your EQ; pick your own preset "
+                                           "in {app} to go back.").format(app=name, state=state))
         else:
-            self.apo_status.setText(tr("Applying directly to Equalizer APO is only on Windows. Use “Export for my "
-                                       "EQ app…” instead."))
-        self.apo_change.setVisible(available)
+            self.apo_status.setText(tr(self.apo.unavailable_text()))
+        self.apo_change.setVisible(available and self.apo.uses_devices)
         self.apo_off.setVisible(available)
         self.apo_off.setEnabled(available and self.apo.is_on())
 
     def _apo_off(self) -> None:
         try:
             self.apo.turn_off()
-        except ApoUnwritable as problem:
-            QMessageBox.warning(self, tr("Equalizer APO couldn't be changed"), tr(problem.fix))
+        except (ApoUnwritable, EasyEffectsProblem) as problem:
+            QMessageBox.warning(self, tr("{app} couldn't be changed").format(app=self.apo.name), tr(problem.fix))
         self.refresh_apo()
         self.apoChanged.emit()
 

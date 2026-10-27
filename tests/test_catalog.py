@@ -106,7 +106,7 @@ def test_equalizer_apo_defaults_to_convolution_for_every_rate(catalog, eq, tmp_p
     include = next(p for p in result.files if p.name == "Nova convolution.txt")
     lines = include.read_text(encoding="utf-8").splitlines()
     body = [line for line in lines if not line.startswith("#")]
-    assert body[:2] == ["If: sampleRate == 44100", "Convolution: Nova 44100.wav"]
+    assert body[:3] == ["Channel: all", "If: sampleRate == 44100", "Convolution: Nova 44100.wav"]
     assert "ElseIf: sampleRate == 48000" in body and body[-1] == "EndIf:"
     assert any("Customer:" in line for line in lines if line.startswith("#"))
 

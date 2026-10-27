@@ -58,6 +58,8 @@ class CatalogApp:
     verified: bool = False
     checked: str = ""
     advanced: bool = False
+    listed: bool = True        # False: detected (e.g. for "turn off other EQs") but not offered for export
+    notes_if_installed: dict = field(default_factory=dict)  # other app id -> note for this app's card
 
     @property
     def lr_label(self) -> str:
@@ -102,6 +104,8 @@ def _parse_app(entry, known_formats) -> CatalogApp:
         detection=dict(entry.get("detection") or {}), verified=bool(entry.get("verified", False)),
         checked=str(entry.get("checked", "")),
         advanced=bool(entry.get("advanced", False)),
+        listed=bool(entry.get("listed", True)),
+        notes_if_installed={str(k): str(v) for k, v in (entry.get("notes_if_installed") or {}).items()},
     )
 
 
@@ -131,7 +135,7 @@ class Catalog:
             _choice(os_name, ("android", "ios"), "phone OS", "for_listening")
         else:
             kinds = ("hardware",)
-        picked = [a for a in self.apps
+        picked = [a for a in self.apps if a.listed
                   if a.device_kind == "other"
                   or (a.device_kind in kinds and (where == "hardware" or os_name in a.platforms))]
         return sorted(picked, key=lambda a: (a.device_kind == "other", a.id not in installed,

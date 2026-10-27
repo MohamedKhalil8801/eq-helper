@@ -21,6 +21,16 @@ from eq_helper.exports.detection import APO_APP_ID, detect_installed
 from eq_helper.exports.formats.base import ExportMeta
 
 from ..apo_apply import ApoApplier, ApoUnwritable
+from ..easyeffects_apply import EasyEffectsApplier, EasyEffectsProblem
+
+APPLY_PROBLEMS = (ApoUnwritable, EasyEffectsProblem)
+
+
+def system_eq_for(platform: str, settings):
+    """The system-wide EQ the app applies to directly: Equalizer APO (Windows), EasyEffects (Linux)."""
+    if platform == "linux":
+        return EasyEffectsApplier(platform, settings)
+    return ApoApplier(platform, settings)
 from ..audio import AudioService
 from ..history import HistoryStore
 from ..library import LibraryEntry
@@ -107,7 +117,8 @@ class MainWindow(QMainWindow):
         self._workers: set[Worker] = set()
         self.catalog = load_catalog()
         self.installed: set[str] = set()
-        self.apo = apo if apo is not None else ApoApplier(ctx.paths.platform, ctx.settings)
+        # "apo": the system-wide EQ applied to directly (Equalizer APO or EasyEffects)
+        self.apo = apo if apo is not None else system_eq_for(ctx.paths.platform, ctx.settings)
         self.association = association if association is not None else FileAssociation.detect(
             ctx.paths.platform, ctx.branding, ICON)
         self.setWindowTitle(ctx.branding.title)
@@ -245,6 +256,7 @@ class MainWindow(QMainWindow):
         self.listen.exportRequested.connect(self.open_export)
         self.listen.applyRequested.connect(self.apply_to_apo)
         self.listen.switchRequested.connect(self.switch_apo_tuning)
+        self.listen.set_apply_target(self.apo.name)
         self.listen.set_apply_available(self.apo.available())
         self.history_panel.changed.connect(self._sync_saved_tunings)
         self.history_panel.app_names = {app.id: app.name for app in self.catalog.apps}
@@ -345,12 +357,12 @@ class MainWindow(QMainWindow):
             apo_on = self.apo.available() and self.apo.is_on()
         except OSError:
             apo_on = False
-        self.tuning.set_other_eqs(found, apo_on)
+        self.tuning.set_other_eqs(found, apo_on, self.apo.name)
 
     def turn_off_apo(self) -> None:
         try:
             self.apo.turn_off()
-        except ApoUnwritable as problem:
+        except APPLY_PROBLEMS as problem:
             self.show_apo_problem(problem)
         self.settings_page.refresh_apo()
         self.sync_other_eqs()
@@ -371,17 +383,17 @@ class MainWindow(QMainWindow):
             tr("Which output do you listen to your IEMs on? You only choose this once."), devices, 0, False)
         return device if ok and device else None
 
-    def show_apo_problem(self, problem: ApoUnwritable) -> None:
-        QMessageBox.warning(self, tr("Equalizer APO couldn't be changed"), tr(problem.fix))
+    def show_apo_problem(self, problem) -> None:
+        QMessageBox.warning(self, tr("{app} couldn't be changed").format(app=self.apo.name), tr(problem.fix))
 
     def apply_to_apo(self) -> bool:
         job = self.export_job()
         if job is None or not self.apo.available():
             return False
-        if not self.apo.device or self.apo.device not in self.apo.devices():
+        if self.apo.uses_devices and (not self.apo.device or self.apo.device not in self.apo.devices()):
             devices = self.apo.devices()
             if not devices:
-                QMessageBox.information(self, tr("Equalizer APO"), tr(self.apo.no_devices_help()))
+                QMessageBox.information(self, tr(self.apo.name), tr(self.apo.no_devices_help()))
                 return False
             device = self.choose_apo_device(devices)
             if not device:
@@ -389,20 +401,27 @@ class MainWindow(QMainWindow):
             self.apo.set_device(device)
         try:
             path = self.apo.apply(job.channel_eq, job.iem_name, job.meta.tuning)
-        except ApoUnwritable as problem:
+        except APPLY_PROBLEMS as problem:
             self.show_apo_problem(problem)
             return False
-        self.record_history("apply", files=[str(path)], app=APO_APP_ID)
+        self.record_history("apply", files=[str(path)], app=getattr(self.apo, "app_id", APO_APP_ID))
         self.settings_page.refresh_apo()
         self.sync_other_eqs()
-        self.listen.show_status(tr("Applied to Equalizer APO on {device}. Everything you play there now "
-                                   "uses this tuning.").format(device=self.apo.device))
+        if self.apo.uses_devices:
+            self.listen.show_status(tr("Applied to {app} on {device}. Everything you play there now uses this "
+                                       "tuning.").format(app=self.apo.name, device=self.apo.device))
+        elif getattr(self.apo, "loaded", True):
+            self.listen.show_status(tr("Applied in {app}. Everything you play now uses this tuning.").format(
+                app=self.apo.name))
+        else:
+            self.listen.show_status(tr("Saved as the {app} preset “{preset}”. {app} isn't running: start it and "
+                                       "choose that preset.").format(app=self.apo.name, preset=self.apo.preset))
         return True
 
     def change_apo_device(self) -> None:
         devices = self.apo.devices() if self.apo.available() else []
         if not devices:
-            QMessageBox.information(self, tr("Equalizer APO"), tr(self.apo.no_devices_help()))
+            QMessageBox.information(self, tr(self.apo.name), tr(self.apo.no_devices_help()))
             return
         device = self.choose_apo_device(devices)
         if device:

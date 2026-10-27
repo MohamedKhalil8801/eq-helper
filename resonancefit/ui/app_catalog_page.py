@@ -56,7 +56,7 @@ class AppCatalogPage(QWidget):
         layout.setContentsMargins(0, 0, 8, 0)
         self.cards = {}
         for app in apps:
-            card = AppCard(app, app.id in installed, can_export=False)
+            card = AppCard(app, app.id in installed, can_export=False, others_installed=installed)
             layout.addWidget(card)
             self.cards[app.id] = card
         layout.addStretch(1)

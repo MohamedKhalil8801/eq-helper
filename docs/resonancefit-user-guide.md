@@ -92,8 +92,15 @@ keeps the EQ as calibrated.
 - **Export for my EQ app…:** makes the files for the app you listen with (below).
 - **Apply to Equalizer APO** (Windows, when Equalizer APO is installed): makes this tuning your
   computer's EQ for everything you play. Choose your headphone output once. The app keeps one entry,
-  “Resonance EQ – your IEM”, in Equalizer APO and replaces it each time you apply. **Switch to:** applies
-  any saved tuning. To turn it off, use **Settings → Turn the EQ off in Equalizer APO**.
+  “Resonance EQ – your IEM”, in Equalizer APO and replaces it each time you apply. It's a convolution
+  filter with a file for each sample rate, so it keeps working if your device's rate changes (any
+  unusual rate gets the same EQ as GraphicEQ). **Switch to:** applies any saved tuning. To turn it off,
+  use **Settings → Turn the EQ off in Equalizer APO**. If Peace is installed, turn its EQ off: it's a
+  front-end for Equalizer APO and you'd hear both.
+- **Apply to EasyEffects** (Linux, when EasyEffects is installed): the same for EasyEffects. The app
+  writes the preset “Resonance EQ - your IEM” (one Convolver) and loads it. Loading a preset replaces
+  the effects running in EasyEffects; pick your own preset there to go back. If EasyEffects isn't
+  running, start it and choose that preset. **Settings → Turn the EQ off in EasyEffects** bypasses it.
 
 ### History
 

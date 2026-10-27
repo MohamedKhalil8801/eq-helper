@@ -16,7 +16,7 @@ STEPS = (
      "The target is the sound you want; the one marked default was chosen for you. Play a song you "
      "know well and switch the EQ on and off to compare."),
     ("Step 3 of 3: save it and use it everywhere",
-     "Export the EQ for the app you listen with — or, on Windows with Equalizer APO, apply it directly. "
+     "Export the EQ for the app you listen with — or apply it directly with Equalizer APO (Windows) or EasyEffects (Linux). "
      "Every tuning you save, export or apply is kept in History, so you can always go back."),
 )
 

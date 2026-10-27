@@ -319,11 +319,13 @@ class TuningPanel(QWidget):
         card.body.addStretch(1)
         return card
 
-    def set_other_eqs(self, found: list[str], apo_on: bool) -> None:
-        """Warn about other EQs: any EQ already running is heard on top of this one."""
+    def set_other_eqs(self, found: list[str], apo_on: bool, app: str = "Equalizer APO") -> None:
+        """Warn about other EQs: any EQ already running is heard on top of this one.
+        ``apo_on``: our own EQ is on in ``app`` (the system-wide EQ we apply to)."""
+        self.other_eq_off.setText(tr("Turn it off in {app}").format(app=app))
         if apo_on:
-            text = tr("Your EQ is on in Equalizer APO, so here you'd hear it twice. Turn it off while you "
-                      "tune, then apply again when you're done.")
+            text = tr("Your EQ is on in {app}, so here you'd hear it twice. Turn it off while you "
+                      "tune, then apply again when you're done.").format(app=app)
         elif found:
             text = tr("Turn off any other EQ while you tune. Found on this computer: {apps}. If one of them "
                       "(or your music app, a sound enhancement or your dongle) applies an EQ, you'd hear it on "

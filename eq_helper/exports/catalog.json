@@ -48,7 +48,10 @@
     }
    },
    "verified": true,
-   "checked": "2026-10-27: APO configuration reference — GraphicEQ, Channel: L/R, Include; Convolution files must match the device rate (no resampling). If:/ElseIf: with the sampleRate constant select the convolution file per rate."
+   "checked": "2026-10-27: APO configuration reference — GraphicEQ, Channel: L/R, Include; Convolution files must match the device rate (no resampling). If:/ElseIf: with the sampleRate constant select the convolution file per rate.",
+   "notes_if_installed": {
+    "peace": "Peace is installed. It's a front-end for Equalizer APO: turn its EQ off (or choose an empty preset) so you don't hear both."
+   }
   },
   {
    "id": "peace",
@@ -100,7 +103,8 @@
     }
    },
    "verified": false,
-   "checked": "2026-10-27: Peace wiki — up to 31 sliders (frequency/gain/Q) and per-speaker equalization confirmed; the Import menu's accepted formats are not documented — check by hand."
+   "checked": "2026-10-27: Peace wiki — up to 31 sliders (frequency/gain/Q) and per-speaker equalization confirmed; the Import menu's accepted formats are not documented — check by hand. Not offered for export (2026-10-27): Peace is a front-end for Equalizer APO with a less accurate parametric EQ; Apply to Equalizer APO or the APO convolution export is better. Still detected for the other-EQ warning.",
+   "listed": false
   },
   {
    "id": "easyeffects",
@@ -138,6 +142,7 @@
     }
    ],
    "setup_steps": [
+    "Easiest: use “Apply to EasyEffects” in this app (EasyEffects running).",
     "Add the Convolver effect to Output and import the exported .wav.",
     "Tip: pin PipeWire to one rate (default.clock.rate) so the file's rate always matches.",
     "Parametric: add the Equalizer effect and enable Split channels; with Left selected use Import APO preset and pick the “L ParametricEQ.txt” file, then do the same for Right with the “R” file."
@@ -153,7 +158,7 @@
     }
    },
    "verified": false,
-   "checked": "2026-10-27: EasyEffects manual — Equalizer has 1–32 bands and Split channels. Importing one APO file with Channel: sections is unreliable (wwmm/easyeffects#1003), so the export is one file per ear. Convolver import not re-checked."
+   "checked": "2026-10-27: EasyEffects manual — Equalizer has 1–32 bands and Split channels. Importing one APO file with Channel: sections is unreliable (wwmm/easyeffects#1003), so the export is one file per ear. Convolver import not re-checked. Apply (2026-10-27, EasyEffects source): Convolver kernel-name = .irs file stem (WAV), presets in $XDG_DATA_HOME/easyeffects/output (8.x), ~/.config/easyeffects (7.x), Flatpak under ~/.var/app; kernels resampled to the running rate; easyeffects -l loads a preset."
   },
   {
    "id": "camilladsp",

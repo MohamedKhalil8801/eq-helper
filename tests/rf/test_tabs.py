@@ -117,7 +117,8 @@ def test_settings_page(win, opened):
     page = win.settings_page
     assert page.device_combo.count() >= 1
     assert page.device_combo.itemText(0) == "System default"
-    assert "isn't available" in page.apo_status.text() or "only on Windows" in page.apo_status.text()
+    status = page.apo_status.text()
+    assert "isn't available" in status or "isn't installed" in status
     page.open_calibrations.click()
     assert Path(opened[-1].toLocalFile()) == win.ctx.paths.calibrations_folder
     assert win.ctx.paths.calibrations_folder.is_dir()

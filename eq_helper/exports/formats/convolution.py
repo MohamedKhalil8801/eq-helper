@@ -89,15 +89,33 @@ def camilla_snippet(base_name: str, folder: Path) -> list[str]:
     ]
 
 
-def apo_include(base_name: str, rates, meta: ExportMeta) -> str:
-    """Equalizer APO config that convolves with the file matching the running sample rate."""
-    lines = [f"# {line}" for line in meta.header_lines()]
-    lines += ["# Convolution: the file matching the device's sample rate is used.",
-              "# Equalizer APO can't resample a convolution file, so each rate has its own."]
+def apo_convolution_lines(base_name: str, rates, fallback: str | None = None) -> list[str]:
+    """``If: sampleRate == …`` blocks loading ``<base> <rate>.wav`` (paths relative to the
+    config file). ``fallback`` (APO text, e.g. GraphicEQ) covers any other rate."""
+    lines = ["# Convolution: the file matching the device's sample rate is used.",
+             "# Equalizer APO can't resample a convolution file, so each rate has its own.",
+             "Channel: all"]
     for i, rate in enumerate(rates):
         lines += [f"{'If' if i == 0 else 'ElseIf'}: sampleRate == {rate}", f"Convolution: {base_name} {rate}.wav"]
+    if fallback:
+        lines += ["Else:", "# Another sample rate: the same EQ as GraphicEQ."]
+        lines += fallback.strip().splitlines()
     lines += ["EndIf:"]
+    return lines
+
+
+def apo_include(base_name: str, rates, meta: ExportMeta) -> str:
+    """Equalizer APO config that convolves with the file matching the running sample rate."""
+    lines = [f"# {line}" for line in meta.header_lines()] + apo_convolution_lines(base_name, rates)
     return "\n".join(lines) + "\n"
+
+
+def render_rates(channel_eq: ChannelEQ, rates, folder: Path, base_name: str,
+                 phase: str = "minimum", fmt: str = "pcm24") -> list[Path]:
+    """Write ``<base> <rate>.wav`` (stereo, shared gain) for each rate; returns the files."""
+    written, _ = _render_named(_curves(channel_eq), _check_rates(rates), phase, fmt, Path(folder),
+                               lambda rate: f"{base_name} {rate}.wav")
+    return written
 
 
 def roon_cfg(rate: int, wav_name: str) -> str:

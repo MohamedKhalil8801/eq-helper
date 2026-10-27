@@ -34,6 +34,20 @@ def _no_modal_first_launch(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_real_system_eq(monkeypatch, tmp_path):
+    """Windows built in tests never find (or write to) a real EasyEffects in the user's home."""
+    from resonancefit.easyeffects_apply import EasyEffectsApplier
+    from resonancefit.ui import main_window
+    real = main_window.system_eq_for
+
+    def fake(platform, settings):
+        if platform == "linux":
+            return EasyEffectsApplier(platform, settings, home=tmp_path / "ee-home", env={}, which=lambda _n: None)
+        return real(platform, settings)
+    monkeypatch.setattr(main_window, "system_eq_for", fake)
+
+
+@pytest.fixture(autouse=True)
 def _gc_on_gui_thread(qapp):
     """As in the app: no garbage collection in worker threads during a test.
 

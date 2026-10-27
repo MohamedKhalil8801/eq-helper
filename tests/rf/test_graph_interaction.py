@@ -142,7 +142,9 @@ def test_main_window_names_installed_system_eqs_and_turns_ours_off(qtbot, tmp_pa
     ctx = AppContext.create(AppPaths("windows", tmp_path / "data", tmp_path / "app"))
 
     class FakeApo:
+        name, app_id, uses_devices = "Equalizer APO", "equalizer-apo", True
         device, on, offs = "Speakers", True, 0
+        def unavailable_text(self): return ""
         def available(self): return True
         def is_on(self): return self.on
         def turn_off(self): self.on, self.offs = False, self.offs + 1
