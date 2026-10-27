@@ -26,6 +26,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import zipfile
 from pathlib import Path
 
@@ -74,7 +75,13 @@ def run_packaged(system: str, package: Path, work: Path) -> tuple[int, str]:
         dmg = next(top.glob("*.dmg"))
         rescal = next(top.glob("*.rescal"))
         mount = Path(tempfile.mkdtemp())
-        subprocess.run(["hdiutil", "attach", str(dmg), "-mountpoint", str(mount), "-nobrowse", "-readonly"], check=True)
+        for attempt in range(4):  # a freshly written DMG can be briefly busy
+            if subprocess.run(["hdiutil", "attach", str(dmg), "-mountpoint", str(mount), "-nobrowse",
+                               "-readonly"]).returncode == 0:
+                break
+            time.sleep(5)
+        else:
+            raise RuntimeError(f"Couldn't mount {dmg.name}")
         try:
             macos = next(mount.glob("*.app")) / "Contents" / "MacOS"
             binary = next(p for p in macos.iterdir() if p.is_file())
