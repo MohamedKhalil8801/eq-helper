@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
@@ -11,13 +12,19 @@ from PySide6.QtWidgets import QHBoxLayout, QMainWindow, QStackedWidget, QTabWidg
 
 from eq_helper.calibration.model_cache import load_measurements
 from eq_helper.calibration.rescal import RESCAL_SUFFIX, Calibration, RescalError
+from eq_helper.dsp.predicted_export import safe_file_part
 from eq_helper.dsp.resonance import Measurements
+from eq_helper.exports.catalog import load_catalog
+from eq_helper.exports.detection import detect_installed
+from eq_helper.exports.formats.base import ExportMeta
 
 from ..audio import AudioService
 from ..history import HistoryStore
 from ..library import LibraryEntry
 from ..paths import is_translocated
-from .common import APP_STYLE, Worker, tr
+from .app_catalog_page import AppCatalogPage
+from .common import APP_STYLE, Worker, side_name, tr
+from .export_flow import PREDICTED_APP_ID, ExportFlow, ExportJob
 from .header_card import HeaderCard
 from .history_panel import HistoryPanel
 from .import_screen import ImportScreen
@@ -59,6 +66,8 @@ class MainWindow(QMainWindow):
         self.loading = False
         self._load_token = 0
         self._workers: set[Worker] = set()
+        self.catalog = load_catalog()
+        self.installed: set[str] = set()
         self.setWindowTitle(ctx.branding.title)
         self.setAcceptDrops(True)
         self.setStyleSheet(APP_STYLE)
@@ -93,9 +102,18 @@ class MainWindow(QMainWindow):
         for path, reason in ctx.scan_report.problems:
             self.statusBar().showMessage(tr("Couldn't read {name}: {reason}").format(name=path.name, reason=reason),
                                          15000)
+        self._run(lambda: detect_installed(self.catalog, ctx.paths.platform), self._apps_detected)
         self.refresh()
 
-    # ── tabs (filled by later screens) ─────────────────────────────────────
+    def _run(self, fn, on_done) -> Worker:
+        worker = Worker(fn, self)
+        worker.finished_ok.connect(on_done)
+        worker.finished.connect(lambda: self._workers.discard(worker))
+        self._workers.add(worker)
+        worker.start()
+        return worker
+
+    # ── tabs ───────────────────────────────────────────────────────────────
     def _build_tabs(self) -> None:
         from .tuning_panel import TuningPanel
         self.tune_tab = QWidget()
@@ -120,7 +138,43 @@ class MainWindow(QMainWindow):
         sidebar.setFixedWidth(330)
         tune.addWidget(sidebar)
         self.calibrationLoaded.connect(self._calibration_ready)
+        self.listen.exportRequested.connect(self.open_export)
+        self.history_panel.app_names = {app.id: app.name for app in self.catalog.apps}
+        self.history_panel.app_names[PREDICTED_APP_ID] = tr("Predicted response")
         self.tabs.addTab(self.tune_tab, tr("Tune"))
+
+        self.catalog_page = AppCatalogPage(self.catalog, self.ctx.paths.platform)
+        self.catalog_page.exportRequested.connect(self.open_export)
+        self.tabs.addTab(self.catalog_page, tr("Where can I use my EQ?"))
+
+    def _apps_detected(self, installed) -> None:
+        self.installed = set(installed)
+        self.catalog_page.set_installed(self.installed)
+
+    # ── export ─────────────────────────────────────────────────────────────
+    def export_job(self) -> ExportJob | None:
+        session, eq = self.tuning.session, self.tuning.channel_eq
+        if self.current is None or session is None or eq is None:
+            return None
+        manifest = self.current.manifest
+        sides = ", ".join(f"{side_name(s)} {hz:.0f} Hz" for s, hz in sorted(session.primary.items()))
+        tuning = tr("{sides}; target {target}").format(sides=sides, target=session.target_name)
+        if session.upper_enabled and session.upper:
+            tuning += "; " + tr("upper treble {values}").format(
+                values=", ".join(f"{side_name(s)} {hz:.0f} Hz" for s, hz in sorted(session.upper.items())))
+        meta = ExportMeta(manifest.customer.name, manifest.iem.display_name, date.today().isoformat(), tuning)
+        peaks = " ".join(f"{s}{hz:.0f}" for s, hz in sorted(session.primary.items()))
+        base = safe_file_part(f"{manifest.iem.display_name} - {session.target_name} - {peaks}")
+        return ExportJob(eq, meta, base, manifest.iem.display_name, self.record_history, self.ctx.settings)
+
+    def open_export(self) -> None:
+        job = self.export_job()
+        if job is None:
+            self.statusBar().showMessage(tr("Choose a target first, then export."), 8000)
+            return
+        flow = ExportFlow(job, self.catalog, self.ctx.paths.platform, self.installed,
+                          self.audio.device_rate, parent=self)
+        flow.exec()
 
     # ── history ────────────────────────────────────────────────────────────
     def _calibration_ready(self, loaded) -> None:
