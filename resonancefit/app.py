@@ -36,6 +36,8 @@ def main(argv=None) -> int:
 
     branding = load_branding()
     app = QApplication(argv)
+    from .ui.common import MainThreadGC
+    collector = MainThreadGC(parent=app)  # noqa: F841 - lives as long as the app
     app.setApplicationName(branding.product_name)
     app.setApplicationDisplayName(branding.product_name)
     ctx = AppContext.create(branding=branding)

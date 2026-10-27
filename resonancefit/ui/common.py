@@ -152,3 +152,32 @@ class Worker(QThread):
             self.failed.emit(str(exc))
         else:
             self.finished_ok.emit(result)
+
+
+class MainThreadGC(QObject):
+    """Run Python's garbage collector only on the GUI thread.
+
+    If a collection happens to start in a worker thread, it can free Qt
+    widgets there and crash. Automatic collection is turned off and this
+    timer collects on the GUI thread instead, by generation as needed.
+    """
+
+    def __init__(self, interval_ms: int = 1000, parent: QObject | None = None):
+        super().__init__(parent)
+        import gc
+        from PySide6.QtCore import QTimer
+        self._gc = gc
+        self.threshold = gc.get_threshold()
+        gc.disable()
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.check)
+        self.timer.start(interval_ms)
+
+    def check(self) -> None:
+        l0, l1, l2 = self._gc.get_count()
+        if l0 > self.threshold[0]:
+            self._gc.collect(0)
+            if l1 > self.threshold[1]:
+                self._gc.collect(1)
+                if l2 > self.threshold[2]:
+                    self._gc.collect(2)

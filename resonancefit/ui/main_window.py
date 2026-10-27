@@ -307,6 +307,7 @@ class MainWindow(QMainWindow):
         flow = ExportFlow(job, self.catalog, self.ctx.paths.platform, self.installed,
                           self.audio.device_rate, parent=self)
         flow.exec()
+        flow.deleteLater()  # destroyed on the GUI thread, never by a GC pass elsewhere
 
     # ── history ────────────────────────────────────────────────────────────
     def _calibration_ready(self, loaded) -> None:

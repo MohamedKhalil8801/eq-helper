@@ -30,3 +30,20 @@ def _no_modal_first_launch(monkeypatch):
     from resonancefit.ui import main_window, walkthrough
     monkeypatch.setattr(walkthrough.Walkthrough, "exec", lambda self: 1)
     monkeypatch.setattr(main_window.MainWindow, "confirm_quiet_start", lambda self: True)
+
+
+@pytest.fixture(autouse=True)
+def _gc_on_gui_thread(qapp):
+    """As in the app: no garbage collection in worker threads during a test.
+
+    Windows are closed (joining their workers) and garbage is collected on
+    the GUI thread before automatic collection is turned back on.
+    """
+    import gc
+    gc.disable()
+    yield
+    for widget in qapp.topLevelWidgets():
+        widget.close()
+    qapp.processEvents()
+    gc.collect()
+    gc.enable()
