@@ -472,3 +472,91 @@ def test_no_clear_upper_peak_keeps_the_upper_treble(qtbot, panel, view, clock):
     assert view.pages.currentWidget() is view.done_page
     assert "no clear upper peak" in view.result_label.text()
     assert not panel.session.upper_enabled and panel.session.upper == {}
+
+
+def reach_smoothness(qtbot, view, clock):
+    started(view)
+    while view.test.kind == LOUDER:
+        answer_like_a_listener(qtbot, view, clock)
+    qtbot.waitUntil(lambda: view.ready, timeout=15000)
+
+
+def test_smoothness_check_plays_noise_or_a_sweep_through_the_same_eq(qtbot, view, clock):
+    reach_smoothness(qtbot, view, clock)
+    assert view.sound_row.isVisibleTo(view) and view.noise_button.isChecked()
+    view.cards[1].click()
+    assert view.audio.playing == "pink"
+    eq = view.audio._eq
+    view.sweep_button.click()
+    assert view.playing and view.audio.playing == "focus" and view.audio._eq is eq
+    snap = view.audio.engine.state.snapshot()
+    assert snap.mode == Mode.SWEEP and snap.channel_mode == ChannelMode.LEFT
+    low, mid, high = sorted(view._round.options)
+    assert snap.sweep_f_start < low and snap.sweep_f_end > high  # the sweep spans all three options
+    sweep = view.audio.engine._sweep
+    view.cards[2].click()  # another EQ: the sweep keeps going, only the EQ changes
+    assert view.audio.playing == "focus" and view.audio.engine._sweep is sweep
+    assert view.audio._eq is view._eqs[2][0]
+    view.noise_button.click()
+    assert view.audio.playing == "pink" and view.audio._eq is view._eqs[2][0]
+
+
+def test_listening_with_either_sound_counts_as_heard(qtbot, view, clock):
+    reach_smoothness(qtbot, view, clock)
+    view.select(0)
+    clock[0] += 0.6
+    view.set_stage2_sound("focus")
+    view.select(1)
+    clock[0] += 0.6
+    view.select(2)
+    clock[0] += 0.6
+    view._account()
+    assert view.heard == {0, 1, 2} and view.can_answer
+
+
+def test_the_sweep_choice_stays_for_later_rounds_and_follows_them(qtbot, view, clock):
+    reach_smoothness(qtbot, view, clock)
+    view.select(0)
+    view.set_stage2_sound("focus")
+    hear_all(view, clock)
+    view.answer_same()  # "can't tell": the left ear is done
+    while view.pages.currentWidget() is view.done_page:
+        view.next_button.click()
+    while view.test.kind == LOUDER:
+        assert not view.sound_row.isVisibleTo(view)
+        answer_like_a_listener(qtbot, view, clock)
+    assert view.sweep_button.isChecked()
+    qtbot.waitUntil(lambda: view.ready, timeout=15000)
+    view.cards[0].click()
+    assert view.audio.playing == "focus"
+    low, _mid, high = sorted(view._round.options)
+    snap = view.audio.engine.state.snapshot()
+    assert snap.sweep_f_start < low and snap.sweep_f_end > high and snap.channel_mode == ChannelMode.RIGHT
+
+
+def test_sweep_keys(qtbot, panel, view, clock):
+    from PySide6.QtWidgets import QApplication
+    panel.show()
+    qtbot.waitExposed(panel)
+    QApplication.setActiveWindow(panel)
+    reach_smoothness(qtbot, view, clock)
+    view.transport.setFocus()
+    qtbot.keyClick(view.transport, Qt.Key_1)
+    qtbot.keyClick(view.transport, Qt.Key_W)
+    assert view.audio.playing == "focus"
+    qtbot.keyClick(view.transport, Qt.Key_N)
+    assert view.audio.playing == "pink"
+
+
+def test_sweep_animation_is_blind_too(qtbot, view, clock):
+    reach_smoothness(qtbot, view, clock)
+    view.select(0)
+    view.set_stage2_sound("focus")
+    engine = view.audio.engine
+    levels = []
+    for index in range(3):
+        view.select(index)
+        for _ in range(12):
+            engine.process_block(480)
+        levels.append(view.measure_level(engine.pop_recent_samples(1024)))
+    assert max(levels) - min(levels) < 0.02  # the level fed to the cards ignores the EQ
