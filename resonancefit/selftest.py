@@ -101,6 +101,11 @@ def _run(lines: list[str], argv) -> int:
                 paths.calibrations_folder.mkdir(parents=True)
                 write_rescal(paths.calibrations_folder / "Self test.rescal", synthetic_calibration())
             ctx = AppContext.create(paths)
+            if use_download:  # .rescal files on the command line are imported, as by a double-click
+                from .app import calibration_args
+                for path in calibration_args(argv):
+                    ctx.library.import_file(path)
+                    report(f"opened: {path.name}")
             # no first-launch prompts: nobody is there to answer them
             ctx.settings.update(walkthrough_seen=True, quiet_warning_seen=True, file_association_offered=True)
             report(f"calibrations found: {len(ctx.library.list())}")
