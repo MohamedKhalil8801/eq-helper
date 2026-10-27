@@ -3,7 +3,7 @@
 Branding, customer, IEM, accessories (whose they are), coupler, date, every
 fit plotted per side, and the measured primary-resonance range per side.
 Drawn directly with QPainter onto a QPdfWriter, so text stays selectable and
-plots stay vector. Needs a QGuiApplication.
+plots stay vector. Needs a QGuiApplication; safe to call from a worker thread.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from pathlib import Path
 
 import numpy as np
 from PySide6.QtCore import QMarginsF, QPointF, QRectF, Qt
-from PySide6.QtGui import QColor, QFont, QPageLayout, QPageSize, QPainter, QPainterPath, QPdfWriter, QPen, QPixmap
+from PySide6.QtGui import QColor, QFont, QPageLayout, QPageSize, QPainter, QPainterPath, QImage, QPdfWriter, QPen
 
 SIDE_NAMES = {"L": "Left", "R": "Right", None: "Both ears", "M": "Both ears"}
 SIDE_COLORS = {"L": "#0072B2", "R": "#D55E00", None: "#009E73"}
@@ -168,11 +168,11 @@ def write_calibration_sheet(path, calibration, branding, measurements=None) -> P
         y = 0.0
         logo = branding.logo_path
         if logo is not None and logo.is_file():
-            pix = QPixmap(str(logo))
-            if not pix.isNull():
+            image = QImage(str(logo))  # QImage, not QPixmap: sheets are also drawn on worker threads
+            if not image.isNull():
                 h = _mm(14)
-                w = h * pix.width() / max(pix.height(), 1)
-                p.drawPixmap(QRectF(page.right() - w, 0, w, h), pix, QRectF(pix.rect()))
+                w = h * image.width() / max(image.height(), 1)
+                p.drawImage(QRectF(page.right() - w, 0, w, h), image, QRectF(image.rect()))
         p.setPen(QColor("#111111"))
         p.setFont(_font(20, True))
         p.drawText(QRectF(0, y, page.width(), _mm(10)), Qt.AlignLeft | Qt.AlignVCenter, branding.product_name)
