@@ -92,6 +92,22 @@ through EQs that differ only in the highest treble. If you can barely hear the h
 **About the same**: when no clear peak is heard, that ear's upper treble stays as it is. A found upper treble turns
 on **Adjust the upper treble** (step ③) with that value.
 
+**Balance check (optional, at the end).** If both resonances are right, the same sound in both ears
+sounds centred at every pitch. The app plays a series of short sounds in both ears through your EQ (use
+your normal listening volume). For each one, if it leans to one side, move it back to the middle with
+the slider (or ← →, Shift for bigger steps, Home to re-centre), then press **Next**; if it's already
+centred, just press **Next**. Two of the sounds come twice, to see how steady the answers are. The check
+never changes your EQ by itself:
+
+- **Left and right are balanced ✓**: your two resonances agree.
+- **"Your right ear's resonance may be a little higher"**: some sounds leaned the way a misplaced
+  resonance would. **Check the right ear again** runs a short smoothness check of that ear from where the
+  balance points; then you can run the balance check again. (Balance only shows the difference between
+  your ears: if the re-checked ear hardly moves, the next check points at the other ear.)
+- **Mostly balanced**: a lean that doesn't look like a misplaced resonance (the calibration or your
+  hearing there) is only mentioned, and so is a broad lean across the treble.
+- **The bass leans to one side**: the other IEM may not be sealed as well. Reseat it and check again.
+
 Keys: **1 2 3** pick and play a card, **P** play/pause, **Enter** answers for the selected card, **S**
 is *About the same* / *Can't tell them apart*, **N** / **W** noise or sweep in the smoothness check,
 **Backspace** goes back, **Space** stops all sound.
