@@ -69,7 +69,9 @@ def main(argv=None) -> int:
 
     app.installEventFilter(FileOpenFilter(on_file, app))
     ctx = AppContext.create(branding=branding)
-    window = MainWindow(ctx)
+    from .updates import UpdateChecker
+    from .version import app_version
+    window = MainWindow(ctx, updates=UpdateChecker(ctx.settings, app_version(), ctx.paths.platform))
     instance.listen(window.open_files)
     window.open_files([*files, *pending], activate=False)
     window.show()

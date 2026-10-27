@@ -6,10 +6,10 @@ from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, Qt, QTimer, Signal
-from PySide6.QtGui import QKeySequence, QShortcut
+from PySide6.QtCore import QEvent, Qt, QTimer, QUrl, Signal
+from PySide6.QtGui import QDesktopServices, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
-    QHBoxLayout, QInputDialog, QMainWindow, QMessageBox, QScrollArea, QStackedWidget, QTabWidget, QVBoxLayout, QWidget,
+    QFrame, QHBoxLayout, QInputDialog, QLabel, QMainWindow, QPushButton, QMessageBox, QScrollArea, QStackedWidget, QTabWidget, QVBoxLayout, QWidget,
 )
 
 from eq_helper.calibration.model_cache import load_measurements
@@ -65,14 +65,40 @@ def _rescal_paths(mime) -> list[Path]:
             if u.isLocalFile() and u.toLocalFile().lower().endswith(RESCAL_SUFFIX)]
 
 
+class UpdateBanner(QFrame):
+    """A slim strip above the tabs: "Version X is available" with Download / What's new / dismiss."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("updateBanner")
+        self.setStyleSheet("#updateBanner { border: 1px solid palette(highlight); border-radius: 6px; }")
+        row = QHBoxLayout(self)
+        row.setContentsMargins(10, 6, 6, 6)
+        self.text = QLabel()
+        self.text.setWordWrap(True)
+        row.addWidget(self.text, 1)
+        self.download = QPushButton(tr("Download"))
+        self.download.setObjectName("primary")
+        row.addWidget(self.download)
+        self.details = QPushButton(tr("What's new"))
+        row.addWidget(self.details)
+        self.dismiss = QPushButton(tr("Not now"))
+        self.dismiss.setToolTip(tr("Hide this until a newer version comes out. Settings still shows it."))
+        row.addWidget(self.dismiss)
+        self.result = None
+        self.hide()
+
+
 class MainWindow(QMainWindow):
     calibrationLoaded = Signal(object)  # LoadedCalibration
     audioReady = Signal(bool)
 
     def __init__(self, ctx, audio: AudioService | None = None, start_audio: bool = True,
-                 apo: ApoApplier | None = None, association: FileAssociation | None = None):
+                 apo: ApoApplier | None = None, association: FileAssociation | None = None, updates=None):
         super().__init__()
         self.ctx = ctx
+        self.updates = updates
+        self._update_worker: Worker | None = None
         self.audio = audio or AudioService()
         self.current: LoadedCalibration | None = None
         self.history: HistoryStore | None = None
@@ -89,8 +115,22 @@ class MainWindow(QMainWindow):
         self.setStyleSheet(build_style(self.palette()))
         self.resize(1180, 860)
 
+        central = QWidget()
+        outer = QVBoxLayout(central)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        self.update_banner = UpdateBanner()
+        banner_box = QHBoxLayout()
+        banner_box.setContentsMargins(12, 8, 12, 0)
+        banner_box.addWidget(self.update_banner)
+        outer.addLayout(banner_box)
+        self.update_banner.download.clicked.connect(
+            lambda: self.open_url(self.update_banner.result.download_url or self.update_banner.result.page_url))
+        self.update_banner.details.clicked.connect(lambda: self.open_url(self.update_banner.result.page_url))
+        self.update_banner.dismiss.clicked.connect(self._dismiss_update)
         self.stack = QStackedWidget()
-        self.setCentralWidget(self.stack)
+        outer.addWidget(self.stack, 1)
+        self.setCentralWidget(central)
         self.import_screen = ImportScreen(ctx.branding, ctx.paths.calibrations_folder,
                                           is_translocated(ctx.paths.app_dir))
         self.import_screen.fileChosen.connect(self.open_calibration_file)
@@ -123,6 +163,7 @@ class MainWindow(QMainWindow):
                                          15000)
         self._run(lambda: detect_installed(self.catalog, ctx.paths.platform), self._apps_detected)
         self.refresh()
+        self._launch_update_check()
 
     def _run(self, fn, on_done) -> Worker:
         worker = Worker(fn, self)
@@ -131,6 +172,49 @@ class MainWindow(QMainWindow):
         self._workers.add(worker)
         worker.start()
         return worker
+
+    # ── updates (notify only) ──────────────────────────────────────────────
+    def open_url(self, url: str) -> None:
+        if url:
+            QDesktopServices.openUrl(QUrl(url))
+
+    def _launch_update_check(self) -> None:
+        """At launch only: check unless today's check already succeeded (a failed one is retried)."""
+        if self.updates is None:
+            return
+        if self.updates.automatic and self.updates.due():
+            self.check_for_updates(manual=False)
+        else:
+            self._show_update(self.updates.last_result(), manual=False)
+
+    def check_for_updates(self, manual: bool = True) -> None:
+        if self.updates is None or self._update_worker is not None:
+            return
+        self.settings_page.set_checking()
+        self._update_worker = self._run(self.updates.check, lambda result: self._update_checked(result, manual))
+
+    def _update_checked(self, result, manual: bool) -> None:
+        self._update_worker = None
+        self._show_update(result, manual)
+
+    def _show_update(self, result, manual: bool) -> None:
+        self.settings_page.show_update_result(result)
+        if result is None or not (result.ok and result.available):
+            self.update_banner.hide()
+            return
+        if not manual and self.updates.dismissed(result.latest):
+            return
+        self.update_banner.result = result
+        self.update_banner.text.setText(tr("{product} {latest} is available (you have {current}). Your "
+                                           "calibrations, history and settings are kept when you update.").format(
+            product=self.ctx.branding.product_name, latest=result.latest, current=self.updates.current_version))
+        self.update_banner.details.setVisible(bool(result.page_url))
+        self.update_banner.show()
+
+    def _dismiss_update(self) -> None:
+        if self.update_banner.result is not None:
+            self.updates.dismiss(self.update_banner.result.latest)
+        self.update_banner.hide()
 
     # ── tabs ───────────────────────────────────────────────────────────────
     def _build_tabs(self) -> None:
@@ -181,7 +265,9 @@ class MainWindow(QMainWindow):
         self.catalog_page.exportRequested.connect(self.open_export)
         self.tabs.addTab(self.catalog_page, tr("Where can I use my EQ?"))
 
-        self.settings_page = SettingsPage(self.ctx, self.audio, self.apo)
+        self.settings_page = SettingsPage(self.ctx, self.audio, self.apo, self.updates)
+        self.settings_page.updateCheckRequested.connect(lambda: self.check_for_updates(manual=True))
+        self.settings_page.openUrlRequested.connect(self.open_url)
         self.settings_page.apoDeviceChangeRequested.connect(self.change_apo_device)
         self.settings_page.walkthroughRequested.connect(self.show_walkthrough)
         self.tabs.addTab(self.settings_page, tr("Settings"))

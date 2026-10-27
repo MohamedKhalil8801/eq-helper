@@ -126,7 +126,11 @@ EQ apps in `eq_helper/exports/catalog.json`. Customer-facing guide:
 
 Releases of the customer app are built, self-tested and published by the
 releases repo's "Build and publish" workflow (ADR 0005); `packaging/` holds the
-PyInstaller spec helpers, release packaging and `e2e_check.py`.
+PyInstaller spec helpers, release packaging and `e2e_check.py`. The app checks
+that repo's latest release when it opens (`resonancefit/updates.py`): at most
+once a day after a successful check, retried on the next launch after a failed
+one, notify only. Release tags must stay `rf-vX.Y.Z` with assets named
+`…-windows.zip`, `…-macos.dmg`, `…-linux.AppImage` for the download link.
 
 ## What is learned
 
