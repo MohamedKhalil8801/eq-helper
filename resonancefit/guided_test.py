@@ -20,6 +20,15 @@ Two listening stages per ear find a resonance (see GLOSSARY):
 resonance and then, if the customer wants, for the upper resonance. It keeps
 one undo history across stages and ears. Option order is shuffled every
 round; options are plain frequencies, the UI only ever shows letters.
+
+The upper resonance (about 15–18 kHz) gets no louder test: up there hearing
+falls off steeply and differs a lot between people, so "quieter" says more
+about the ear than about the IEM. It follows the primary resonance closely
+(about twice its frequency), so the calibration's prediction is the start,
+and only the smoothness check — a local comparison a smooth fall-off
+doesn't disturb — fine-tunes it, within the range the EQ can move it.
+First, an :class:`AudibilityCheck` asks whether a band there is heard
+clearly at all; if not, that ear's upper treble stays as calibrated.
 """
 
 from __future__ import annotations
@@ -41,7 +50,6 @@ GUESS_ANSWERS = (0.4, 0.4, 0.2)  # how a guesser answers: first / second louder 
 GUESS_DOUBT = 0.3            # this likely that the answers are guesses: not done / unsure
 CHECK_EVERY = 3              # every third round is a check: the pair whose answer is most predictable
 PEAK_WIDTHS = (0.06, 0.1, 0.18)        # octaves (Gaussian σ) a primary resonance may have
-UPPER_PEAK_WIDTHS = (0.08, 0.14, 0.24)
 JND_DB = 1.0                 # smaller differences are heard as "About the same"
 NOISE_DB = 0.8               # how much the impression wobbles from round to round
 LAPSE = 0.05                 # a slip: any answer, whatever was heard
@@ -67,13 +75,15 @@ LOUDER_MIN_NO_PEAK_ROUNDS = 4
 
 SMOOTH_DELTA = 0.06          # octaves between the options
 SMOOTH_WIDE_DELTA = 0.12     # when the louder test wasn't sure: start wider
-UPPER_SMOOTH_DELTA = 0.08
-UPPER_SMOOTH_WIDE_DELTA = 0.15
+UPPER_SMOOTH_DELTA = 0.1     # the upper smoothness check starts from the calibration's prediction
 SMOOTH_MIN_DELTA = 0.015
+UPPER_SMOOTH_MIN_DELTA = 0.025
 SMOOTH_MAX_ROUNDS = 6
 SMOOTH_MAX_MOVES = 2         # edge picks in a row at one spacing before it halves
+UPPER_WINDOW = 1.25          # the upper search stays within ÷/× this of the prediction (the EQ moves it ≤ 1.4×)
+AUDIBLE_BAND = 1 / 3         # octaves: the band played to ask whether the upper treble is heard clearly
 
-LOUDER, SMOOTHNESS = "louder", "smoothness"
+LOUDER, SMOOTHNESS, AUDIBLE = "louder", "smoothness", "audible"
 PRIMARY, UPPER = "primary", "upper"
 
 
@@ -410,12 +420,50 @@ class SmoothnessSearch:
         return min(0.9, max(by_delta, len(self.answers) / self.max_rounds))
 
 
+class AudibilityCheck:
+    """One question before an ear's upper treble: is a band at the predicted peak heard clearly?
+
+    Asked, never inferred from the answers: a band there sounding quiet is
+    the ear's own fall-off as much as the IEM. ``answer(0)``: heard clearly;
+    ``answer(None)``: barely or not at all.
+    """
+
+    def __init__(self, hz: float):
+        self.hz = float(hz)
+        self.answers: list[bool] = []
+
+    @property
+    def done(self) -> bool:
+        return bool(self.answers)
+
+    def options(self) -> Round:
+        if self.done:
+            raise RuntimeError("Already answered.")
+        return Round((self.hz,), band=AUDIBLE_BAND)
+
+    def answer(self, choice: int | None) -> None:
+        self.options()
+        self.answers.append(choice is not None)
+
+    def undo(self) -> bool:
+        if not self.answers:
+            return False
+        self.answers.pop()
+        return True
+
+    def result(self) -> bool:
+        return self.answers[-1]
+
+    def progress(self) -> float:
+        return 1.0 if self.done else 0.0
+
+
 @dataclass
 class _Stage:
     side: str
-    kind: str        # LOUDER / SMOOTHNESS
+    kind: str        # LOUDER / SMOOTHNESS / AUDIBLE
     target: str      # PRIMARY / UPPER
-    search: LouderSearch | SmoothnessSearch
+    search: LouderSearch | SmoothnessSearch | AudibilityCheck
     recheck: bool = False  # a re-check the balance check asked for: done → back to "finished"
 
 
@@ -430,11 +478,13 @@ class GuidedTest:
     - "unsure": a louder test ended with answers pointing to more than one
       place — redo the ear, use the estimate anyway, or adjust by hand;
     - "upper_offer": both primary resonances are found; the upper treble is
-      offered (``start_upper()`` / ``skip_upper()``);
+      offered (``start_upper(predicted)`` / ``skip_upper()``);
     - "finished" (and again after a ``recheck()`` the balance check asked for).
 
-    ``upper_results[side]`` is ``None`` when no clear upper peak was heard
-    (the upper treble then stays as it is).
+    For the upper treble each ear gets an AUDIBLE stage (one question), then
+    a smoothness check around the prediction. ``upper_results[side]`` is
+    ``None`` when that ear didn't hear it clearly or nothing was predicted
+    (the upper treble then stays as calibrated).
     """
 
     sides: tuple[str, ...]
@@ -446,25 +496,45 @@ class GuidedTest:
     stages: list[_Stage] = field(default_factory=list)
     results: dict[str, float] = field(default_factory=dict)
     upper_results: dict[str, float | None] = field(default_factory=dict)
+    predicted_upper: dict[str, float | None] = field(default_factory=dict)
     status: str = "testing"
 
     def __post_init__(self):
         self.sides = tuple(self.sides)
         if not self.sides:
             raise ValueError("Nothing to test: no ears.")
-        self.stages = [self._louder(self.sides[0], PRIMARY)]
+        self.stages = [self._louder(self.sides[0])]
 
-    def _louder(self, side: str, target: str) -> _Stage:
-        if target == UPPER:
-            return _Stage(side, LOUDER, UPPER, LouderSearch(self.upper_range, self.rng, widths=UPPER_PEAK_WIDTHS))
+    def _louder(self, side: str) -> _Stage:
         return _Stage(side, LOUDER, PRIMARY, LouderSearch(self.hz_range, self.rng))
+
+    def upper_window(self, side: str) -> tuple[float, float]:
+        """Where ``side``'s upper resonance is looked for: around the prediction, inside the range."""
+        lo, hi = self.upper_range
+        predicted = self.predicted_upper.get(side)
+        if predicted is None:
+            return float(lo), float(hi)
+        return max(float(lo), predicted / UPPER_WINDOW), min(float(hi), predicted * UPPER_WINDOW)
 
     def _smoothness(self, side: str, target: str, center: float, wide: bool) -> _Stage:
         if target == UPPER:
-            delta, hz_range = (UPPER_SMOOTH_WIDE_DELTA if wide else UPPER_SMOOTH_DELTA), self.upper_range
-        else:
-            delta, hz_range = (SMOOTH_WIDE_DELTA if wide else SMOOTH_DELTA), self.hz_range
-        return _Stage(side, SMOOTHNESS, target, SmoothnessSearch(center, delta, hz_range, self.rng))
+            search = SmoothnessSearch(center, UPPER_SMOOTH_DELTA, self.upper_window(side), self.rng,
+                                      min_delta=UPPER_SMOOTH_MIN_DELTA)
+            return _Stage(side, SMOOTHNESS, UPPER, search)
+        delta = SMOOTH_WIDE_DELTA if wide else SMOOTH_DELTA
+        return _Stage(side, SMOOTHNESS, PRIMARY, SmoothnessSearch(center, delta, self.hz_range, self.rng))
+
+    def _upper_start(self, index: int) -> None:
+        """The upper treble from ``sides[index]`` on: its audibility question, or (nothing
+        predicted) straight on to the next ear."""
+        for side in self.sides[index:]:
+            predicted = self.predicted_upper.get(side)
+            if predicted is not None:
+                self.status = "testing"
+                self.stages.append(_Stage(side, AUDIBLE, UPPER, AudibilityCheck(predicted)))
+                return
+            self.upper_results[side] = None
+        self.status = "finished"
 
     @property
     def stage(self) -> _Stage:
@@ -503,15 +573,18 @@ class GuidedTest:
         stage = self.stage
         if not stage.search.done:
             return
+        if stage.kind == AUDIBLE:
+            if stage.search.result():
+                self.stages.append(self._smoothness(stage.side, UPPER, stage.search.hz, wide=False))
+            else:  # not heard clearly: the upper treble stays as calibrated
+                self.upper_results[stage.side] = None
+                self._next_ear()
+            return
         if stage.kind == LOUDER:
             found = stage.search.result()
             if found.confident:
                 self.stages.append(self._smoothness(stage.side, stage.target, found.hz, wide=False))
             elif found.fell_back:
-                if stage.target == UPPER:  # no clear upper peak: leave the upper treble as it is
-                    self.upper_results[stage.side] = None
-                    self._next_ear()
-                    return
                 center = self.default_hz.get(stage.side, found.hz)
                 self.stages.append(self._smoothness(stage.side, PRIMARY, center, wide=True))
             else:
@@ -526,19 +599,24 @@ class GuidedTest:
     def _next_ear(self) -> None:
         stage = self.stage
         index = self.sides.index(stage.side)
-        if index + 1 < len(self.sides):
-            self.stages.append(self._louder(self.sides[index + 1], stage.target))
-        elif stage.target == PRIMARY and self.offer_upper:
+        if stage.target == UPPER:
+            self._upper_start(index + 1)
+        elif index + 1 < len(self.sides):
+            self.stages.append(self._louder(self.sides[index + 1]))
+        elif self.offer_upper:
             self.status = "upper_offer"
         else:
             self.status = "finished"
 
-    def start_upper(self) -> None:
-        """Go on to the upper resonance (after both primary resonances)."""
+    def start_upper(self, predicted: dict[str, float | None]) -> None:
+        """Go on to the upper resonance (after both primary resonances). ``predicted[side]``: where
+        the calibration puts that ear's upper peak for its found primary resonance (``None``: none)."""
         if self.status != "upper_offer":
             raise RuntimeError("The upper treble comes after the primary resonances.")
-        self.status = "testing"
-        self.stages.append(self._louder(self.sides[0], UPPER))
+        lo, hi = self.upper_range
+        self.predicted_upper = {side: (None if predicted.get(side) is None
+                                       else _clip(predicted[side], lo, hi)) for side in self.sides}
+        self._upper_start(0)
 
     def skip_upper(self) -> None:
         if self.status == "upper_offer":
@@ -585,7 +663,7 @@ class GuidedTest:
     def redo_ear(self) -> None:
         """Start the current ear's louder test again (after an unsure one)."""
         stage = self.stage
-        self.stages[-1] = self._louder(stage.side, stage.target)
+        self.stages[-1] = self._louder(stage.side)
         self._results_for(stage.target).pop(stage.side, None)
         self.status = "testing"
 
@@ -600,6 +678,8 @@ class GuidedTest:
                 continue
             if stage.kind == SMOOTHNESS:
                 return stage.search.result()
+            if stage.kind == AUDIBLE:
+                return None
             if len(stage.search.answers) >= 3 and stage.search.spread <= KEEP_ESTIMATE_RATIO:
                 return stage.search.estimate()
             return None
