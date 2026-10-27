@@ -33,7 +33,7 @@ def main(argv=None) -> int:
     argv = list(sys.argv if argv is None else argv)
     if "--self-test" in argv:
         from .selftest import run_self_test
-        return run_self_test(argv[:1])
+        return run_self_test(argv)
 
     from PySide6.QtGui import QIcon
     from PySide6.QtWidgets import QApplication

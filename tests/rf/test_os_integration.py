@@ -175,3 +175,21 @@ def test_open_files_imports_and_ignores_other_files(qtbot, tmp_path):
     src = write_rescal(tmp_path / "x.rescal", make_calibration(customer="Forwarded"))
     w.open_files([str(tmp_path / "notes.txt"), str(src)], activate=False)
     qtbot.waitUntil(lambda: w.current is not None and w.current.manifest.customer.name == "Forwarded", timeout=20000)
+
+
+def test_self_test_checks_a_real_download_layout(tmp_path):
+    download = tmp_path / "ResonanceFit – Ada"
+    (download / "Calibrations").mkdir(parents=True)
+    (download / "Targets").mkdir()
+    write_rescal(download / "Calibrations" / "Ada – Truthear Nova.rescal", make_calibration(customer="Ada"))
+    (download / "Targets" / "Mine.txt").write_text("20 70\n1000 75\n20000 70\n")
+    env = {**os.environ, "QT_QPA_PLATFORM": "offscreen", "HOME": str(tmp_path), "XDG_DATA_HOME": str(tmp_path / "x"),
+           "APPDATA": str(tmp_path / "appdata"), "PYTHONPATH": str(ROOT), "RF_DOWNLOAD_DIR": str(download)}
+    proc = subprocess.run([sys.executable, "-m", "resonancefit", "--self-test", "--use-download"], cwd=tmp_path,
+                          env=env, capture_output=True, text=True, timeout=300)
+    out = proc.stdout
+    if sys.platform == "darwin":  # macOS reads calibrations from the data folder, by design
+        assert "calibrations found: 0" in out
+        return
+    assert proc.returncode == 0, out + proc.stderr
+    assert "selected: Ada – Truthear Nova" in out and "targets shipped in the download: 1" in out

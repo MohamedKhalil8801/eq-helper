@@ -56,6 +56,10 @@ def run_self_test(argv=None) -> int:
 
 
 def _run(lines: list[str], argv) -> int:
+    argv = list(argv or sys.argv)
+    # --use-download: check a real customer download instead of a synthetic one — the
+    # calibration(s) and Targets/ shipped next to this app must be found by themselves.
+    use_download = "--use-download" in argv
 
     def report(text: str) -> None:
         lines.append(text)
@@ -81,22 +85,36 @@ def _run(lines: list[str], argv) -> int:
         ok = check_audio_library(report)
         app = QApplication.instance()
         if app is None:
-            app = QApplication(list(argv or sys.argv[:1]))
+            app = QApplication(argv[:1])
             MainThreadGC(parent=app)
         with tempfile.TemporaryDirectory(prefix="selftest-") as tmp:
             tmp = Path(tmp)
             platform = current_platform()
-            paths = AppPaths(platform, tmp / "data", tmp / "download")
-            # where this OS's app looks (next to the app; the data folder on macOS)
-            paths.calibrations_folder.mkdir(parents=True)
-            write_rescal(paths.calibrations_folder / "Self test.rescal", synthetic_calibration())
+            if use_download:
+                download = os.environ.get("RF_DOWNLOAD_DIR")
+                app_dir = Path(download) if download else AppPaths.detect().app_dir
+                report(f"download folder: {app_dir}")
+                paths = AppPaths(platform, tmp / "data", app_dir)
+            else:
+                paths = AppPaths(platform, tmp / "data", tmp / "download")
+                # where this OS's app looks (next to the app; the data folder on macOS)
+                paths.calibrations_folder.mkdir(parents=True)
+                write_rescal(paths.calibrations_folder / "Self test.rescal", synthetic_calibration())
             ctx = AppContext.create(paths)
             # no first-launch prompts: nobody is there to answer them
             ctx.settings.update(walkthrough_seen=True, quiet_warning_seen=True, file_association_offered=True)
             report(f"calibrations found: {len(ctx.library.list())}")
             report(f"targets: {len(ctx.targets.targets)} (default {DEFAULT_TARGET} "
                    f"{'present' if ctx.targets.find(DEFAULT_TARGET) else 'MISSING'})")
-            ok &= len(ctx.library.list()) == 1 and ctx.targets.find(DEFAULT_TARGET) is not None
+            ok &= len(ctx.library.list()) >= 1 and ctx.targets.find(DEFAULT_TARGET) is not None
+            if use_download:
+                shipped = [t for t in ctx.targets.targets if t.source == "shipped"]
+                report(f"targets shipped in the download: {len(shipped)}")
+                ok &= bool(shipped) or platform == "macos"
+                selected = ctx.library.selected
+                if selected is not None:
+                    m = selected.manifest
+                    report(f"selected: {m.customer.name} – {m.iem.display_name} ({m.created})")
             window = MainWindow(ctx, start_audio=False, apo=ApoApplier(platform, ctx.settings, tmp / "no-apo"),
                                 association=FileAssociation(platform, ctx.branding, None))
             window.show()
