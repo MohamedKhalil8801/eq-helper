@@ -416,6 +416,7 @@ class _Stage:
     kind: str        # LOUDER / SMOOTHNESS
     target: str      # PRIMARY / UPPER
     search: LouderSearch | SmoothnessSearch
+    recheck: bool = False  # a re-check the balance check asked for: done → back to "finished"
 
 
 @dataclass
@@ -430,7 +431,7 @@ class GuidedTest:
       place — redo the ear, use the estimate anyway, or adjust by hand;
     - "upper_offer": both primary resonances are found; the upper treble is
       offered (``start_upper()`` / ``skip_upper()``);
-    - "finished".
+    - "finished" (and again after a ``recheck()`` the balance check asked for).
 
     ``upper_results[side]`` is ``None`` when no clear upper peak was heard
     (the upper treble then stays as it is).
@@ -517,6 +518,9 @@ class GuidedTest:
                 self.status = "unsure"
             return
         self._results_for(stage.target)[stage.side] = stage.search.result()
+        if stage.recheck:
+            self.status = "finished"
+            return
         self._next_ear()
 
     def _next_ear(self) -> None:
@@ -539,6 +543,24 @@ class GuidedTest:
     def skip_upper(self) -> None:
         if self.status == "upper_offer":
             self.status = "finished"
+
+    def recheck(self, side: str, target: str, center_hz: float) -> None:
+        """After the balance check: a short smoothness check of one ear's resonance, from ``center_hz``."""
+        if self.status != "finished":
+            raise RuntimeError("A re-check comes after the test.")
+        stage = self._smoothness(side, target, center_hz, wide=False)
+        stage.recheck = True
+        self.stages.append(stage)
+        self._results_for(target).pop(side, None)  # found again when the re-check ends
+        self.status = "testing"
+
+    def uncertainty(self) -> dict[tuple[str, str], float]:
+        """(side, target) → how unsure the louder test still was (octaves, ≈ σ)."""
+        out = {}
+        for stage in self.stages:
+            if stage.kind == LOUDER and stage.search.answers:
+                out[(stage.side, stage.target)] = max(math.log2(stage.search.spread) / 2.56, 0.01)
+        return out
 
     def use_estimate(self) -> None:
         """After an unsure louder test: carry on from its best guess, with wider steps."""

@@ -406,3 +406,20 @@ def test_check_rounds_catch_most_random_clicking():
             search.answer(rng.choice([0, 1]))
         unsure += not search.result().confident
     assert unsure >= 7
+
+
+def test_recheck_after_the_balance_check():
+    test = GuidedTest(("L", "R"), rng=random.Random(13), offer_upper=False)
+    run_ear(test, random.Random(1))
+    run_ear(test, random.Random(2))
+    assert test.status == "finished"
+    spread = test.uncertainty()
+    assert set(spread) == {("L", PRIMARY), ("R", PRIMARY)} and all(0.0 < v < 0.05 for v in spread.values())
+    test.recheck("R", PRIMARY, 8000.0)
+    assert (test.status, test.side, test.kind) == ("testing", "R", SMOOTHNESS)
+    assert test.stage.search.center == 8000.0 and test.stage.search.delta == SMOOTH_DELTA
+    while test.status == "testing":
+        options = test.options().options
+        test.answer(int(np.argmin([abs(math.log(hz / F0[PRIMARY]["R"])) for hz in options])))
+    assert test.status == "finished" and abs(test.results["R"] / F0[PRIMARY]["R"] - 1) < 0.03
+    assert test.undo() and test.status == "testing" and "R" not in test.results
