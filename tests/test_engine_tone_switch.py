@@ -126,3 +126,21 @@ def test_bands_and_plain_tones_keep_eq_helper_behaviour(engine):
     engine.start_sine(1000)
     x = run(engine, 0.05)
     assert np.max(np.abs(x)) == pytest.approx(AMP, rel=0.01)
+
+
+def test_left_right_gains_glide_and_default_to_nothing(engine):
+    engine.set_channel_mode(__import__("eq_helper.audio.shared_state", fromlist=["ChannelMode"]).ChannelMode.BOTH)
+    engine.switch_band(7000, 1 / 6)
+    plain = np.concatenate([engine.process_block(480) for _ in range(20)])
+    assert np.allclose(plain[:, 0], plain[:, 1])  # the same sound in both ears
+    engine.set_lr_gains(10 ** (-3 / 20), 10 ** (3 / 20))
+    first = engine.process_block(480)
+    steady = np.concatenate([engine.process_block(480) for _ in range(40)])
+    ratio = 20 * np.log10(np.sqrt(np.mean(steady[:, 1] ** 2)) / np.sqrt(np.mean(steady[:, 0] ** 2)))
+    assert ratio == pytest.approx(6.0, abs=0.1)
+    gain = first[:, 1] / np.where(np.abs(first[:, 0]) > 1e-6, first[:, 0], np.nan)
+    assert np.nanmax(np.abs(np.diff(gain))) < 0.05  # a glide, not a jump
+    engine.set_lr_gains(1.0, 1.0)
+    engine.process_block(480)
+    again = engine.process_block(480)
+    assert np.allclose(again[:, 0], again[:, 1])

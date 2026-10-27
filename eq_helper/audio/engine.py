@@ -235,6 +235,9 @@ class AudioEngine:
         # the mono FIR above, which EQ Helper keeps using unchanged.
         from eq_helper.audio.stereo_fir import StereoFIR
         self._stereo_fir = StereoFIR()
+        # Left/right gains after the per-ear FIRs (customer-app balance check); ramped per block.
+        self._lr_target = (1.0, 1.0)
+        self._lr_now = (1.0, 1.0)
 
         # Output streams (A = primary, B = secondary for dual mode)
         self._stream_a: Optional["sd.OutputStream"] = None
@@ -571,6 +574,20 @@ class AudioEngine:
         """
         self._stereo_fir.set_firs(firs)
 
+    def set_lr_gains(self, left: float, right: float) -> None:
+        """Per-ear gains after the EQ (1, 1 = none). Changes glide over one block: no zipper noise."""
+        self._lr_target = (float(left), float(right))
+
+    def _apply_lr_gains(self, stereo: np.ndarray) -> np.ndarray:
+        target, now = self._lr_target, self._lr_now
+        if target == (1.0, 1.0) and now == (1.0, 1.0):
+            return stereo
+        n = stereo.shape[0]
+        ramp = (np.arange(1, n + 1, dtype=np.float32) / np.float32(max(n, 1)))[:, None]
+        start, end = np.asarray(now, np.float32), np.asarray(target, np.float32)
+        self._lr_now = target
+        return stereo * (start + (end - start) * ramp)
+
     def set_mic_monitoring(self, enabled: bool) -> None:
         self.state.update(mic_monitoring=bool(enabled))
         if enabled:
@@ -860,7 +877,8 @@ class AudioEngine:
         ear silent). The Channel switch is ignored.
         """
         if not st.dual_output:
-            stereo = self._stereo_fir.process(route(mono, st.channel_mode, st.force_mono and right is None, right))
+            stereo = self._apply_lr_gains(
+                self._stereo_fir.process(route(mono, st.channel_mode, st.force_mono and right is None, right)))
             outdata[:] = stereo
             self._dual_ring.push(stereo.flatten())
             return
@@ -886,7 +904,8 @@ class AudioEngine:
         else:
             # Mirror: identical output on both devices, channel switch
             # controls L/R ears the same way as single-device mode.
-            stereo = self._stereo_fir.process(route(mono, st.channel_mode, st.force_mono and right is None, right))
+            stereo = self._apply_lr_gains(
+                self._stereo_fir.process(route(mono, st.channel_mode, st.force_mono and right is None, right)))
             outdata[:] = stereo
             self._dual_ring.push(stereo.flatten())
 
