@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import sys
+
+import pytest
+
 from eq_helper.apo.include_file import (
     IncludeRef,
     add_include,
@@ -165,6 +169,7 @@ class TestSetActiveInDevice:
         assert lines[3] == "Include: C:/x/a2.txt"        # A.a2 -> on
         assert lines[5] == "Include: C:/x/a1.txt"        # B.a1 untouched
 
+    @pytest.mark.skipif(sys.platform != "win32", reason="Windows drive-letter paths (Equalizer APO is Windows-only)")
     def test_resolves_relative_include_against_base_dir(self) -> None:
         text = "Device: A\n# Include: rel/p.txt\n"
         out = set_active_include_in_device(text, "A", "C:/cfg", "C:/cfg/rel/p.txt")

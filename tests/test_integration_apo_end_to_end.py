@@ -7,6 +7,10 @@ config.txt is edited correctly at each step.
 
 from __future__ import annotations
 
+import sys
+
+import pytest
+
 from pathlib import Path
 
 from eq_helper.apo.scanner import scan_config_includes
@@ -29,6 +33,7 @@ def _setup(tmp_path: Path) -> Path:
     return config
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows drive-letter paths (Equalizer APO is Windows-only)")
 def test_end_to_end_discover_activate_switch_deactivate(tmp_path: Path) -> None:
     config = _setup(tmp_path)
 

@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import sys
+
+import pytest
+
 from pathlib import Path
 
 from eq_helper.apo.scanner import group_by_device, scan_config_includes
@@ -44,6 +48,7 @@ def test_scan_active_vs_commented(tmp_path: Path) -> None:
     assert len(commented) == 4
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows drive-letter paths (Equalizer APO is Windows-only)")
 def test_scan_extracts_names(tmp_path: Path) -> None:
     config = _write_config(tmp_path)
     entries = scan_config_includes(config)
@@ -61,6 +66,7 @@ def test_scan_resolves_relative_paths(tmp_path: Path) -> None:
     assert rel_entry.resolved_path == tmp_path / "Samsung new R side.txt"
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows drive-letter paths (Equalizer APO is Windows-only)")
 def test_scan_preserves_absolute_paths(tmp_path: Path) -> None:
     config = _write_config(tmp_path)
     entries = scan_config_includes(config)
