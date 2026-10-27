@@ -7,7 +7,7 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
-from PySide6.QtWidgets import QMainWindow, QStackedWidget, QTabWidget, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QMainWindow, QStackedWidget, QTabWidget, QVBoxLayout, QWidget
 
 from eq_helper.calibration.model_cache import load_measurements
 from eq_helper.calibration.rescal import RESCAL_SUFFIX, Calibration, RescalError
@@ -93,7 +93,14 @@ class MainWindow(QMainWindow):
 
     # ── tabs (filled by later screens) ─────────────────────────────────────
     def _build_tabs(self) -> None:
+        from .tuning_panel import TuningPanel
         self.tune_tab = QWidget()
+        tune = QHBoxLayout(self.tune_tab)
+        tune.setContentsMargins(0, 8, 0, 0)
+        self.tuning = TuningPanel(self.ctx, self.audio)
+        self.tuning.eqChanged.connect(self.audio.set_eq)
+        self.calibrationLoaded.connect(self.tuning.set_calibration)
+        tune.addWidget(self.tuning, 1)
         self.tabs.addTab(self.tune_tab, tr("Tune"))
 
     def _on_audio_ready(self, ok: bool) -> None:
