@@ -20,6 +20,7 @@ from eq_helper.dsp.overlay import load_frequency_response
 from eq_helper.dsp.resonance import (
     CONTROL_RANGE, PERSONAL_TREBLE_RANGE, ChannelEQ, Measurements, match_target,
 )
+from eq_helper.ui.convolution_export_dialog import ConvolutionExportDialog
 from eq_helper.ui.spectrum_view import SpectrumView
 from eq_helper.ui.widgets import LabeledSlider, ThreeWaySwitch
 
@@ -235,6 +236,13 @@ class ResonanceDialog(QDialog):
         self.save.setEnabled(False)
         self.save.clicked.connect(self._save)
         actions.addWidget(self.save)
+        self.save_convolution = QPushButton("Save as convolution…")
+        self.save_convolution.setEnabled(False)
+        self.save_convolution.setToolTip(
+            "Write impulse response files for any convolution engine or player."
+        )
+        self.save_convolution.clicked.connect(self._save_convolution)
+        actions.addWidget(self.save_convolution)
         layout.addLayout(actions)
         self.history = QListWidget()
         self.history.setMaximumHeight(85)
@@ -247,11 +255,19 @@ class ResonanceDialog(QDialog):
         self._commit_timer.setSingleShot(True)
         self._commit_timer.setInterval(300)
         self._commit_timer.timeout.connect(self._generate)
-        self._install_measurements(self.measurements)
-        self._sync_personal_treble_controls()
+        # Reopening the panel resumes the last test setup: same folder, same
+        # peaks, same target. Restoring them saves a round of setup each run.
+        self._restored_peaks = self._valid_peaks(main._settings.get("resonance_peaks_hz"))
+        self._restored_target = main._settings.get("resonance_target_path")
         previous = main._settings.get("resonance_measurements_dir")
+        self._install_measurements(self.measurements, None if previous else self._restored_peaks)
+        if not previous:
+            self._restored_peaks = None
+        self._sync_personal_treble_controls()
         if previous:
             QTimer.singleShot(0, lambda: self.load_measurements(previous, quiet=True))
+        else:
+            self._restore_target()
 
     measurements = property(lambda self: self.session.measurements,
                             lambda self, value: setattr(self.session, "measurements", value))
@@ -328,16 +344,19 @@ class ResonanceDialog(QDialog):
             self._load_failed(f"Could not restore the current audition preset: {exc}", False)
             return
         self._selected = None
-        self._install_measurements(measurements)
+        restored, self._restored_peaks = self._restored_peaks, None
+        self._install_measurements(measurements, restored)
         self.main._settings["resonance_measurements_dir"] = measurements.name
         self.main._schedule_save()
         self.status.setText(f"Learned {sum(m.sample_count for m in measurements.models.values())} measurements. "
                             + ("See Model details for skipped files. " if measurements.warnings else "")
                             + "Identify the peak for each supplied ear.")
+        self._restore_target()
         if self._generated and self.target is not None:
             self._generate()
 
     def _load_failed(self, message, quiet):
+        self._restored_peaks = None  # peaks belong to the folder that failed to load
         self.status.setText(f"Measurement import failed; previous model retained. {message}")
         if not quiet:
             QMessageBox.warning(self, "Could not learn measurements", message)
@@ -424,9 +443,23 @@ class ResonanceDialog(QDialog):
         freqs, db = load_frequency_response(path)
         self.session.set_target(freqs, db, Path(path).name, path=str(path))
         self.target_label.setText(self.target_name)
+        self.main._settings["resonance_target_path"] = str(path)
+        self.main._schedule_save()
         self.generate.setEnabled(self._loader is None)
         self._show_prediction()
         self._commit_peak()
+
+    def _restore_target(self):
+        """Reload the previous target file once; a missing file is not fatal."""
+        path, self._restored_target = self._restored_target, None
+        if not path:
+            return
+        try:
+            self.load_target(path)
+        except (OSError, ValueError) as exc:
+            self.main._settings.pop("resonance_target_path", None)
+            self.main._schedule_save()
+            self.status.setText(f"Previous target could not be restored: {exc}")
 
     def _drag_peak(self, hz, _width):
         self._move_peak(hz)
@@ -485,8 +518,29 @@ class ResonanceDialog(QDialog):
 
     def _commit_peak(self, *_):
         self._commit_timer.stop()
+        self._remember_peaks()
         if self._generated:
             self._generate()
+
+    @staticmethod
+    def _valid_peaks(values):
+        if not isinstance(values, dict):
+            return {}
+        result = {}
+        for side, value in values.items():
+            try:
+                hz = float(value)
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if side in ("L", "R", "M") and np.isfinite(hz) and CONTROL_RANGE[0] <= hz <= CONTROL_RANGE[1]:
+                result[side] = hz
+        return result
+
+    def _remember_peaks(self):
+        if not self.peaks:
+            return
+        self.main._settings["resonance_peaks_hz"] = {s: float(hz) for s, hz in self.peaks.items()}
+        self.main._schedule_save()
 
     def _load_personal_treble_peaks(self):
         values = self.main._settings.get("resonance_personal_treble_peaks_hz", {})
@@ -575,6 +629,7 @@ class ResonanceDialog(QDialog):
         self._commit_timer.stop()
         if self.target is None:
             return
+        self._remember_peaks()
         self.session.upper_enabled = self.personal_treble_enabled.isChecked()
         eq = self.session.channel_eq()
         for i, old in enumerate(self.versions):
@@ -621,6 +676,7 @@ class ResonanceDialog(QDialog):
         self._commit_timer.stop()
         self.audition.setEnabled(True)
         self.save.setEnabled(True)
+        self.save_convolution.setEnabled(True)
         self._apply_audition()
 
     def _apply_audition(self, *_):
@@ -685,6 +741,23 @@ class ResonanceDialog(QDialog):
                 self.status.setText(f"Saved {path}")
             except (ApoError, OSError) as exc:
                 QMessageBox.warning(self, "Could not save EQ", str(exc))
+
+    def _save_convolution(self):
+        if self._commit_timer.isActive():
+            self._generate()  # Never export a curve the panel has not committed.
+            QTimer.singleShot(0, lambda: self._save_convolution())
+            return
+        if self._selected is None:
+            return
+        dialog = ConvolutionExportDialog(self._selected.eq, self.main._settings, self)
+        if dialog.exec() != QDialog.Accepted:
+            return
+        self.main._settings.update(dialog.options())
+        self.main._schedule_save()
+        folder = dialog.saved_paths[0].parent if dialog.saved_paths else ""
+        self.status.setText(
+            f"Saved {len(dialog.saved_paths)} convolution file(s) and a README in {folder}"
+        )
 
     def _restore_preview(self):
         if self._preview_preset is None:

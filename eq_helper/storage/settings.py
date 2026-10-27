@@ -40,6 +40,14 @@ DEFAULTS: Dict[str, Any] = {
     "mic_monitoring": False,
     "resonance_personal_treble_enabled": False,
     "resonance_personal_treble_peaks_hz": {},
+    "resonance_measurements_dir": None,
+    "resonance_target_path": None,
+    "resonance_peaks_hz": {},
+    "resonance_export_layout": None,
+    "resonance_export_phase": "minimum",
+    "resonance_export_format": "pcm24",
+    "resonance_export_sample_rates": [44100, 48000],
+    "resonance_export_dir": None,
 }
 
 

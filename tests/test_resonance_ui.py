@@ -133,6 +133,80 @@ def test_independent_peaks_routing_history_export_and_folder_reload(resonance_wi
     assert export.exists()
 
 
+def test_convolution_export_and_remembered_panel_state(resonance_window, qtbot, monkeypatch, tmp_path):
+    from PySide6.QtWidgets import QDialog
+    from scipy.io import wavfile
+
+    from eq_helper.ui import resonance_dialog as module
+    from eq_helper.ui.convolution_export_dialog import ConvolutionExportDialog
+
+    main, dialog, _library = resonance_window
+    target = tmp_path / 'target.txt'
+    target.write_text('20 0\n1000 0\n20000 0\n')
+    dialog.load_target(target)
+    dialog._generate()
+    dialog._move_peak(7300)
+    dialog._commit_peak()
+    dialog.ears.setCurrentIndex(1)
+    dialog._move_peak(8200)
+    dialog._commit_peak()
+    assert main._settings['resonance_peaks_hz'] == {'L': 7300.0, 'R': 8200.0}
+    assert main._settings['resonance_target_path'] == str(target)
+    assert dialog.save_convolution.isEnabled()
+
+    folder = tmp_path / 'ir'
+    folder.mkdir()
+    export = ConvolutionExportDialog(dialog._selected.eq, main._settings, dialog)
+    export.folder_edit.setText(str(folder))
+    for rate, check in export.rate_checks.items():
+        check.setChecked(rate == 48000)
+    export._save()
+    assert export.result() == QDialog.Accepted
+    assert [path.name for path in export.saved_paths] == ['Resonance L7300 R8200 48kHz.wav']
+    rate, samples = wavfile.read(export.saved_paths[0])
+    assert rate == 48000 and samples.shape[1] == 2
+    readme = folder / 'Resonance L7300 R8200 README.txt'
+    assert 'Resonance L7300 R8200 48kHz.wav' in readme.read_text(encoding='utf-8')
+    main._settings.update(export.options())
+    assert main._settings['resonance_export_sample_rates'] == [48000]
+    assert main._settings['resonance_export_dir'] == str(folder)
+
+    # The button passes the selected EQ to the options panel and reports the result.
+    class _FakeExport:
+        created = []
+
+        def __init__(self, eq, settings, parent):
+            self.eq = eq
+            self.saved_paths = [folder / 'fake.wav']
+            _FakeExport.created.append(self)
+
+        def exec(self):
+            return QDialog.Accepted
+
+        def options(self):
+            return {'resonance_export_phase': 'linear'}
+
+    monkeypatch.setattr(module, 'ConvolutionExportDialog', _FakeExport)
+    dialog._save_convolution()
+    assert _FakeExport.created[-1].eq is dialog._selected.eq
+    assert main._settings['resonance_export_phase'] == 'linear'
+    assert 'Saved 1 convolution file' in dialog.status.text()
+
+    # A fresh dialog resumes the same peaks, target and export options.
+    dialog.reject()
+    qtbot.waitUntil(lambda: main._resonance_dialog is None)
+    main._open_resonance_dialog()
+    fresh = main._resonance_dialog
+    qtbot.waitUntil(lambda: fresh._loader is None, timeout=20000)
+    assert fresh.peaks == {'L': 7300, 'R': 8200}
+    assert fresh.target_name == 'target.txt'
+    fresh._generate()
+    again = ConvolutionExportDialog(fresh._selected.eq, main._settings, fresh)
+    assert again.sample_rates() == [48000]
+    assert again.folder_edit.text() == str(folder)
+    assert again.channel_layout() == 'stereo'
+
+
 def test_failed_folder_import_keeps_working_model(resonance_window, qtbot, monkeypatch, tmp_path):
     from eq_helper.ui.resonance_dialog import QMessageBox
     _main, dialog, _library = resonance_window
