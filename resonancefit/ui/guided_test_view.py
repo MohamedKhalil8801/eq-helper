@@ -11,8 +11,11 @@ Stage 1 (Louder test) plays narrow noise bands (the search picks their
 width) with the EQ preview off; Stage 2
 (Smoothness check) plays pink noise or a slow focused sweep (the customer
 switches between them at will) through three EQs designed on a worker
-thread. After both primary resonances the upper treble is offered, found
-the same way (higher bands; EQs that move only the upper resonance). Last,
+thread. After both primary resonances the upper treble is offered: no
+louder test up there (hearing falls off too steeply to judge loudness), but
+one question per ear — is a band at the predicted peak heard clearly? — and
+then the smoothness check around the calibration's prediction (the sweep
+first; EQs that move only the upper resonance). Last,
 an optional balance check: the same noise bands in both ears through the
 EQ, each centred by the customer; a lean shaped like a misplaced resonance
 leads to a short re-check of that ear (the EQ never changes by itself). The
@@ -33,7 +36,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..balance_check import CENTRE_RANGE_DB, analyse
-from ..guided_test import LOUDER, PRIMARY, UPPER, GuidedTest
+from ..guided_test import AUDIBLE, LOUDER, PRIMARY, UPPER, GuidedTest
 from .common import Worker, side_name, tr
 from .guided_widgets import (
     CARD_MARGIN, AnswerButton, CentreControl, OptionCard, ProgressLine, StageBackground, TransportBar, accent_colors,
@@ -76,6 +79,10 @@ class GuidedTestView(StageBackground):
     ``adjustByHand(found)`` to leave for the manual controls (``found``:
     {"primary": {side: Hz}, "upper": {side: Hz}} found so far) and ``finished()``.
 
+    ``upper_prediction(side, primary_hz)`` (optional): where the calibration
+    puts that ear's upper peak for its found primary resonance, or ``None``.
+    Without it the upper treble isn't offered.
+
     ``balance()`` (optional) is called on the GUI thread when the balance check
     starts and returns ``(bands, work)``: the bands to centre and a function
     that, on a worker thread, returns ``(channel_eq, designed_firs, model)`` for
@@ -87,11 +94,12 @@ class GuidedTestView(StageBackground):
     adjustByHand = Signal(object)
     finished = Signal()
 
-    def __init__(self, audio, option_eqs=None, balance=None, parent=None):
+    def __init__(self, audio, option_eqs=None, balance=None, upper_prediction=None, parent=None):
         super().__init__(parent)
         self.audio = audio
         self.option_eqs = option_eqs
         self.balance = balance
+        self.upper_prediction = upper_prediction
         self._balance_bands: list = []
         self._balance_leans: list[float] = []
         self._balance_index = 0
@@ -115,6 +123,7 @@ class GuidedTestView(StageBackground):
         self._level = 0.0
         self._sound = None            # "band" / "pink" / "focus" (sweep) while this view's sound plays
         self.stage2_sound = "pink"    # what the smoothness check plays: "pink" or "focus"
+        self._stage2_target = None    # the part (primary / upper) stage2_sound was last defaulted for
         self._starting = False        # starting our own sound: its change notices aren't a stop
         self._eqs: dict[int, tuple] = {}
         self._eq_generation = 0
@@ -391,14 +400,14 @@ class GuidedTestView(StageBackground):
         self.upper_summary = self._label("", "gtResult")
         layout.addLayout(self._padded(self.upper_summary))
         self.upper_text = self._label(tr(
-            "Some IEMs have a second, higher peak (above about 10.5 kHz) that can sound sharp or hissy. "
-            "The same two steps can find it for each ear: which high sound is louder, then which noise is "
-            "smoothest. About 2 minutes. If you can barely hear the high sounds, answer About the same: the "
-            "upper treble then stays as it is."))
+            "Most IEMs have a second, higher peak, about twice your resonance's frequency, that can sound "
+            "sharp or hissy. Your calibration already predicts where it is; this fine-tunes it for each ear. "
+            "First: can you hear a high sound there clearly? If not, that ear stays as calibrated. Then: "
+            "which of three EQs sounds smoothest. About 1–2 minutes."))
         layout.addLayout(self._padded(self.upper_text))
         row = QHBoxLayout()
         row.setContentsMargins(CARD_MARGIN, 8, CARD_MARGIN, 0)
-        self.upper_button = QPushButton(tr("Find my upper treble (about 2 minutes)"))
+        self.upper_button = QPushButton(tr("Fine-tune my upper treble"))
         self.upper_button.setObjectName("primary")
         self.upper_button.clicked.connect(self.start_upper)
         row.addWidget(self.upper_button)
@@ -590,7 +599,9 @@ class GuidedTestView(StageBackground):
     def start(self, sides, default_hz=None, rng: random.Random | None = None) -> None:
         """Show the intro for a new test over ``sides``."""
         self.rng = rng or random.Random()
-        self.test = GuidedTest(tuple(sides), dict(default_hz or {}), self.rng)
+        self.test = GuidedTest(tuple(sides), dict(default_hz or {}), self.rng,
+                               offer_upper=self.upper_prediction is not None)
+        self._stage2_target = None
         self._hue = self.rng.uniform(0.0, 360.0)
         self._round_index = 0
         self._saved_eq_enabled = None
@@ -660,27 +671,29 @@ class GuidedTestView(StageBackground):
         louder = test.kind == LOUDER
         upper = test.target == UPPER
         self.title.setText(_ear_title(test.side, test.round_number))
-        if upper:
-            self.stage_label.setText(tr("Upper treble: louder test") if louder else
-                                     tr("Upper treble: smoothness check"))
+        if test.kind == AUDIBLE:
+            self._new_audible_round()
+            return
+        if upper:  # the upper treble has no louder test (see guided_test)
+            self.stage_label.setText(tr("Upper treble: smoothness check"))
         else:
             self.stage_label.setText(tr("Louder test") if louder else tr("Smoothness check"))
-        ear = _ear(test.side).lower()
-        if louder and upper:
-            self.instructions.setText(tr("Two high sounds in your {ear}. Which one is louder? If you can "
-                                         "barely hear them, choose About the same.").format(ear=ear))
-        elif louder:
+        if louder:
             self.instructions.setText(tr("Two sounds in your {ear}. Which one is louder? Click a card (or "
                                          "press 1 or 2) to switch between them as often as you like.").format(
-                ear=ear))
+                ear=_ear(test.side).lower()))
         elif upper:
             self.instructions.setText(tr("Three EQs that differ only in the highest treble. Which sounds "
-                                         "smoothest? With noise: no sharp or hissy edge. With the sweep: it "
-                                         "stays even, with no swell or dip as it passes."))
+                                         "smoothest? With the sweep: it fades evenly as it rises, with no swell "
+                                         "or dip as it passes (a high sweep fading is just your hearing). With "
+                                         "noise: no sharp or hissy edge."))
         else:
             self.instructions.setText(tr("Three EQs. Which sounds smoothest? With noise: no harsh, hissy or dull "
                                          "spot in the treble. With the sweep: it stays even, with no swell or dip "
                                          "as it passes. Switch as often as you like."))
+        if not louder and test.target != self._stage2_target:
+            self._stage2_target = test.target  # the sweep first up high: hearing's fall-off makes noise dull
+            self.stage2_sound = "focus" if upper else "pink"
         self.sound_row.setVisible(not louder)
         self._sync_sound_buttons()
         if louder:
@@ -697,6 +710,30 @@ class GuidedTestView(StageBackground):
             self._pause()
         self._sync_answers()
         self._sync_transport()
+
+    def _new_audible_round(self) -> None:
+        """Before an ear's upper treble: one band at the predicted peak — heard clearly or not?"""
+        test = self.test
+        self.title.setText(_ear(test.side))
+        self.stage_label.setText(tr("Upper treble: can you hear it?"))
+        self.instructions.setText(tr(
+            "A high sound in your {ear}, at your normal listening volume. Play it: can you hear it clearly? "
+            "Many people hear sounds this high only faintly, or not at all. That's normal; the upper treble "
+            "then simply stays as calibrated.").format(ear=_ear(test.side).lower()))
+        self.sound_row.setVisible(False)
+        self.same_button.setText(tr("Barely, or not at all"))
+        self._enter_louder_stage()
+        self.progress.set_value(test.progress())
+        self.back_button.setEnabled(self._can_undo())
+        if self._sound is not None:
+            self._pause()
+        self._sync_answers()
+        self._sync_transport()
+
+    @property
+    def _banded(self) -> bool:
+        """This round plays noise bands with the EQ off (the louder test and the audibility question)."""
+        return self.test is not None and self.test.kind in (LOUDER, AUDIBLE)
 
     def _can_undo(self) -> bool:
         test = self.test
@@ -754,7 +791,7 @@ class GuidedTestView(StageBackground):
             return
         self.stage2_sound = kind
         self._sync_sound_buttons()
-        if self.test is not None and self.test.kind != LOUDER and self._sound is not None and self._sound != kind:
+        if self.test is not None and not self._banded and self._sound is not None and self._sound != kind:
             self._account()
             if self._start_stage2_sound():
                 self._since = self._clock()
@@ -805,7 +842,7 @@ class GuidedTestView(StageBackground):
         """The current round's sounds can play (Stage 2 needs its EQs)."""
         if self.test is None or self._round is None:
             return False
-        return self.test.kind == LOUDER or len(self._eqs) == len(self._round.options)
+        return self._banded or len(self._eqs) == len(self._round.options)
 
     # ── listening ──────────────────────────────────────────────────────────
     def toggle_play(self) -> None:
@@ -823,7 +860,7 @@ class GuidedTestView(StageBackground):
             self.selected = 0
             self._sync_cards()
         side, index = self.test.side, self.selected
-        if self.test.kind == LOUDER:
+        if self._banded:
             self.audio.switch_band(self._round.options[index], self._round.band, side)
             sound = "band"
         else:
@@ -1001,11 +1038,17 @@ class GuidedTestView(StageBackground):
         smooth_rounds = len(smooth.answers) if smooth else 0
         self.done_title.setText(tr("{ear} done").format(ear=_ear(side)))
         if target == UPPER and hz is None:
-            self.result_label.setText(tr("{ear}: no clear upper peak").format(ear=_ear(side)))
-            note = tr("The high sounds were alike, so your upper treble stays as it is.")
+            self.result_label.setText(tr("{ear}: upper treble as calibrated").format(ear=_ear(side)))
+            note = tr("You didn't hear the high sound clearly, so this ear's upper treble stays where your "
+                      "calibration predicts it. Nothing to fine-tune there.")
+        elif target == UPPER:
+            self.result_label.setText(tr("{ear} upper treble: {hz} Hz").format(ear=side_name(side),
+                                                                                hz=f"{int(round(hz)):,}"))
+            note = tr("Found with {n} rounds of the smoothness check, starting from where your calibration "
+                      "predicts it. You can fine-tune it by hand later.").format(n=smooth_rounds)
         else:
-            label = tr("{ear} upper treble: {hz} Hz") if target == UPPER else tr("{ear} resonance: {hz} Hz")
-            self.result_label.setText(label.format(ear=side_name(side), hz=f"{int(round(hz)):,}"))
+            self.result_label.setText(tr("{ear} resonance: {hz} Hz").format(ear=side_name(side),
+                                                                             hz=f"{int(round(hz)):,}"))
             if louder is not None and louder.done and louder.result().fell_back:
                 note = tr("The sounds were alike, so this comes from the smoothness check alone "
                           "({n} rounds of noise through your EQ).").format(n=smooth_rounds)
@@ -1047,7 +1090,11 @@ class GuidedTestView(StageBackground):
     def start_upper(self) -> None:
         if self.test is None or self.test.status != "upper_offer":
             return
-        self.test.start_upper()
+        predict = self.upper_prediction or (lambda _side, _hz: None)
+        self.test.start_upper({side: predict(side, hz) for side, hz in self.test.results.items()})
+        if self.test.status == "finished":  # nothing predicted for any ear
+            self._after_test()
+            return
         self.pages.setCurrentWidget(self.test_page)
         self._new_round(keep_playing=False)
         self.transport.setFocus()
@@ -1091,7 +1138,7 @@ class GuidedTestView(StageBackground):
         playing = self._sound is not None
         self.transport.set_playing(playing, tr("Pause") if playing else tr("Play"))
         self.transport.setEnabled(playing or self.ready)
-        if not self.ready and self.test is not None and self.test.kind != LOUDER:
+        if not self.ready and self.test is not None and not self._banded:
             self.transport.setToolTip(tr("Getting the sounds ready…"))
         else:
             self.transport.setToolTip(tr("Play or pause (P)"))
@@ -1101,7 +1148,9 @@ class GuidedTestView(StageBackground):
             return
         letter = "ABC"[self.selected] if self.selected is not None else None
         louder = self.test.kind == LOUDER
-        if letter is None:
+        if self.test.kind == AUDIBLE:
+            self.answer_button.setText(tr("I hear it clearly"))
+        elif letter is None:
             self.answer_button.setText(tr("Louder") if louder else tr("Smoothest"))
         elif louder:
             self.answer_button.setText(tr("Louder: {letter}").format(letter=letter))
@@ -1111,7 +1160,10 @@ class GuidedTestView(StageBackground):
         ok = self.can_answer
         self.answer_button.setEnabled(ok and self.selected is not None)
         self.same_button.setEnabled(ok)
-        self.listen_hint.setText(tr("Listen to each one first") if not ok else " ")
+        if ok:
+            self.listen_hint.setText(" ")
+        else:
+            self.listen_hint.setText(tr("Play it first") if self.test.kind == AUDIBLE else tr("Listen to each one first"))
 
     # ── the balance check ──────────────────────────────────────────────────
     @property

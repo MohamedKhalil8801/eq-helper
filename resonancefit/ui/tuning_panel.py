@@ -157,7 +157,7 @@ class TuningPanel(QWidget):
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(8)
         self.step1_stack.addWidget(self.manual_page)
-        self.guided = GuidedTestView(self.audio, self._option_eqs, self._balance_job)
+        self.guided = GuidedTestView(self.audio, self._option_eqs, self._balance_job, self._upper_prediction)
         self.guided.resultFound.connect(self._guided_result)
         self.guided.upperFound.connect(self._guided_upper)
         self.guided.adjustByHand.connect(self._guided_to_manual)
@@ -806,13 +806,17 @@ class TuningPanel(QWidget):
         self._sync_upper_controls()
         self.regenerate()
 
-    def _predicted_upper(self) -> int:
-        model = self.model
+    def _upper_prediction(self, side: str, primary_hz: float) -> float | None:
+        """Where the calibration puts ``side``'s upper peak for this primary resonance (None: no peak)."""
+        model = self.session.measurements.models[side]
         try:
-            hz = detect_high_treble_peak(model.freqs, model.predict(self.session.primary[self.side]),
-                                         self.session.primary[self.side])
+            hz = detect_high_treble_peak(model.freqs, model.predict(float(primary_hz)), float(primary_hz))
         except ValueError:
-            hz = None
+            return None
+        return None if hz is None else float(hz)
+
+    def _predicted_upper(self) -> int:
+        hz = self._upper_prediction(self.side, self.session.primary[self.side])
         lo, hi = PERSONAL_TREBLE_RANGE
         return int(round(min(max(hz or DEFAULT_UPPER_HZ, lo), hi)))
 

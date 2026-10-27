@@ -12,7 +12,7 @@ from PySide6.QtGui import QColor, QPalette
 from eq_helper.audio.shared_state import ChannelMode, Mode
 from eq_helper.audio.generators import BandNoiseGenerator
 from resonancefit.audio import AudioService
-from resonancefit.guided_test import LOUDER, SMOOTHNESS, UPPER
+from resonancefit.guided_test import AUDIBLE, LOUDER, SMOOTHNESS, UPPER
 from resonancefit.ui import guided_test_view
 from resonancefit.ui.guided_widgets import OptionCard, stage_colors, visualizer_shape
 from resonancefit.ui.tuning_panel import TuningPanel
@@ -20,7 +20,7 @@ from resonancefit.ui.tuning_panel import TuningPanel
 from .test_tuning_panel import ctx, loaded  # noqa: F401 - fixture and helper
 
 F0 = {"L": 7100.0, "R": 8300.0}
-UPPER_F0 = {"L": 13600.0, "R": 15900.0}
+UPPER_OFF = 1.05  # the simulated ear's upper peak: this far above the calibration's prediction
 
 
 @pytest.fixture
@@ -70,7 +70,11 @@ def answer_like_a_listener(qtbot, view, clock):
     if view.test.kind == SMOOTHNESS:
         qtbot.waitUntil(lambda: view.ready, timeout=15000)
     hear_all(view, clock)
-    f0 = (UPPER_F0 if view.test.target == UPPER else F0)[view.test.side]
+    if view.test.kind == AUDIBLE:
+        view.answer_selected()  # heard clearly
+        return
+    side = view.test.side
+    f0 = view.test.predicted_upper[side] * UPPER_OFF if view.test.target == UPPER else F0[side]
     options = view._round.options
     if view.test.kind == LOUDER:
         choice = int(np.argmax([loudness(hz, f0) for hz in options]))
@@ -413,7 +417,9 @@ def test_heard_threshold_is_half_a_second():
     assert guided_test_view.HEARD_SECONDS == pytest.approx(0.5)
 
 
-def finish_primary(qtbot, view, clock):
+def finish_primary(qtbot, view, clock, predict=True):
+    if predict:  # the test calibration has no upper peak: predict one at twice the resonance
+        view.upper_prediction = lambda _side, hz: 2.0 * hz
     started(view)
     for _ in range(60):
         if view.pages.currentWidget() is view.done_page:
@@ -431,9 +437,16 @@ def test_optional_upper_treble_after_both_ears(qtbot, panel, view, clock):
     view.upperFound.connect(lambda side, hz: upper.append((side, hz)))
     view.upper_button.click()
     assert view.pages.currentWidget() is view.test_page
-    assert view.stage_label.text() == "Upper treble: louder test"
-    assert all(10500 <= hz <= 18000 for hz in view._round.options)
-    assert not view.audio.eq_enabled  # tones without the EQ, as for the primary resonance
+    assert view.test.kind == AUDIBLE  # no louder test up there: first, can it be heard clearly?
+    assert view.stage_label.text() == "Upper treble: can you hear it?"
+    predicted = dict(view.test.predicted_upper)
+    for side in "LR":
+        assert predicted[side] == pytest.approx(2.0 * view.test.results[side])
+    assert view._round.options == (predicted["L"],)
+    assert [c.isVisibleTo(view) for c in view.cards] == [True, False, False]
+    assert view.answer_button.text() == "I hear it clearly" and not view.answer_button.isEnabled()
+    view.play()
+    assert view.audio.playing == "band" and not view.audio.eq_enabled  # a band, without the EQ
     for _ in range(60):
         if view.pages.currentWidget() is view.done_page:
             assert "upper treble:" in view.result_label.text()
@@ -443,10 +456,11 @@ def test_optional_upper_treble_after_both_ears(qtbot, panel, view, clock):
             continue
         if view.test.kind == SMOOTHNESS:
             assert view.stage_label.text() == "Upper treble: smoothness check"
+            assert view.sweep_button.isChecked()  # the sweep first up high
         answer_like_a_listener(qtbot, view, clock)
     assert [side for side, _hz in upper] == ["L", "R"]
     for side, hz in upper:
-        assert abs(hz / UPPER_F0[side] - 1) < 0.04
+        assert abs(hz / (predicted[side] * UPPER_OFF) - 1) < 0.03
         assert panel.session.upper[side] == pytest.approx(round(hz))
     assert panel.session.upper_enabled and panel.upper_enabled.isChecked()
     view.next_button.click()  # Next: the balance offer
@@ -460,26 +474,40 @@ def test_optional_upper_treble_after_both_ears(qtbot, panel, view, clock):
 def test_smoothness_options_for_the_upper_treble_move_only_the_upper_resonance(qtbot, panel, view, clock):
     finish_primary(qtbot, view, clock)
     view.upper_button.click()
-    while view.test.kind == LOUDER:
+    while view.test.kind == AUDIBLE:
         answer_like_a_listener(qtbot, view, clock)
     qtbot.waitUntil(lambda: view.ready, timeout=15000)
     primary = dict(panel.session.primary)
+    lo, hi = view.test.upper_window("L")
     for index, hz in enumerate(view._round.options):
+        assert lo <= hz <= hi
         eq = view._eqs[index][0]
         assert eq.personal_treble_enabled
         assert eq.channels["L"].peak_hz == pytest.approx(primary["L"])
 
 
-def test_no_clear_upper_peak_keeps_the_upper_treble(qtbot, panel, view, clock):
+def test_not_hearing_the_upper_treble_clearly_keeps_it_as_calibrated(qtbot, panel, view, clock):
     finish_primary(qtbot, view, clock)
     view.upper_button.click()
-    for _ in range(4):
-        view.play() if not view.playing else None
-        hear_all(view, clock)
-        view.answer_same()
+    assert not view.same_button.isEnabled()  # play it first
+    view.play()
+    hear_all(view, clock)
+    assert view.same_button.text() == "Barely, or not at all"
+    view.answer_same()
     assert view.pages.currentWidget() is view.done_page
-    assert "no clear upper peak" in view.result_label.text()
+    assert "as calibrated" in view.result_label.text()
     assert not panel.session.upper_enabled and panel.session.upper == {}
+    view.next_button.click()
+    assert view.test.kind == AUDIBLE and view.test.side == "R"
+
+
+def test_no_predicted_upper_peak_goes_straight_on(qtbot, panel, view, clock):
+    """A calibration without an upper peak: nothing to fine-tune up there."""
+    assert panel._upper_prediction("L", 7000.0) is None  # the test calibration has none
+    finish_primary(qtbot, view, clock, predict=False)
+    view.upper_button.click()
+    assert view.test.status == "finished" and view.test.upper_results == {"L": None, "R": None}
+    assert view.pages.currentWidget() is view.balance_offer_page
 
 
 def reach_smoothness(qtbot, view, clock):
