@@ -1,0 +1,35 @@
+# Releasing the customer app (ADR 0001, 0003)
+#
+# Builds run in the public releases-only repo
+# (MohamedKhalil8801/resonancefit-releases, workflow "Build and publish"),
+# which checks out this source, tests it, builds Windows/macOS/Linux, runs
+# --self-test on every build and publishes the release with SHA256SUMS.
+#
+# Pushing a tag rf-vX.Y.Z here starts that build automatically when the
+# secret RELEASES_DISPATCH_TOKEN exists (a fine-grained token with
+# "Contents: read and write" on the releases repo). Without it, start the
+# build by hand: releases repo → Actions → "Build and publish" → Run workflow.
+name: Release ResonanceFit
+
+on:
+  push:
+    tags: ["rf-v*"]
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ask the releases repo to build ${{ github.ref_name }}
+        env:
+          TOKEN: ${{ secrets.RELEASES_DISPATCH_TOKEN }}
+        run: |
+          version="${GITHUB_REF_NAME#rf-v}"
+          if [ -z "$TOKEN" ]; then
+            echo "::notice::No RELEASES_DISPATCH_TOKEN secret. Start the build by hand in MohamedKhalil8801/resonancefit-releases (Actions → Build and publish) with version $version and source ref $GITHUB_REF_NAME."
+            exit 0
+          fi
+          curl -fsS -X POST \
+            -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/MohamedKhalil8801/resonancefit-releases/dispatches \
+            -d "{\"event_type\":\"build-release\",\"client_payload\":{\"version\":\"$version\",\"source_ref\":\"$GITHUB_REF_NAME\"}}"
+          echo "Build requested for $version from $GITHUB_REF_NAME."

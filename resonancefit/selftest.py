@@ -4,7 +4,8 @@ Used by CI on every built app: makes a synthetic calibration in a temporary
 folder laid out like a customer download, starts the real main window
 (offscreen unless a display is wanted), waits for the calibration to load
 with the default target, exports for a few catalogued apps and checks the
-files. Prints a short report; exit code 0 = pass.
+files. Prints a short report (also written to ``$RF_SELFTEST_REPORT`` when set,
+since a Windows GUI build has no console); exit code 0 = pass.
 """
 
 from __future__ import annotations
@@ -47,6 +48,14 @@ def check_audio_library(report) -> bool:
 def run_self_test(argv=None) -> int:
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     lines: list[str] = []
+    code = _run(lines, argv)
+    report_path = os.environ.get("RF_SELFTEST_REPORT")
+    if report_path:
+        Path(report_path).write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return code
+
+
+def _run(lines: list[str], argv) -> int:
 
     def report(text: str) -> None:
         lines.append(text)
