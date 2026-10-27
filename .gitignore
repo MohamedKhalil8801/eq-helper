@@ -187,3 +187,8 @@ cython_debug/
 customer_library/
 build_cache/
 dist-customers/
+
+# Customer app build: keep its spec, ignore build outputs
+!resonancefit.spec
+release/
+resonancefit/assets/version.txt

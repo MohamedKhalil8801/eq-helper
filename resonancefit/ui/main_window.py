@@ -24,6 +24,7 @@ from ..apo_apply import ApoApplier, ApoUnwritable
 from ..audio import AudioService
 from ..history import HistoryStore
 from ..library import LibraryEntry
+from ..os_integration import FileAssociation
 from ..paths import is_translocated
 from .about_page import AboutPage
 from .app_catalog_page import AppCatalogPage
@@ -38,6 +39,8 @@ from .sound_tools import SoundToolsPage
 from .sound_bar import SoundBar
 from .test_songs import TestSongsPage
 from .walkthrough import Walkthrough
+
+ICON = Path(__file__).resolve().parents[1] / "assets" / "icon.png"
 
 
 @dataclass(frozen=True)
@@ -67,7 +70,7 @@ class MainWindow(QMainWindow):
     audioReady = Signal(bool)
 
     def __init__(self, ctx, audio: AudioService | None = None, start_audio: bool = True,
-                 apo: ApoApplier | None = None):
+                 apo: ApoApplier | None = None, association: FileAssociation | None = None):
         super().__init__()
         self.ctx = ctx
         self.audio = audio or AudioService()
@@ -79,6 +82,8 @@ class MainWindow(QMainWindow):
         self.catalog = load_catalog()
         self.installed: set[str] = set()
         self.apo = apo if apo is not None else ApoApplier(ctx.paths.platform, ctx.settings)
+        self.association = association if association is not None else FileAssociation.detect(
+            ctx.paths.platform, ctx.branding, ICON)
         self.setWindowTitle(ctx.branding.title)
         self.setAcceptDrops(True)
         self.setStyleSheet(build_style(self.palette()))
@@ -186,8 +191,31 @@ class MainWindow(QMainWindow):
 
     # ── first launch and listening safety ──────────────────────────────────
     def show_walkthrough(self) -> None:
+        first = not self.ctx.settings.get("walkthrough_seen")
         Walkthrough(self.ctx.branding.product_name, self).exec()
         self.ctx.settings.set("walkthrough_seen", True)
+        if first:
+            self.offer_file_association()
+
+    def ask_file_association(self) -> bool:
+        answer = QMessageBox.question(
+            self, tr("Open calibration files with {product}?").format(product=self.ctx.branding.product_name),
+            tr("Open {suffix} calibration files with {product} when you double-click them? You can change this "
+               "later in your system settings.").format(suffix=RESCAL_SUFFIX, product=self.ctx.branding.product_name))
+        return answer == QMessageBox.Yes
+
+    def offer_file_association(self) -> None:
+        """Once, in release builds on Windows/Linux: offer double-click opening (per user, no admin)."""
+        if self.ctx.settings.get("file_association_offered") or not self.association.supported:
+            return
+        if not self.ctx.settings.get("walkthrough_seen"):
+            return  # after the walkthrough, not on top of it
+        self.ctx.settings.set("file_association_offered", True)
+        try:
+            if not self.association.registered() and self.ask_file_association():
+                self.association.register()
+        except OSError as exc:
+            self.statusBar().showMessage(tr("Couldn't set up double-click opening: {reason}").format(reason=exc), 10000)
 
     def confirm_quiet_start(self) -> bool:
         box = QMessageBox(self)
@@ -373,6 +401,17 @@ class MainWindow(QMainWindow):
         self.refresh()
         return True
 
+    def open_files(self, paths, activate: bool = True) -> None:
+        """Files from the command line, another launch or macOS Finder."""
+        for path in paths:
+            if str(path).lower().endswith(RESCAL_SUFFIX):
+                self.open_calibration_file(path)
+        if activate:
+            self.setWindowState((self.windowState() & ~Qt.WindowMinimized) | Qt.WindowActive)
+            self.show()
+            self.raise_()
+            self.activateWindow()
+
     def select_calibration(self, calibration_id: str) -> None:
         self.ctx.library.select(calibration_id)
         self.refresh()
@@ -409,6 +448,7 @@ class MainWindow(QMainWindow):
         self.calibrationLoaded.emit(loaded)
         if not self.ctx.settings.get("walkthrough_seen"):
             QTimer.singleShot(0, self.show_walkthrough)
+        QTimer.singleShot(0, self.offer_file_association)
 
     def _load_failed(self, token: int, entry: LibraryEntry, message: str) -> None:
         if token != self._load_token:

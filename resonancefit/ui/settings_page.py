@@ -2,22 +2,14 @@
 
 from __future__ import annotations
 
-from importlib import metadata
-
 from PySide6.QtCore import QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QMessageBox, QPushButton, QVBoxLayout, QWidget
 
 from ..apo_apply import ApoUnwritable
+from ..version import app_version
 from .common import Card, hint, tr
 from .sound_bar import OutputPicker
-
-
-def app_version() -> str:
-    try:
-        return metadata.version("eq-helper")
-    except metadata.PackageNotFoundError:
-        return "dev"
 
 
 class SettingsPage(QWidget):
