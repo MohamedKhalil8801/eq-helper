@@ -28,3 +28,18 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 # enum machinery). The AudioEngine is still fully exercised via
 # ``engine.process_block`` which drives the callback synchronously.
 os.environ.setdefault("EQ_HELPER_NO_AUDIO", "1")
+
+
+# On GitHub Actions, report each failed test as an error annotation (visible on
+# the run page and through the API, without downloading logs).
+if os.environ.get("GITHUB_ACTIONS"):
+    def _escape(text: str) -> str:
+        return text.replace("%", "%25").replace("\r", "").replace("\n", "%0A")
+
+    def pytest_runtest_logreport(report):  # noqa: D103
+        if not report.failed:
+            return
+        path, line, _ = report.location
+        message = str(report.longrepr)[-3000:]
+        title = f"{report.nodeid} ({report.when})"
+        print(f"\n::error file={path},line={(line or 0) + 1},title={_escape(title)}::{_escape(message)}", flush=True)
