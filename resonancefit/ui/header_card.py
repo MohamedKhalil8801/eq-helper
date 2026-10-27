@@ -1,4 +1,4 @@
-"""Header: whose calibration this is, the IEM and gear it was measured with."""
+"""Header: whose calibration this is, the IEM and accessories it was measured with."""
 
 from __future__ import annotations
 
@@ -74,9 +74,9 @@ class HeaderCard(Card):
         top.addLayout(right)
         self.body.addLayout(top)
 
-        self.gear_row = QHBoxLayout()
-        self.gear_row.setSpacing(6)
-        self.body.addLayout(self.gear_row)
+        self.accessory_row = QHBoxLayout()
+        self.accessory_row.setSpacing(6)
+        self.body.addLayout(self.accessory_row)
         self.details = hint("")
         self.body.addWidget(self.details)
         self._updating = False
@@ -101,17 +101,17 @@ class HeaderCard(Card):
         self.customer.setText(tr("Calibrated for {name} on {date}").format(
             name=manifest.customer.name, date=manifest.created) + serial)
         for widget in self._chips:
-            self.gear_row.removeWidget(widget)
+            self.accessory_row.removeWidget(widget)
             widget.deleteLater()
         self._chips = []
         for acc in manifest.accessories:
             kind = "yours" if acc.supplied_by == "customer" else "operator"
             label = chip(f"{accessory_label(acc.kind)}: {acc.description} ({supplied_label(acc, manifest)})", kind)
-            label.setToolTip(tr("Use the same gear when you listen: the calibration was measured with it."))
-            self.gear_row.addWidget(label)
+            label.setToolTip(tr("Use the same accessories when you listen: the calibration was measured with them."))
+            self.accessory_row.addWidget(label)
             self._chips.append(label)
         stretch = QLabel()
-        self.gear_row.addWidget(stretch, 1)
+        self.accessory_row.addWidget(stretch, 1)
         self._chips.append(stretch)
         extra = []
         if manifest.coupler:

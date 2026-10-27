@@ -292,7 +292,7 @@ class MainWindow(QMainWindow):
         sides = ", ".join(f"{side_name(s)} {hz:.0f} Hz" for s, hz in sorted(session.primary.items()))
         tuning = tr("{sides}; target {target}").format(sides=sides, target=session.target_name)
         if session.upper_enabled and session.upper:
-            tuning += "; " + tr("upper treble {values}").format(
+            tuning += "; " + tr("upper resonance {values}").format(
                 values=", ".join(f"{side_name(s)} {hz:.0f} Hz" for s, hz in sorted(session.upper.items())))
         meta = ExportMeta(manifest.customer.name, manifest.iem.display_name, date.today().isoformat(), tuning)
         peaks = " ".join(f"{s}{hz:.0f}" for s, hz in sorted(session.primary.items()))
