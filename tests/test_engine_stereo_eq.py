@@ -131,3 +131,9 @@ def test_channel_firs_from_channel_eq():
     assert _gain_at(bypass["L"], 1000) == pytest.approx(10 ** (eq.preamp_db / 20), rel=1e-9)
     single = channel_firs(type(eq)({"M": ch}, "D", eq.preamp_db), FS)
     assert set(single) == {"L", "R"} and single["L"] is single["R"]
+
+
+def test_bypass_is_exact_for_any_block_size():
+    stereo = StereoFIR(partition=256)
+    block = np.random.default_rng(4).standard_normal((1000, 2)).astype(np.float32)
+    np.testing.assert_array_equal(stereo.process(block), block)

@@ -162,8 +162,7 @@ class StereoFIR:
     def process(self, block: np.ndarray) -> np.ndarray:
         """Filter an ``(n, 2)`` block; returns float32 of the same shape."""
         x = np.asarray(block, dtype=float)
-        if not self.active and self._pending is None and self._blocker.latency == 0 \
-                and x.shape[0] % self.partition == 0:
+        if not self.active and self._pending is None and self._blocker.latency == 0:
             # Idle: keep history current but skip the work.
             self._history = np.concatenate([self._history[x.shape[0]:], x])[-self._history.shape[0]:]
             return np.asarray(block, dtype=np.float32)
