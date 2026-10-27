@@ -7,11 +7,13 @@ in the app catalog (ADR 0004).
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
-from eq_helper.dsp.resonance import ChannelEQ
+import numpy as np
+
+from eq_helper.dsp.resonance import ChannelEQ, interp
 
 
 @dataclass(frozen=True)
@@ -22,15 +24,16 @@ class ExportMeta:
     iem: str
     date: str
     tuning: str = ""
+    notes: tuple[str, ...] = ()  # e.g. the shared-only compromise
 
     def header_lines(self) -> list[str]:
         lines = [f"Customer: {self.customer}", f"IEM: {self.iem}", f"Date: {self.date}"]
         if self.tuning:
             lines.append(f"Tuning: {self.tuning}")
-        return lines
+        return lines + [f"Note: {note}" for note in self.notes]
 
     def as_dict(self) -> dict[str, str]:
-        return dict(line.split(": ", 1) for line in self.header_lines())
+        return {"Customer": self.customer, "IEM": self.iem, "Date": self.date, "Tuning": self.tuning}
 
 
 @runtime_checkable
@@ -66,3 +69,53 @@ def prepend_readme(path: Path, meta: ExportMeta, extra: list[str] | None = None)
     if extra:
         head += extra + [""]
     path.write_text("\n".join(head) + "\n" + body, encoding="utf-8")
+
+
+# ── shared-only reduction ───────────────────────────────────────────────────
+
+BALANCE_BAND_HZ = (500.0, 2000.0)
+BALANCE_MIN_DB = 0.05
+
+
+@dataclass(frozen=True)
+class SharedReduction:
+    channel_eq: ChannelEQ          # one "M" channel for both ears
+    balance_db: float | None       # + = right needs more level than left
+    notes: tuple[str, ...]
+
+
+def shared_only(channel_eq: ChannelEQ, balance_control: bool) -> SharedReduction:
+    """Average L/R for apps without per-channel EQ (shared preamp kept).
+
+    The left/right level difference around 1 kHz becomes a balance value when
+    the app has a balance control; the averaged EQ keeps the rest.
+    """
+    if set(channel_eq.channels) != {"L", "R"}:
+        return SharedReduction(channel_eq, None, ())
+    left, right = channel_eq.channels["L"], channel_eq.channels["R"]
+    grid = left.freqs
+
+    def on_grid(eq, values):
+        return interp(eq.freqs, values, grid)
+
+    r_corr = on_grid(right, right.correction_db)
+    mean = replace(left, peak_hz=float(np.sqrt(left.peak_hz * right.peak_hz)),
+                   predicted_db=(left.predicted_db + on_grid(right, right.predicted_db)) / 2,
+                   target_db=(left.target_db + on_grid(right, right.target_db)) / 2,
+                   correction_db=(left.correction_db + r_corr) / 2,
+                   prediction_note=f"L/R average of {left.peak_hz:.0f} / {right.peak_hz:.0f} Hz",
+                   personal_peak_hz=None, coupler_treble_peak_hz=None,
+                   applied_personal_peak_hz=None, personal_treble_band_hz=None)
+    reduced = ChannelEQ({"M": mean}, channel_eq.target_name, channel_eq.preamp_db,
+                        channel_eq.personal_treble_enabled)
+    notes = ["This app uses one EQ for both ears, so the left/right correction is averaged "
+             "(reduced L/R accuracy)."]
+    balance = None
+    if balance_control:
+        band = (grid >= BALANCE_BAND_HZ[0]) & (grid <= BALANCE_BAND_HZ[1])
+        diff = float(np.mean(r_corr[band] - left.correction_db[band]))
+        if abs(diff) >= BALANCE_MIN_DB:
+            balance = diff
+            side = "right" if diff > 0 else "left"
+            notes.append(f"Set the app's balance {abs(diff):.1f} dB towards the {side} ear.")
+    return SharedReduction(reduced, balance, tuple(notes))
