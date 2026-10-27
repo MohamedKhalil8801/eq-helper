@@ -57,10 +57,12 @@ the volume low and turn other EQs off; press **Start the test**. Then, for the l
 right (one ear only for a calibration made for both ears at once):
 
 1. **Louder test.** Two cards, **Play A** and **Play B**, each a tone in that ear at the same level.
-   Press **Play** (the bar on top) and click the cards to switch between them as often as you like: the
-   sound switches at once. When you've heard both, answer **Louder: A** (or B; the wide button follows
-   the card you selected) or **About the same**. About six rounds narrow it down; at the end one
-   earlier pair comes back the other way round to check your answers agree.
+   Click a card to hear it (the bar on top pauses and plays again); click the other card to switch, as
+   often as you like: the sound switches at once. When you've heard both, answer **Louder: A** (or B;
+   the wide button follows the card you selected) or **About the same**. "About the same" is a fine
+   answer: two tones beside your resonance can sound alike, and the test keeps that in mind instead of
+   assuming the resonance lies between them. Each round picks the pair that tells it the most; about six
+   rounds are usually enough, a few more if some answers disagree.
 2. **Smoothness check.** Three cards, **A**, **B** and **C**: pink noise through three slightly
    different EQs around what the louder test found. Pick the one whose treble sounds **smoothest**, with
    no harsh, hissy or dull spot (**Smoothest: B**), or **Can't tell them apart**. A few rounds.
@@ -71,12 +73,20 @@ answer buttons wake up once you've listened to each card for a moment (**Listen 
 
 When an ear is done the app shows its result, e.g. **Left resonance: 7,640 Hz**, and sets it in the
 graph and the EQ exactly as the slider would. **Back** takes back your last answer; **Adjust by hand**
-leaves the test and keeps what's been found so far. If an answer near the end doesn't match an earlier
-one, the app says so and offers **Do this ear again** or **Adjust by hand**. If the tones all sound
-alike, the test skips ahead to the smoothness check with wider steps.
+leaves the test and keeps what's been found so far (including the louder test's best guess once it's
+narrowed down). If your answers point to more than one place, the app says so and offers **Do this ear
+again**, **Use it anyway** (the smoothness check then starts from the best guess, with wider steps) or
+**Adjust by hand**. If the tones all sound alike, the test goes on to the smoothness check with wider
+steps.
 
-Keys: **1 2 3** pick a card, **P** play/pause, **Enter** answers for the selected card, **S** is
-*About the same* / *Can't tell them apart*, **Backspace** goes back, **Space** stops all sound.
+**Upper treble (optional).** After both ears the app offers **Find my upper treble (about 2 minutes)**
+or **Skip, I'm done**. It works the same way with higher tones (10.5–18 kHz), then noise through EQs
+that differ only in the highest treble. If you can barely hear the high tones, answer **About the
+same**: when no clear peak is heard, that ear's upper treble stays as it is. A found upper treble turns
+on **Adjust the upper treble** (step ③) with that value.
+
+Keys: **1 2 3** pick and play a card, **P** play/pause, **Enter** answers for the selected card, **S**
+is *About the same* / *Can't tell them apart*, **Backspace** goes back, **Space** stops all sound.
 
 ### Adjust by hand
 
