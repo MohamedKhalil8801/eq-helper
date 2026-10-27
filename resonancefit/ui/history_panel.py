@@ -40,6 +40,7 @@ def describe_entry(entry, app_names=None) -> str:
 
 class HistoryPanel(Card):
     reapplyRequested = Signal(str)  # entry id
+    changed = Signal()
 
     def __init__(self, parent=None):
         super().__init__(tr("History"), parent)
@@ -81,6 +82,7 @@ class HistoryPanel(Card):
         self.empty.setVisible(not entries)
         self.list.setVisible(bool(entries))
         self._sync_buttons()
+        self.changed.emit()
 
     def _selected_id(self):
         item = self.list.currentItem()

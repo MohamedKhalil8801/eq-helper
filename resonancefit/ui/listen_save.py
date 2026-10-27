@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Signal
-from PySide6.QtWidgets import QHBoxLayout, QLineEdit, QPushButton
+from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QLineEdit, QPushButton, QWidget
 
 from .common import Card, hint, tr
 
@@ -12,6 +12,7 @@ class ListenSaveCard(Card):
     saveRequested = Signal(str)   # note
     exportRequested = Signal()
     applyRequested = Signal()
+    switchRequested = Signal(str)  # history entry id to apply
     eqToggled = Signal(bool)
 
     def __init__(self, parent=None):
@@ -41,6 +42,19 @@ class ListenSaveCard(Card):
         self.apply_button.clicked.connect(self.applyRequested)
         self.apply_button.hide()
         self.body.addWidget(self.apply_button)
+        self.switch_row = QWidget()
+        switch = QHBoxLayout(self.switch_row)
+        switch.setContentsMargins(0, 0, 0, 0)
+        label = QLabel(tr("Switch to:"))
+        switch.addWidget(label)
+        self.switch_combo = QComboBox()
+        self.switch_combo.setAccessibleName(tr("Apply a saved tuning to Equalizer APO"))
+        self.switch_combo.setToolTip(tr("Apply one of your saved tunings to Equalizer APO."))
+        self.switch_combo.activated.connect(self._switch)
+        label.setBuddy(self.switch_combo)
+        switch.addWidget(self.switch_combo, 1)
+        self.switch_row.hide()
+        self.body.addWidget(self.switch_row)
         self.export_button = QPushButton(tr("Export for my EQ app…"))
         self.export_button.setObjectName("primary")
         self.export_button.clicked.connect(self.exportRequested)
@@ -50,6 +64,24 @@ class ListenSaveCard(Card):
 
     def set_apply_available(self, available: bool) -> None:
         self.apply_button.setVisible(available)
+        self._apply_available = available
+        self.switch_row.setVisible(available and self.switch_combo.count() > 0)
+
+    def set_saved_tunings(self, items) -> None:
+        """``items``: [(entry id, label)], newest first."""
+        self.switch_combo.blockSignals(True)
+        self.switch_combo.clear()
+        for entry_id, label in items:
+            self.switch_combo.addItem(label, entry_id)
+        self.switch_combo.setCurrentIndex(-1)
+        self.switch_combo.setPlaceholderText(tr("a saved tuning…"))
+        self.switch_combo.blockSignals(False)
+        self.switch_row.setVisible(getattr(self, "_apply_available", False) and bool(items))
+
+    def _switch(self, index: int) -> None:
+        entry_id = self.switch_combo.itemData(index)
+        if entry_id:
+            self.switchRequested.emit(entry_id)
 
     def set_eq_on(self, on: bool) -> None:
         self.eq_toggle.setChecked(on)

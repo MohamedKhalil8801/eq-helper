@@ -8,16 +8,19 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
-from PySide6.QtWidgets import QHBoxLayout, QMainWindow, QStackedWidget, QTabWidget, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QHBoxLayout, QInputDialog, QMainWindow, QMessageBox, QStackedWidget, QTabWidget, QVBoxLayout, QWidget,
+)
 
 from eq_helper.calibration.model_cache import load_measurements
 from eq_helper.calibration.rescal import RESCAL_SUFFIX, Calibration, RescalError
 from eq_helper.dsp.predicted_export import safe_file_part
 from eq_helper.dsp.resonance import Measurements
 from eq_helper.exports.catalog import load_catalog
-from eq_helper.exports.detection import detect_installed
+from eq_helper.exports.detection import APO_APP_ID, detect_installed
 from eq_helper.exports.formats.base import ExportMeta
 
+from ..apo_apply import ApoApplier, ApoUnwritable
 from ..audio import AudioService
 from ..history import HistoryStore
 from ..library import LibraryEntry
@@ -26,7 +29,7 @@ from .app_catalog_page import AppCatalogPage
 from .common import APP_STYLE, Worker, side_name, tr
 from .export_flow import PREDICTED_APP_ID, ExportFlow, ExportJob
 from .header_card import HeaderCard
-from .history_panel import HistoryPanel
+from .history_panel import HistoryPanel, friendly_date
 from .import_screen import ImportScreen
 from .listen_save import ListenSaveCard
 
@@ -57,7 +60,8 @@ class MainWindow(QMainWindow):
     calibrationLoaded = Signal(object)  # LoadedCalibration
     audioReady = Signal(bool)
 
-    def __init__(self, ctx, audio: AudioService | None = None, start_audio: bool = True):
+    def __init__(self, ctx, audio: AudioService | None = None, start_audio: bool = True,
+                 apo: ApoApplier | None = None):
         super().__init__()
         self.ctx = ctx
         self.audio = audio or AudioService()
@@ -68,6 +72,7 @@ class MainWindow(QMainWindow):
         self._workers: set[Worker] = set()
         self.catalog = load_catalog()
         self.installed: set[str] = set()
+        self.apo = apo if apo is not None else ApoApplier(ctx.paths.platform, ctx.settings)
         self.setWindowTitle(ctx.branding.title)
         self.setAcceptDrops(True)
         self.setStyleSheet(APP_STYLE)
@@ -139,6 +144,10 @@ class MainWindow(QMainWindow):
         tune.addWidget(sidebar)
         self.calibrationLoaded.connect(self._calibration_ready)
         self.listen.exportRequested.connect(self.open_export)
+        self.listen.applyRequested.connect(self.apply_to_apo)
+        self.listen.switchRequested.connect(self.switch_apo_tuning)
+        self.listen.set_apply_available(self.apo.available())
+        self.history_panel.changed.connect(self._sync_saved_tunings)
         self.history_panel.app_names = {app.id: app.name for app in self.catalog.apps}
         self.history_panel.app_names[PREDICTED_APP_ID] = tr("Predicted response")
         self.tabs.addTab(self.tune_tab, tr("Tune"))
@@ -150,6 +159,52 @@ class MainWindow(QMainWindow):
     def _apps_detected(self, installed) -> None:
         self.installed = set(installed)
         self.catalog_page.set_installed(self.installed)
+
+    # ── Equalizer APO ──────────────────────────────────────────────────────
+    def _sync_saved_tunings(self) -> None:
+        entries = self.history.entries() if self.history is not None else []
+        items = []
+        for e in entries:
+            sides = " ".join(f"{s} {hz:.0f}" for s, hz in sorted(e.tuning.primary.items()))
+            label = f"{friendly_date(e.date)} · {e.target_name} · {sides}"
+            items.append((e.id, label + (f" · {e.note}" if e.note else "")))
+        self.listen.set_saved_tunings(items)
+
+    def choose_apo_device(self, devices: list[str]) -> str | None:
+        device, ok = QInputDialog.getItem(
+            self, tr("Choose your output"),
+            tr("Which output do you listen to your IEMs on? You only choose this once."), devices, 0, False)
+        return device if ok and device else None
+
+    def show_apo_problem(self, problem: ApoUnwritable) -> None:
+        QMessageBox.warning(self, tr("Equalizer APO couldn't be changed"), tr(problem.fix))
+
+    def apply_to_apo(self) -> bool:
+        job = self.export_job()
+        if job is None or not self.apo.available():
+            return False
+        if not self.apo.device or self.apo.device not in self.apo.devices():
+            devices = self.apo.devices()
+            if not devices:
+                QMessageBox.information(self, tr("Equalizer APO"), tr(self.apo.no_devices_help()))
+                return False
+            device = self.choose_apo_device(devices)
+            if not device:
+                return False
+            self.apo.set_device(device)
+        try:
+            path = self.apo.apply(job.channel_eq, job.iem_name, job.meta.tuning)
+        except ApoUnwritable as problem:
+            self.show_apo_problem(problem)
+            return False
+        self.record_history("apply", files=[str(path)], app=APO_APP_ID)
+        self.listen.show_status(tr("Applied to Equalizer APO on {device}. Everything you play there now "
+                                   "uses this tuning.").format(device=self.apo.device))
+        return True
+
+    def switch_apo_tuning(self, entry_id: str) -> None:
+        self.reapply(entry_id)
+        self.apply_to_apo()
 
     # ── export ─────────────────────────────────────────────────────────────
     def export_job(self) -> ExportJob | None:
