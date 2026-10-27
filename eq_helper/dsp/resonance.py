@@ -238,6 +238,47 @@ class ResonanceModel:
         return f"{state} · measured {self.peaks[0]:.0f}–{self.peaks[-1]:.0f} Hz"
 
 
+@dataclass(frozen=True)
+class Fit:
+    """One coupler measurement at one insertion depth, held in memory.
+
+    ``side`` is ``"L"``, ``"R"`` or ``None`` (unlabelled). Levels are raw SPL;
+    a shared 1 kHz reference across all fits is applied when models are built.
+    """
+
+    side: str | None
+    name: str
+    freqs: np.ndarray
+    db: np.ndarray
+
+    def __post_init__(self):
+        if self.side not in ("L", "R", None):
+            raise ValueError(f"Fit side must be 'L', 'R' or None, not {self.side!r}.")
+
+
+def read_fits(folder):
+    """Read every TXT/CSV fit below ``folder`` with its L/R label.
+
+    Returns ``(fits, warnings)``; unreadable files become warnings. Values are
+    not validated here, so in-memory and on-disk fits share one validation path.
+    """
+    root = Path(folder).resolve()
+    if not root.is_dir():
+        raise ValueError(f"Measurement folder not found: {root}")
+    fits, warnings = [], []
+    for path in sorted(root.rglob("*")):
+        if not path.is_file() or path.suffix.lower() not in (".txt", ".csv"):
+            continue
+        name = str(path.relative_to(root))
+        try:
+            side = _file_side(path, root)
+            freqs, db = load_frequency_response(path)
+            fits.append(Fit(side, name, np.asarray(freqs, dtype=float), np.asarray(db, dtype=float)))
+        except (OSError, ValueError) as exc:
+            warnings.append(f"Skipped {name}: {exc}")
+    return fits, warnings
+
+
 @dataclass
 class Measurements:
     models: dict[str, ResonanceModel]
@@ -246,25 +287,28 @@ class Measurements:
 
     @classmethod
     def from_folder(cls, folder):
-        root = Path(folder).resolve()
-        if not root.is_dir():
-            raise ValueError(f"Measurement folder not found: {root}")
-        records, warnings = [], []
-        for path in sorted(root.rglob("*")):
-            if not path.is_file() or path.suffix.lower() not in (".txt", ".csv"):
-                continue
-            name = str(path.relative_to(root))
+        fits, warnings = read_fits(folder)
+        return cls._build(fits, str(Path(folder).resolve()), warnings, "in this folder")
+
+    @classmethod
+    def from_fits(cls, fits, name):
+        """Build models from in-memory fits (e.g. from a calibration file)."""
+        return cls._build(fits, name, [], "in this calibration")
+
+    @classmethod
+    def _build(cls, fits, name, warnings, where):
+        records, warnings = [], list(warnings)
+        for fit in fits:
             try:
-                side = _file_side(path, root)
-                f, y = _validate(*load_frequency_response(path), name)
+                f, y = _validate(fit.freqs, fit.db, fit.name)
                 if f[0] > 1000 or f[-1] < PEAK_RANGE[1]:
                     raise ValueError("Needs coverage from 1 kHz through 11 kHz.")
                 peak = detect_peak(f, y)
-                records.append((side, name, f, y, peak))
-            except (OSError, ValueError) as exc:
-                warnings.append(f"Skipped {name}: {exc}")
+                records.append((fit.side, fit.name, f, y, peak))
+            except ValueError as exc:
+                warnings.append(f"Skipped {fit.name}: {exc}")
         if not records:
-            raise ValueError("No usable measurements in this folder.\n" + "\n".join(warnings[:8]))
+            raise ValueError(f"No usable measurements {where}.\n" + "\n".join(warnings[:8]))
         labelled = any(r[0] is not None for r in records)
         if labelled:
             warnings.extend(f"Skipped {r[1]}: no L/R label. Use L/R filenames or Left/Right subfolders."
@@ -286,7 +330,7 @@ class Measurements:
             grid = np.unique(np.r_[densest[(densest >= lo) & (densest <= hi)], lo, hi, 1000.0])
             curves = np.array([interp(r[2], r[3], grid) - reference for r in samples])
             models[side or "M"] = ResonanceModel(grid, curves, [r[4] for r in samples], [r[1] for r in samples])
-        return cls(models, str(root), tuple(warnings))
+        return cls(models, name, tuple(warnings))
 
     @classmethod
     def bundled(cls):

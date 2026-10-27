@@ -153,3 +153,54 @@ def test_target_validation_and_new_measurements_change_prediction(tmp_path):
     assert not np.allclose(original.models['L'].predict(7700), updated.models['L'].predict(7700))
     with pytest.raises(ValueError, match='1 kHz'):
         match_channels(updated, {'L': 7700}, np.array([2000., 20000.]), np.zeros(2), 'bad target')
+
+
+def _fits_from_folder(folder):
+    from eq_helper.dsp.resonance import read_fits
+    fits, warnings = read_fits(folder)
+    return fits, warnings
+
+
+def test_from_fits_matches_from_folder(tmp_path):
+    from eq_helper.dsp.resonance import Fit
+    folder = make_stereo(tmp_path)
+    fits, _ = _fits_from_folder(tmp_path)
+    assert all(isinstance(f, Fit) for f in fits)
+    mem = Measurements.from_fits(fits, name='Nova')
+    assert mem.name == 'Nova'
+    assert set(mem.models) == set(folder.models)
+    for side in folder.models:
+        np.testing.assert_array_equal(folder.models[side].freqs, mem.models[side].freqs)
+        np.testing.assert_allclose(folder.models[side].predict(7700), mem.models[side].predict(7700))
+        assert folder.models[side].alignment == mem.models[side].alignment
+
+
+def test_from_fits_in_memory_without_files():
+    from eq_helper.dsp.resonance import Fit
+    f = np.unique(np.r_[np.geomspace(20, 20000, 2400), 1000])
+    fits = [Fit(side, f'{side}{i}', f,
+                75 + off + 9 * np.exp(-0.5 * (np.log(f / peak) / .075) ** 2))
+            for side, off in [('L', 0), ('R', 2)]
+            for i, peak in enumerate([6500, 7200, 8000, 8800])]
+    data = Measurements.from_fits(fits, name='mem')
+    assert set(data.models) == {'L', 'R'}
+    assert data.models['L'].sources == ('L0', 'L1', 'L2', 'L3')
+    assert abs(interp(f, data.models['R'].predict(7700) - data.models['L'].predict(7700), [1000])[0] - 2) < 1e-6
+
+
+def test_from_fits_rejects_unlabelled_mix_and_invalid_fits():
+    from eq_helper.dsp.resonance import Fit
+    f = np.unique(np.r_[np.geomspace(20, 20000, 2400), 1000])
+    y = 75 + 9 * np.exp(-0.5 * (np.log(f / 8000) / .075) ** 2)
+    fits = [Fit('L', 'left', f, y), Fit(None, 'nolabel', f, y),
+            Fit('R', 'narrow', f[f > 2000], y[f > 2000]),
+            Fit('R', 'nan', f, np.where(f > 5000, np.nan, y))]
+    data = Measurements.from_fits(fits, name='mix')
+    assert set(data.models) == {'L'}
+    assert any('nolabel' in w and 'no L/R label' in w for w in data.warnings)
+    assert any('narrow' in w and '1 kHz' in w for w in data.warnings)
+    assert any('nan' in w and 'finite' in w for w in data.warnings)
+    with pytest.raises(ValueError, match='No usable measurements'):
+        Measurements.from_fits([], name='empty')
+    with pytest.raises(ValueError, match='side'):
+        Fit('X', 'bad', f, y)
