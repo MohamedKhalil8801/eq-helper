@@ -159,6 +159,7 @@ class TuningPanel(QWidget):
         self.step1_stack.addWidget(self.manual_page)
         self.guided = GuidedTestView(self.audio, self._option_eqs)
         self.guided.resultFound.connect(self._guided_result)
+        self.guided.upperFound.connect(self._guided_upper)
         self.guided.adjustByHand.connect(self._guided_to_manual)
         self.guided.finished.connect(self._guided_finished)
         self.step1_stack.addWidget(self.guided)
@@ -505,9 +506,10 @@ class TuningPanel(QWidget):
         for card in (self.step2, self.step3):
             card.setEnabled(False)  # the test's EQs are made with today's target and upper treble
 
-    def _option_eqs(self, side: str, hz_list):
+    def _option_eqs(self, side: str, hz_list, which: str = "primary"):
         """For the smoothness check: a worker job making one EQ (and its preview filters) per option,
-        with only ``side``'s primary resonance changed. The session is copied now, on the GUI thread."""
+        with only ``side``'s primary resonance — or, for ``which="upper"``, its upper resonance —
+        changed. The session is copied now, on the GUI thread."""
         from eq_helper.dsp.resonance import match_channels
         s = self.session
         measurements, primary, target, name = s.measurements, dict(s.primary), s.target, s.target_name
@@ -517,8 +519,12 @@ class TuningPanel(QWidget):
         def work():
             built = []
             for hz in hz_list:
-                eq = match_channels(measurements, {**primary, side: float(hz)}, *target, name,
-                                    personal_treble=upper)
+                if which == "upper":
+                    eq = match_channels(measurements, primary, *target, name,
+                                        personal_treble={**(upper or {}), side: float(hz)})
+                else:
+                    eq = match_channels(measurements, {**primary, side: float(hz)}, *target, name,
+                                        personal_treble=upper)
                 built.append((eq, audio.design_firs(eq, rate)))
             return built
         return work
@@ -533,12 +539,25 @@ class TuningPanel(QWidget):
         self._select_side(side)
         self.set_primary_hz(hz)
 
+    def _guided_upper(self, side: str, hz) -> None:
+        """An ear's upper resonance is done (``None``: no clear peak, leave the upper treble as it is)."""
+        if hz is None or self.session is None:
+            return
+        self.session.set_upper(side, float(round(hz)))
+        self.session.upper_enabled = True
+        self._select_side(side)
+        self._sync_upper_controls()
+        self._schedule_regen()
+
     def _guided_to_manual(self, found: dict) -> None:
         """Leave the test for "Adjust by hand", keeping what's been found so far."""
-        for side, hz in found.items():
+        for side, hz in found.get("primary", {}).items():
             if self.session is not None and round(self.session.primary.get(side, 0)) != round(hz):
                 self._select_side(side)
                 self.set_primary_hz(hz)
+        for side, hz in found.get("upper", {}).items():
+            if self.session is not None and round(self.session.upper.get(side, 0)) != round(hz):
+                self._guided_upper(side, hz)
         current = self.guided.test.side if self.guided.test is not None else None
         self._close_guided()
         self.by_hand_button.setChecked(True)

@@ -6,71 +6,119 @@ import random
 import numpy as np
 import pytest
 
-from eq_helper.dsp.resonance import CONTROL_RANGE
+from eq_helper.dsp.resonance import CONTROL_RANGE, PERSONAL_TREBLE_RANGE
 from resonancefit.guided_test import (
-    LOUDER, SMOOTH_DELTA, SMOOTH_WIDE_DELTA, SMOOTHNESS, GuidedTest, LouderSearch, SmoothnessSearch,
+    LOUDER, LOUDER_MAX_ROUNDS, PRIMARY, SMOOTH_DELTA, SMOOTH_WIDE_DELTA, SMOOTHNESS, UPPER, UPPER_PEAK_WIDTHS,
+    GuidedTest, LouderSearch, SmoothnessSearch,
 )
 
 
-def loudness(hz, f0, width=0.15):
-    """A simulated ear: loudness (dB) peaked at ``f0``, ``width`` octaves wide."""
-    return 10 * math.exp(-0.5 * (math.log2(hz / f0) / width) ** 2)
-
-
-def louder_listener(f0, noise=0.05, same_below=0.0, rng=None):
+def ear(f0, width=0.1, height=8.0, noise=0.6, jnd=1.0, slope=0.0, slip=0.0, rng=None):
+    """A simulated listener: a peak at ``f0`` (σ ``width`` octaves, ``height`` dB) on a flat or sloped
+    background; differences below ``jnd`` dB are heard as "About the same"."""
     rng = rng or random.Random(1)
 
+    def level(hz):
+        return height * math.exp(-0.5 * (math.log2(hz / f0) / width) ** 2) + slope * math.log2(hz / 7500)
+
     def answer(round_):
-        levels = [loudness(hz, f0) + rng.gauss(0, noise) for hz in round_.options]
-        if abs(levels[0] - levels[1]) < same_below:
+        if rng.random() < slip:
+            return rng.choice([0, 1, None])
+        d = level(round_.options[0]) - level(round_.options[1]) + rng.gauss(0, noise)
+        if abs(d) < jnd:
             return None
-        return int(np.argmax(levels))
+        return 0 if d > 0 else 1
     return answer
+
+
+def run(search, listener):
+    while not search.done:
+        search.answer(listener(search.options()))
+    return search.result()
 
 
 @pytest.mark.parametrize("f0", [6000, 6300, 6800, 7300, 7700, 8200, 8600, 9000])
 @pytest.mark.parametrize("seed", [0, 1, 2])
 def test_louder_search_finds_the_peak_within_three_percent(f0, seed):
-    search = LouderSearch(rng=random.Random(seed))
-    listener = louder_listener(f0, rng=random.Random(seed + 10))
-    while not search.done:
-        search.answer(listener(search.options()))
-    result = search.result()
-    assert result.rounds <= 10
+    result = run(LouderSearch(rng=random.Random(seed)), ear(f0, rng=random.Random(seed + 10)))
+    assert result.rounds <= LOUDER_MAX_ROUNDS
     assert result.confident and not result.fell_back
     assert abs(result.hz / f0 - 1) < 0.03
     assert CONTROL_RANGE[0] <= result.hz <= CONTROL_RANGE[1]
 
 
-def test_options_are_the_golden_section_points_in_random_order():
-    lo, hi = CONTROL_RANGE
-    x1 = math.exp(math.log(hi) - 0.6180339887 * math.log(hi / lo))
-    x2 = math.exp(math.log(lo) + 0.6180339887 * math.log(hi / lo))
+@pytest.mark.parametrize("width", [0.05, 0.1, 0.18])
+@pytest.mark.parametrize("slope", [-3.0, 0.0, 3.0])
+def test_robust_to_peak_width_and_a_sloped_background(width, slope):
+    misses = 0
+    for seed in range(12):
+        f0 = math.exp(random.Random(seed).uniform(math.log(6000), math.log(9000)))
+        result = run(LouderSearch(rng=random.Random(seed)), ear(f0, width, slope=slope, rng=random.Random(seed)))
+        misses += abs(result.hz / f0 - 1) >= 0.03
+    assert misses <= 1
+
+
+def test_same_for_two_tones_beside_a_narrow_peak_keeps_the_far_region():
+    """Two tones on the flat part sound alike: "About the same" must not rule out a peak far from both."""
+    search = LouderSearch(rng=random.Random(3))
+    search.options()
+    search._round = type(search.options())((7005.0, 7709.0))  # the pair a midpoint search would ask first
+    search._index.setdefault(7005.0, int(np.argmin([abs(c - 7005) for c in search.candidates])))
+    search._index.setdefault(7709.0, int(np.argmin([abs(c - 7709) for c in search.candidates])))
+    search.answer(None)
+    marginal = search.posterior().sum(axis=0)
+    hz = 2.0 ** search.grid
+    far = marginal[hz > 8300].sum() / (hz > 8300).mean()
+    between = marginal[(hz > 7200) & (hz < 7500)].sum() / ((hz > 7200) & (hz < 7500)).mean()
+    near_tones = marginal[(hz > 6950) & (hz < 7060)].sum() / ((hz > 6950) & (hz < 7060)).mean()
+    assert far > 0.5 * between     # a peak far from both stays likely
+    assert near_tones < 0.5 * far  # a peak right at one of the tones would have been heard
+
+
+def test_narrow_peak_at_the_top_is_found_even_after_same_answers():
+    for seed in range(6):
+        result = run(LouderSearch(rng=random.Random(seed)),
+                     ear(8800, width=0.05, jnd=1.5, rng=random.Random(seed)))
+        assert abs(result.hz / 8800 - 1) < 0.03
+
+
+def test_slips_are_flagged_or_survived():
+    flagged = wrong_and_confident = 0
+    for seed in range(40):
+        f0 = math.exp(random.Random(seed).uniform(math.log(6000), math.log(9000)))
+        result = run(LouderSearch(rng=random.Random(seed)), ear(f0, slip=0.15, rng=random.Random(seed)))
+        flagged += not result.confident
+        wrong_and_confident += result.confident and abs(result.hz / f0 - 1) > 0.06
+    assert flagged >= 1
+    assert wrong_and_confident <= 1
+
+
+def test_a_listener_who_hears_no_difference_falls_back_quickly():
+    search = LouderSearch(rng=random.Random(4))
+    for _ in range(4):
+        search.answer(None)
+    assert search.done
+    result = search.result()
+    assert result.fell_back and not result.confident
+    assert CONTROL_RANGE[0] <= result.hz <= CONTROL_RANGE[1]
+
+
+def test_options_are_playable_tones_in_random_order():
     orders = set()
     for seed in range(20):
         round_ = LouderSearch(rng=random.Random(seed)).options()
-        assert sorted(round_.options) == pytest.approx([x1, x2])
+        assert len(round_.options) == 2 and round_.options[0] != round_.options[1]
+        assert all(CONTROL_RANGE[0] <= hz <= CONTROL_RANGE[1] for hz in round_.options)
+        ratio = max(round_.options) / min(round_.options)
+        assert 2 ** 0.039 <= ratio <= 2 ** 0.401
         orders.add(round_.options[0] < round_.options[1])
     assert orders == {True, False}
 
 
-def test_each_answer_narrows_the_interval():
-    search = LouderSearch(rng=random.Random(3))
-    x1, x2 = sorted(search.options().options)
-    search.answer(search.options().options.index(x1))  # x1 louder: b = x2
-    assert math.exp(search.b) == pytest.approx(x2)
-    assert math.exp(search.a) == pytest.approx(CONTROL_RANGE[0])
-    y1, y2 = sorted(search.options().options)
-    search.answer(search.options().options.index(y2))  # x2 louder: a = x1
-    assert math.exp(search.a) == pytest.approx(y1)
-    z1, z2 = sorted(search.options().options)
-    search.answer(None)  # about the same: a = x1, b = x2
-    assert (math.exp(search.a), math.exp(search.b)) == pytest.approx((z1, z2))
-
-
-def test_undo_restores_the_interval_and_the_same_round():
+def test_undo_restores_the_belief_and_the_same_round():
     search = LouderSearch(rng=random.Random(4))
     first = search.options()
+    before = search.posterior().copy()
     search.answer(0)
     second = search.options()
     search.answer(1)
@@ -78,53 +126,17 @@ def test_undo_restores_the_interval_and_the_same_round():
     assert search.options() == second
     assert search.undo()
     assert search.options() == first
-    assert (math.exp(search.a), math.exp(search.b)) == pytest.approx(CONTROL_RANGE)
+    np.testing.assert_allclose(search.posterior(), before)
     assert not search.undo()
 
 
-def test_check_round_repeats_an_earlier_pair_swapped():
-    search = LouderSearch(rng=random.Random(5))
-    listener = louder_listener(7400)
-    while search.searching:
-        search.answer(listener(search.options()))
-    check = search.options()
-    assert check.check
-    earlier = [r for _a, _b, r, louder in search.answers if louder is not None
-               and set(r.options) == set(check.options)]
-    assert earlier, "the check repeats a pair that was asked before"
-    louder_before = next(louder for _a, _b, r, louder in search.answers if r == earlier[-1])
-    assert check.options[1] == louder_before  # the earlier louder one now comes second
-
-
-def test_inconsistent_listener_is_flagged():
-    search = LouderSearch(rng=random.Random(6))
-    listener = louder_listener(7400)
-    while search.searching:
-        search.answer(listener(search.options()))
-    check = search.options()
-    search.answer(0)  # the earlier quieter one, since the pair is swapped: a contradiction
-    result = search.result()
-    assert not result.confident
-    assert result.hz is not None
-
-
-def test_three_opening_same_answers_fall_back():
-    search = LouderSearch(rng=random.Random(7))
-    search.answer(None)
-    search.answer(None)
-    assert not search.done
-    search.answer(None)
-    assert search.done
-    result = search.result()
-    assert result.fell_back and result.hz is None
-    assert search.undo() and not search.done
-
-
-def test_same_answers_narrow_both_ends():
-    search = LouderSearch(rng=random.Random(8))
-    lo, hi = CONTROL_RANGE
-    search.answer(None)
-    assert lo < math.exp(search.a) < math.exp(search.b) < hi
+def test_upper_range_search():
+    for seed in range(4):
+        f0 = [11500, 13800, 15500, 17200][seed]
+        search = LouderSearch(PERSONAL_TREBLE_RANGE, random.Random(seed), widths=UPPER_PEAK_WIDTHS)
+        result = run(search, ear(f0, width=0.14, rng=random.Random(seed)))
+        assert abs(result.hz / f0 - 1) < 0.04
+        assert PERSONAL_TREBLE_RANGE[0] <= result.hz <= PERSONAL_TREBLE_RANGE[1]
 
 
 # ── Stage 2 ──────────────────────────────────────────────────────────────────
@@ -207,10 +219,14 @@ def test_smoothness_undo():
 
 # ── the flow across ears ─────────────────────────────────────────────────────
 
-def run_ear(test, f0, rng):
-    listener = louder_listener(f0, rng=rng)
-    side = test.side
-    while test.side == side and test.status == "testing":
+F0 = {PRIMARY: {"L": 7000.0, "R": 8200.0}, UPPER: {"L": 13500.0, "R": 15800.0}}
+
+
+def run_ear(test, rng, listen=None):
+    side, target = test.side, test.target
+    f0 = F0[target][side]
+    listener = listen or ear(f0, width=0.14 if target == UPPER else 0.1, rng=rng)
+    while test.side == side and test.target == target and test.status == "testing":
         if test.kind == LOUDER:
             test.answer(listener(test.options()))
         else:
@@ -218,23 +234,51 @@ def run_ear(test, f0, rng):
             test.answer(int(np.argmin([abs(math.log(hz / f0)) for hz in options])))
 
 
-def test_full_flow_left_then_right():
+def test_full_flow_left_then_right_then_the_upper_offer():
     test = GuidedTest(("L", "R"), rng=random.Random(9))
-    assert (test.side, test.kind) == ("L", LOUDER)
+    assert (test.side, test.kind, test.target) == ("L", LOUDER, PRIMARY)
     progress = [test.progress()]
-    run_ear(test, 7000, random.Random(1))
+    run_ear(test, random.Random(1))
     assert "L" in test.results and (test.side, test.kind) == ("R", LOUDER)
     progress.append(test.progress())
-    run_ear(test, 8200, random.Random(2))
-    assert test.status == "finished" and test.progress() == 1.0
-    assert abs(test.results["L"] / 7000 - 1) < 0.03
-    assert abs(test.results["R"] / 8200 - 1) < 0.03
+    run_ear(test, random.Random(2))
+    assert test.status == "upper_offer" and test.progress() == 1.0
     assert progress == sorted(progress)
+    for side in "LR":
+        assert abs(test.results[side] / F0[PRIMARY][side] - 1) < 0.03
+    test.skip_upper()
+    assert test.status == "finished" and test.upper_results == {}
+
+
+def test_upper_treble_after_the_primary_resonances():
+    test = GuidedTest(("L", "R"), rng=random.Random(10))
+    run_ear(test, random.Random(1))
+    run_ear(test, random.Random(2))
+    test.start_upper()
+    assert (test.side, test.kind, test.target) == ("L", LOUDER, UPPER)
+    assert all(PERSONAL_TREBLE_RANGE[0] <= hz <= PERSONAL_TREBLE_RANGE[1] for hz in test.options().options)
+    run_ear(test, random.Random(3))
+    run_ear(test, random.Random(4))
+    assert test.status == "finished"
+    for side in "LR":
+        assert abs(test.upper_results[side] / F0[UPPER][side] - 1) < 0.04
+    assert set(test.results) == {"L", "R"}
+
+
+def test_no_clear_upper_peak_leaves_the_upper_treble_alone():
+    test = GuidedTest(("L",), rng=random.Random(11))
+    run_ear(test, random.Random(1))
+    test.start_upper()
+    for _ in range(4):
+        test.answer(None)
+    assert test.status == "finished" and test.upper_results == {"L": None}
+    assert test.best_guess("L", UPPER) is None
+    assert test.undo() and test.status == "testing" and test.upper_results == {}
 
 
 def test_flow_undo_crosses_stages_and_ears():
     test = GuidedTest(("L", "R"), rng=random.Random(10))
-    run_ear(test, 7000, random.Random(1))
+    run_ear(test, random.Random(1))
     assert test.side == "R"
     assert test.undo()  # back into the left ear's smoothness check
     assert (test.side, test.kind) == ("L", SMOOTHNESS) and "L" not in test.results
@@ -243,20 +287,44 @@ def test_flow_undo_crosses_stages_and_ears():
     assert (test.side, test.kind) == ("L", LOUDER) and test.stage.search.answers == []
 
 
-def test_flow_unsure_offers_redo():
-    test = GuidedTest(("L",), rng=random.Random(11))
-    listener = louder_listener(7400)
-    while test.stage.search.searching:
-        test.answer(listener(test.options()))
-    test.answer(0)  # contradicts the earlier answer
-    assert test.status == "unsure"
+def unsure_test():
+    for seed in range(200):
+        test = GuidedTest(("L", "R"), rng=random.Random(seed))
+        rng = random.Random(seed)
+        while test.kind == LOUDER and test.status == "testing":
+            # an ear that contradicts itself: a peak that jumps between two places
+            f0 = 6400 if rng.random() < 0.5 else 8600
+            test.answer(ear(f0, rng=rng)(test.options()))
+        if test.status == "unsure":
+            return test
+    raise AssertionError("never unsure")
+
+
+def test_unsure_offers_redo_or_using_the_estimate():
+    test = unsure_test()
+    estimate = test.stage.search.estimate()
+    assert test.best_guess("L") == pytest.approx(estimate) or test.best_guess("L") is None
+    test.use_estimate()
+    assert test.status == "testing" and test.kind == SMOOTHNESS
+    assert test.stage.search.center == pytest.approx(estimate)
+    assert test.stage.search.delta == SMOOTH_WIDE_DELTA
+    test = unsure_test()
     test.redo_ear()
-    assert test.status == "testing" and test.stage.search.answers == []
+    assert test.status == "testing" and test.kind == LOUDER and test.stage.search.answers == []
+
+
+def test_leaving_during_the_louder_test_keeps_its_estimate():
+    test = GuidedTest(("L", "R"), rng=random.Random(12))
+    listener = ear(7400, rng=random.Random(1))
+    assert test.best_guess("L") is None
+    for _ in range(4):
+        test.answer(listener(test.options()))
+    assert abs(test.best_guess("L") / 7400 - 1) < 0.05
 
 
 def test_flow_fallback_starts_smoothness_wide_from_the_default():
     test = GuidedTest(("R",), default_hz={"R": 7700}, rng=random.Random(12))
-    for _ in range(3):
+    for _ in range(4):
         test.answer(None)
     assert test.kind == SMOOTHNESS
     assert test.stage.search.center == 7700 and test.stage.search.delta == SMOOTH_WIDE_DELTA

@@ -9,7 +9,9 @@ animation follows the overall level only, so nothing gives the answer away.
 
 Stage 1 (Louder test) plays tones with the EQ preview off; Stage 2
 (Smoothness check) plays pink noise through three EQs designed on a worker
-thread. The EQ preview is put back as it was when the test closes.
+thread. After both primary resonances the upper treble is offered, found
+the same way (higher tones; EQs that move only the upper resonance). The
+EQ preview is put back as it was when the test closes.
 """
 
 from __future__ import annotations
@@ -25,7 +27,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..guided_test import LOUDER, GuidedTest
+from ..guided_test import LOUDER, PRIMARY, UPPER, GuidedTest
 from .common import Worker, side_name, tr
 from .guided_widgets import (
     CARD_MARGIN, AnswerButton, OptionCard, ProgressLine, StageBackground, TransportBar, accent_colors,
@@ -59,14 +61,18 @@ def _ear(side: str) -> str:
 class GuidedTestView(StageBackground):
     """The whole test: a short intro, the rounds, and a result per ear.
 
-    ``option_eqs(side, hz_list)`` is called on the GUI thread and returns a
-    function that, run on a worker thread, builds Stage 2's
-    ``[(channel_eq, designed_firs), …]`` (one per option, in order). Signals: ``resultFound(side, hz)``
-    when an ear is done, ``adjustByHand(found)`` to leave for the manual
-    controls (``found``: side → Hz found so far) and ``finished()``.
+    ``option_eqs(side, hz_list, target)`` is called on the GUI thread and
+    returns a function that, run on a worker thread, builds Stage 2's
+    ``[(channel_eq, designed_firs), …]`` (one per option, in order; ``target``
+    is "primary" or "upper"). Signals: ``resultFound(side, hz)`` when an ear's
+    primary resonance is done, ``upperFound(side, hz_or_None)`` for its upper
+    resonance (``None``: no clear upper peak, leave it as it is),
+    ``adjustByHand(found)`` to leave for the manual controls (``found``:
+    {"primary": {side: Hz}, "upper": {side: Hz}} found so far) and ``finished()``.
     """
 
     resultFound = Signal(str, float)
+    upperFound = Signal(str, object)
     adjustByHand = Signal(object)
     finished = Signal()
 
@@ -92,6 +98,7 @@ class GuidedTestView(StageBackground):
         self._applied: int | None = None   # option whose EQ is in the preview
         self._saved_eq_enabled: bool | None = None
         self._other_eq = ("", False)
+        self._play_when_ready = False  # a card was clicked before Stage 2's EQs were ready
 
         self._frame = QTimer(self)
         self._frame.setInterval(FRAME_MS)
@@ -114,7 +121,8 @@ class GuidedTestView(StageBackground):
         self.test_page = self._build_test()
         self.unsure_page = self._build_unsure()
         self.done_page = self._build_done()
-        for page in (self.intro_page, self.test_page, self.unsure_page, self.done_page):
+        self.upper_page = self._build_upper_offer()
+        for page in (self.intro_page, self.test_page, self.unsure_page, self.done_page, self.upper_page):
             self.pages.addWidget(page)
         self._restyle()
         audio.on_change(self._audio_changed)
@@ -264,9 +272,9 @@ class GuidedTestView(StageBackground):
         self.unsure_title = self._label("", "gtTitle")
         self._header(layout, self.unsure_title)
         self.unsure_text = self._label(tr(
-            "One answer near the end didn't match an earlier one: the same two tones were played again, the "
-            "other way round, and the other one sounded louder this time. That happens when tones are close "
-            "or the volume changed. The result for this ear may be off."))
+            "Some answers pointed to different places, so the result for this ear may be off. That happens "
+            "when tones sound close, or after a slip of the mouse. You can do this ear again, carry on from "
+            "the best guess (the next part checks it with noise), or adjust it by hand."))
         layout.addLayout(self._padded(self.unsure_text))
         row = QHBoxLayout()
         row.setContentsMargins(CARD_MARGIN, 8, CARD_MARGIN, 0)
@@ -274,6 +282,10 @@ class GuidedTestView(StageBackground):
         self.redo_button.setObjectName("primary")
         self.redo_button.clicked.connect(self.redo_ear)
         row.addWidget(self.redo_button)
+        self.use_anyway_button = QPushButton(tr("Use it anyway"))
+        self.use_anyway_button.setToolTip(tr("Carry on from the best guess; the next part checks it"))
+        self.use_anyway_button.clicked.connect(self.use_estimate)
+        row.addWidget(self.use_anyway_button)
         self.unsure_manual = QPushButton(tr("Adjust by hand"))
         self.unsure_manual.clicked.connect(self.leave_for_manual)
         row.addWidget(self.unsure_manual)
@@ -314,6 +326,39 @@ class GuidedTestView(StageBackground):
         row.addStretch(1)
         layout.addLayout(row)
         self._shortcut(page, (Qt.Key_Return, Qt.Key_Enter), lambda: self._enter(self.next_ear))
+        layout.addStretch(1)
+        return page
+
+    def _build_upper_offer(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+        self.upper_title = self._label(tr("Your resonance is found"), "gtTitle")
+        self._header(layout, self.upper_title, self._label(tr("Optional"), "gtMuted", wrap=False))
+        self.upper_summary = self._label("", "gtResult")
+        layout.addLayout(self._padded(self.upper_summary))
+        self.upper_text = self._label(tr(
+            "Some IEMs have a second, higher peak (above about 10.5 kHz) that can sound sharp or hissy. "
+            "The same two steps can find it for each ear: which high tone is louder, then which noise is "
+            "smoothest. About 2 minutes. If you can barely hear the high tones, answer About the same: the "
+            "upper treble then stays as it is."))
+        layout.addLayout(self._padded(self.upper_text))
+        row = QHBoxLayout()
+        row.setContentsMargins(CARD_MARGIN, 8, CARD_MARGIN, 0)
+        self.upper_button = QPushButton(tr("Find my upper treble (about 2 minutes)"))
+        self.upper_button.setObjectName("primary")
+        self.upper_button.clicked.connect(self.start_upper)
+        row.addWidget(self.upper_button)
+        self.skip_upper_button = QPushButton(tr("Skip, I'm done"))
+        self.skip_upper_button.clicked.connect(self.skip_upper)
+        row.addWidget(self.skip_upper_button)
+        self.upper_back = QPushButton(tr("Back"))
+        self.upper_back.clicked.connect(self.back)
+        row.addWidget(self.upper_back)
+        row.addStretch(1)
+        layout.addLayout(row)
+        self._shortcut(page, (Qt.Key_Return, Qt.Key_Enter), lambda: self._enter(self.start_upper))
         layout.addStretch(1)
         return page
 
@@ -394,12 +439,16 @@ class GuidedTestView(StageBackground):
             self._saved_eq_enabled = None
         self._sync_cards()
 
-    def found(self) -> dict[str, float]:
-        """What's been found so far, per side (finished ears, or Stage 2's current guess)."""
+    def found(self) -> dict[str, dict[str, float]]:
+        """What's been found so far, per target and side: finished ears, Stage 2's current guess, or
+        the louder test's estimate once it's narrow enough."""
         if self.test is None:
-            return {}
-        guesses = {side: self.test.best_guess(side) for side in self.test.sides}
-        return {side: hz for side, hz in guesses.items() if hz is not None}
+            return {PRIMARY: {}, UPPER: {}}
+        found = {}
+        for target in (PRIMARY, UPPER):
+            guesses = {side: self.test.best_guess(side, target) for side in self.test.sides}
+            found[target] = {side: hz for side, hz in guesses.items() if hz is not None}
+        return found
 
     def leave_for_manual(self) -> None:
         found = self.found()
@@ -419,6 +468,7 @@ class GuidedTestView(StageBackground):
         self._since = None
         self._applied = None
         self._eqs = {}
+        self._play_when_ready = False
         for index, card in enumerate(self.cards):
             card.setVisible(index < count)
             card.set_heard(False)
@@ -427,17 +477,31 @@ class GuidedTestView(StageBackground):
         self.selected = None
         self._paint_accents()
         louder = test.kind == LOUDER
+        upper = test.target == UPPER
         self.title.setText(_ear_title(test.side, test.round_number))
-        self.stage_label.setText(tr("Louder test") if louder else tr("Smoothness check"))
-        if louder:
+        if upper:
+            self.stage_label.setText(tr("Upper treble: louder test") if louder else
+                                     tr("Upper treble: smoothness check"))
+        else:
+            self.stage_label.setText(tr("Louder test") if louder else tr("Smoothness check"))
+        ear = _ear(test.side).lower()
+        if louder and upper:
+            self.instructions.setText(tr("Two high tones in your {ear}. Which one sounds louder? If you can "
+                                         "barely hear them, choose About the same.").format(ear=ear))
+        elif louder:
             self.instructions.setText(tr("Two tones in your {ear}. Which one sounds louder? Click a card (or "
                                          "press 1 or 2) to switch between them as often as you like.").format(
-                ear=_ear(test.side).lower()))
-            self.same_button.setText(tr("About the same"))
-            self._enter_tone_stage()
+                ear=ear))
+        elif upper:
+            self.instructions.setText(tr("Noise through three EQs that differ only in the highest treble. "
+                                         "Which sounds smoothest, with no sharp or hissy edge?"))
         else:
             self.instructions.setText(tr("Noise through three EQs. Which sounds smoothest, with no harsh, hissy "
                                          "or dull spot in the treble? Switch as often as you like."))
+        if louder:
+            self.same_button.setText(tr("About the same"))
+            self._enter_tone_stage()
+        else:
             self.same_button.setText(tr("Can't tell them apart"))
             self._enter_noise_stage()
         self.progress.set_value(test.progress())
@@ -451,8 +515,7 @@ class GuidedTestView(StageBackground):
 
     def _can_undo(self) -> bool:
         test = self.test
-        return test is not None and (len(test.stages) > 1 or bool(test.stage.search.answers)
-                                     or getattr(test.stage.search, "check_answer", None) is not None)
+        return test is not None and (len(test.stages) > 1 or bool(test.stage.search.answers))
 
     def _paint_accents(self) -> None:
         if self._round is None:
@@ -483,7 +546,7 @@ class GuidedTestView(StageBackground):
         if self.option_eqs is None:
             return
         generation = self._eq_generation
-        build = self.option_eqs(self.test.side, list(self._round.options))
+        build = self.option_eqs(self.test.side, list(self._round.options), self.test.target)
 
         def work():
             return generation, build()
@@ -503,6 +566,8 @@ class GuidedTestView(StageBackground):
         self._eqs = dict(enumerate(built))
         if self._sound is not None and self.selected is not None:
             self._apply_option(self.selected)
+        elif self._play_when_ready and self.pages.currentWidget() is self.test_page:
+            self.play()
         self._sync_transport()
 
     def _eqs_failed(self, message: str) -> None:
@@ -544,6 +609,7 @@ class GuidedTestView(StageBackground):
             self._sync_transport()
             return
         self._sound = sound
+        self._play_when_ready = False
         self._since = self._clock()
         self._frame.start()
         self._sync_cards()
@@ -552,19 +618,25 @@ class GuidedTestView(StageBackground):
     def _pause(self) -> None:
         self._account()
         self._sound = None
+        self._play_when_ready = False
         self._frame.stop()
         self.audio.stop_all()
         self._sync_cards()
         self._sync_transport()
 
     def select(self, index: int) -> None:
-        """Select an option; while playing, the sound switches to it at once."""
+        """Select an option and hear it: the sound starts, or switches to it at once."""
         if self._round is None or not 0 <= index < len(self._round.options):
             return
         if self.pages.currentWidget() is not self.test_page:
             return
         self._account()
         self.selected = index
+        if self._sound is None:
+            self._play_when_ready = True  # Stage 2's EQs may still be on their way
+            self.play()
+            self._sync_answers()
+            return
         if self._sound == "tone":
             self.audio.switch_tone(self._round.options[index], self.test.side)
         elif self._sound == "pink":
@@ -643,17 +715,19 @@ class GuidedTestView(StageBackground):
 
     def _answer(self, choice: int | None) -> None:
         self._account()
-        before = set(self.test.results)
+        target = self.test.target
+        results = self.test.upper_results if target == UPPER else self.test.results
+        before = set(results)
         self.test.answer(choice)
-        finished = [side for side in self.test.results if side not in before]
-        self._after_change(forward=True, finished_side=finished[0] if finished else None)
+        finished = [side for side in results if side not in before]
+        self._after_change(forward=True, finished=(finished[0], target) if finished else None)
 
     def back(self) -> None:
         if self.test is None or not self.test.undo():
             return
         self._after_change(forward=False)
 
-    def _after_change(self, forward: bool, finished_side: str | None = None) -> None:
+    def _after_change(self, forward: bool, finished: tuple[str, str] | None = None) -> None:
         test = self.test
         self._round_index += 1 if forward else -1
         if test.status == "unsure":
@@ -662,11 +736,16 @@ class GuidedTestView(StageBackground):
             self.pages.setCurrentWidget(self.unsure_page)
             self.redo_button.setFocus()
             return
-        if finished_side is not None:
+        if finished is not None:
+            side, target = finished
             self._pause_if_playing()
-            hz = test.results[finished_side]
-            self.resultFound.emit(finished_side, hz)
-            self._show_done(finished_side, hz)
+            if target == UPPER:
+                hz = test.upper_results[side]
+                self.upperFound.emit(side, hz)
+            else:
+                hz = test.results[side]
+                self.resultFound.emit(side, hz)
+            self._show_done(side, hz, target)
             return
         self.pages.setCurrentWidget(self.test_page)
         self._new_round(keep_playing=True)
@@ -675,26 +754,33 @@ class GuidedTestView(StageBackground):
         if self._sound is not None:
             self._pause()
 
-    def _show_done(self, side: str, hz: float) -> None:
+    def _show_done(self, side: str, hz: float | None, target: str = PRIMARY) -> None:
         test = self.test
-        stages = [s for s in test.stages if s.side == side]
-        louder = next((s.search for s in stages if s.kind == LOUDER), None)
-        smooth = next((s.search for s in stages if s.kind != LOUDER), None)
+        stages = [s for s in test.stages if s.side == side and s.target == target]
+        louder = next((s.search for s in reversed(stages) if s.kind == LOUDER), None)
+        smooth = next((s.search for s in reversed(stages) if s.kind != LOUDER), None)
         louder_rounds = len(louder.answers) if louder else 0
         smooth_rounds = len(smooth.answers) if smooth else 0
         self.done_title.setText(tr("{ear} done").format(ear=_ear(side)))
-        self.result_label.setText(tr("{ear} resonance: {hz} Hz").format(
-            ear=side_name(side), hz=f"{int(round(hz)):,}"))
-        if louder is not None and louder.fell_back:
-            note = tr("The tones sounded alike, so this comes from the smoothness check alone "
-                      "({n} rounds of noise through your EQ).").format(n=smooth_rounds)
+        if target == UPPER and hz is None:
+            self.result_label.setText(tr("{ear}: no clear upper peak").format(ear=_ear(side)))
+            note = tr("The high tones sounded alike, so your upper treble stays as it is.")
         else:
-            note = tr("Found with {louder} rounds of the louder test, then {smooth} rounds of the smoothness "
-                      "check. You can fine-tune it by hand later.").format(louder=louder_rounds, smooth=smooth_rounds)
+            label = tr("{ear} upper treble: {hz} Hz") if target == UPPER else tr("{ear} resonance: {hz} Hz")
+            self.result_label.setText(label.format(ear=side_name(side), hz=f"{int(round(hz)):,}"))
+            if louder is not None and louder.done and louder.result().fell_back:
+                note = tr("The tones sounded alike, so this comes from the smoothness check alone "
+                          "({n} rounds of noise through your EQ).").format(n=smooth_rounds)
+            else:
+                note = tr("Found with {louder} rounds of the louder test, then {smooth} rounds of the smoothness "
+                          "check. You can fine-tune it by hand later.").format(louder=louder_rounds,
+                                                                                smooth=smooth_rounds)
         self.result_note.setText(note)
         self.done_progress.set_value(test.progress())
         if test.status == "finished":
             self.next_button.setText(tr("Done"))
+        elif test.status == "upper_offer":
+            self.next_button.setText(tr("Next"))
         else:
             self.next_button.setText(tr("Next: {ear}").format(ear=_ear(test.side)))
         self.pages.setCurrentWidget(self.done_page)
@@ -707,14 +793,48 @@ class GuidedTestView(StageBackground):
             self.stop()
             self.finished.emit()
             return
+        if self.test.status == "upper_offer":
+            self._show_upper_offer()
+            return
         self.pages.setCurrentWidget(self.test_page)
         self._new_round(keep_playing=False)
         self.transport.setFocus()
+
+    def _show_upper_offer(self) -> None:
+        lines = [tr("{ear} resonance: {hz} Hz").format(ear=side_name(side), hz=f"{int(round(hz)):,}")
+                 for side, hz in self.test.results.items()]
+        self.upper_summary.setText("\n".join(lines))
+        self.pages.setCurrentWidget(self.upper_page)
+        self.upper_button.setFocus()
+
+    def start_upper(self) -> None:
+        if self.test is None or self.test.status != "upper_offer":
+            return
+        self.test.start_upper()
+        self.pages.setCurrentWidget(self.test_page)
+        self._new_round(keep_playing=False)
+        self.transport.setFocus()
+
+    def skip_upper(self) -> None:
+        if self.test is None or self.test.status != "upper_offer":
+            return
+        self.test.skip_upper()
+        self.stop()
+        self.finished.emit()
 
     def redo_ear(self) -> None:
         if self.test is None or self.test.status != "unsure":
             return
         self.test.redo_ear()
+        self.pages.setCurrentWidget(self.test_page)
+        self._new_round(keep_playing=False)
+        self.transport.setFocus()
+
+    def use_estimate(self) -> None:
+        """After an unsure louder test: carry on to the smoothness check from the best guess."""
+        if self.test is None or self.test.status != "unsure":
+            return
+        self.test.use_estimate()
         self.pages.setCurrentWidget(self.test_page)
         self._new_round(keep_playing=False)
         self.transport.setFocus()

@@ -1,18 +1,21 @@
 """The guided "Find my resonance" test, without Qt.
 
-Two listening stages per ear find the primary resonance (see GLOSSARY):
+Two listening stages per ear find a resonance (see GLOSSARY):
 
-- :class:`LouderSearch` (Stage 1, "Louder test"): A/B rounds of equal-level
-  tones. A golden-section search in log frequency over ``CONTROL_RANGE``
-  narrows the interval holding the loudest frequency, then one earlier pair
-  is repeated (swapped) to check the answers are consistent.
-- :class:`SmoothnessSearch` (Stage 2, "Smoothness check"): A/B/C rounds of
-  pink noise through three EQs whose primary resonance sits just below, at
-  and just above the current guess; the smoothest one wins.
+- :class:`LouderSearch` ("Louder test"): A/B rounds of equal-level tones.
+  It keeps a belief over where the peak is (and how wide), updated after
+  every answer with a simple listener model, and asks the pair that should
+  teach it most. "About the same" is information too: the peak lies midway
+  between the two tones, *or far from both* — two tones on the flat part
+  beside a narrow peak sound alike, so that region is never thrown away.
+- :class:`SmoothnessSearch` ("Smoothness check"): A/B/C rounds of pink
+  noise through three EQs whose resonance sits just below, at and just
+  above the current guess; the smoothest one wins.
 
-:class:`GuidedTest` runs the stages for each ear in order and keeps one undo
-history across them. Option order is shuffled every round; options are
-plain frequencies, the UI only ever shows letters.
+:class:`GuidedTest` runs both stages for each ear, first for the primary
+resonance and then, if the customer wants, for the upper resonance. It keeps
+one undo history across stages and ears. Option order is shuffled every
+round; options are plain frequencies, the UI only ever shows letters.
 """
 
 from __future__ import annotations
@@ -21,22 +24,42 @@ import math
 import random
 from dataclasses import dataclass, field
 
-from eq_helper.dsp.resonance import CONTROL_RANGE
+import numpy as np
+from scipy.special import ndtr
 
-GOLDEN = (math.sqrt(5.0) - 1.0) / 2.0  # 0.618…
+from eq_helper.dsp.resonance import CONTROL_RANGE, PERSONAL_TREBLE_RANGE
 
-LOUDER_STOP_RATIO = 1.03     # done when b / a is below this
-LOUDER_MAX_ROUNDS = 10
-LOUDER_SAME_FALLBACK = 3     # this many opening "About the same" answers: give up on Stage 1
-CHECK_MIN_CLARITY = 0.08     # octaves: how much nearer the result the louder tone of the repeated pair must be
+# ── the listener model behind the louder test ───────────────────────────────
+PEAK_DB = 6.0                # how much louder a tone right on the peak sounds than the flat part
+PEAK_WIDTHS = (0.06, 0.1, 0.18)        # octaves (Gaussian σ) a primary resonance may have
+UPPER_PEAK_WIDTHS = (0.08, 0.14, 0.24)
+JND_DB = 1.0                 # smaller differences are heard as "About the same"
+NOISE_DB = 0.8               # how much the impression wobbles from round to round
+LAPSE = 0.05                 # a slip: any answer, whatever was heard
+GRID_OCTAVES = 1 / 192       # resolution of the belief over the peak's place
+CANDIDATE_OCTAVES = 1 / 48   # spacing of the tones the test can play
+PAIR_OCTAVES = (0.04, 0.4)   # how far apart the two tones of a round may be
+
+LOUDER_MAX_ROUNDS = 12
+LOUDER_MIN_ROUNDS = 6
+SURPRISE = 0.1               # an answer the final belief gave less than this chance is a surprise
+LOUDER_STOP_RATIO = 1.04     # done when 80 % of the belief lies within this ratio
+LOUDER_CONFIDENT_RATIO = 1.08
+CREDIBLE = 0.8
+NO_PEAK_SAME_SHARE = 0.6     # this share of "About the same": no clear peak heard
+KEEP_ESTIMATE_RATIO = 1.15   # leaving mid-test keeps the louder test's estimate once it's this narrow
+OPENING_SAMES = 4            # this many opening "About the same" answers end the louder test
 
 SMOOTH_DELTA = 0.06          # octaves between the options
-SMOOTH_WIDE_DELTA = 0.12     # after a Stage 1 fallback: start wider
+SMOOTH_WIDE_DELTA = 0.12     # when the louder test wasn't sure: start wider
+UPPER_SMOOTH_DELTA = 0.08
+UPPER_SMOOTH_WIDE_DELTA = 0.15
 SMOOTH_MIN_DELTA = 0.015
 SMOOTH_MAX_ROUNDS = 6
 SMOOTH_MAX_MOVES = 2         # edge picks in a row at one spacing before it halves
 
 LOUDER, SMOOTHNESS = "louder", "smoothness"
+PRIMARY, UPPER = "primary", "upper"
 
 
 @dataclass(frozen=True)
@@ -44,7 +67,6 @@ class Round:
     """One question: ``options`` in display order (A, B, C) as frequencies in Hz."""
 
     options: tuple[float, ...]
-    check: bool = False  # Stage 1's repeated pair
 
     def letter(self, index: int) -> str:
         return "ABC"[index]
@@ -52,145 +74,171 @@ class Round:
 
 @dataclass(frozen=True)
 class LouderResult:
-    hz: float | None          # None: fell back (three opening "About the same")
-    confident: bool
-    fell_back: bool
+    hz: float                 # best estimate (the belief's median)
+    confident: bool           # the belief is narrow
+    fell_back: bool           # mostly "About the same": no clear peak was heard
     rounds: int
+    spread: float             # ratio covering 80 % of the belief
 
 
 def _clip(hz: float, lo: float, hi: float) -> float:
     return float(min(max(hz, lo), hi))
 
 
+def outcome_probabilities(difference_db):
+    """P(first louder), P(second louder), P(about the same) for a level difference (first − second)."""
+    d = np.asarray(difference_db, dtype=float)
+    first = ndtr((d - JND_DB) / NOISE_DB)
+    second = ndtr((-d - JND_DB) / NOISE_DB)
+    same = np.clip(1.0 - first - second, 0.0, 1.0)
+    return (1.0 - LAPSE) * np.stack([first, second, same]) + LAPSE / 3.0
+
+
 class LouderSearch:
-    """Stage 1: which of two equal-level tones is louder, narrowed by golden section."""
+    """Which of two equal-level tones is louder: a Bayesian search for the peak in log frequency."""
 
     def __init__(self, hz_range=CONTROL_RANGE, rng: random.Random | None = None,
-                 max_rounds: int = LOUDER_MAX_ROUNDS, stop_ratio: float = LOUDER_STOP_RATIO):
+                 max_rounds: int = LOUDER_MAX_ROUNDS, stop_ratio: float = LOUDER_STOP_RATIO,
+                 widths=PEAK_WIDTHS):
         self.lo, self.hi = (float(v) for v in hz_range)
         self.rng = rng or random.Random()
         self.max_rounds = max_rounds
         self.stop_ratio = stop_ratio
-        self.a, self.b = math.log(self.lo), math.log(self.hi)
-        # each answered round: (a, b, round, answer); answer = louder Hz or None for "About the same"
-        self.answers: list[tuple[float, float, Round, float | None]] = []
-        self.check_answer: tuple[Round, float | None] | None = None
+        lo2, hi2 = math.log2(self.lo), math.log2(self.hi)
+        self.grid = np.linspace(lo2, hi2, max(2, round((hi2 - lo2) / GRID_OCTAVES) + 1))
+        cand = np.linspace(lo2, hi2, max(2, round((hi2 - lo2) / CANDIDATE_OCTAVES) + 1))
+        self.candidates = tuple(float(2.0 ** c) for c in cand)
+        self._index = {hz: i for i, hz in enumerate(self.candidates)}
+        w = np.asarray(widths, dtype=float)[:, None, None]
+        # perceived level (dB above the flat part) of each candidate tone, for every peak place and width
+        self._levels = PEAK_DB * np.exp(-0.5 * ((cand[None, None, :] - self.grid[None, :, None]) / w) ** 2)
+        i, j = np.triu_indices(len(cand), k=1)
+        apart = cand[j] - cand[i]
+        keep = (apart >= PAIR_OCTAVES[0] - 1e-9) & (apart <= PAIR_OCTAVES[1] + 1e-9)
+        self._pairs = (i[keep], j[keep])
+        self.answers: list[tuple[Round, float | None]] = []  # (round, louder Hz or None = "About the same")
         self._round: Round | None = None
+        self._posterior = None
 
-    # ── state ──────────────────────────────────────────────────────────────
-    def _points(self) -> tuple[float, float]:
-        span = self.b - self.a
-        return math.exp(self.b - GOLDEN * span), math.exp(self.a + GOLDEN * span)
+    # ── belief ─────────────────────────────────────────────────────────────
+    def posterior(self) -> np.ndarray:
+        """P(width, peak place) after the answers so far (cached)."""
+        if self._posterior is None:
+            log_p = np.zeros(self._levels.shape[:2])
+            for round_, louder in self.answers:
+                a, b = (self._index[hz] for hz in round_.options)
+                probs = outcome_probabilities(self._levels[:, :, a] - self._levels[:, :, b])
+                outcome = 2 if louder is None else (0 if louder == round_.options[0] else 1)
+                log_p += np.log(probs[outcome])
+            p = np.exp(log_p - log_p.max())
+            self._posterior = p / p.sum()
+        return self._posterior
+
+    def _quantiles(self, *qs: float) -> list[float]:
+        marginal = self.posterior().sum(axis=0)
+        cdf = np.cumsum(marginal)
+        return [float(np.interp(q, cdf, self.grid)) for q in qs]
 
     @property
-    def fell_back(self) -> bool:
-        first = self.answers[:LOUDER_SAME_FALLBACK]
-        return len(first) == LOUDER_SAME_FALLBACK and all(a[3] is None for a in first)
+    def spread(self) -> float:
+        """Frequency ratio holding the middle 80 % of the belief."""
+        low, high = self._quantiles((1 - CREDIBLE) / 2, (1 + CREDIBLE) / 2)
+        return 2.0 ** (high - low)
+
+    def estimate(self) -> float:
+        """Best guess so far: the belief's median."""
+        return _clip(2.0 ** self._quantiles(0.5)[0], self.lo, self.hi)
 
     @property
-    def searching(self) -> bool:
-        if self.fell_back or len(self.answers) >= self.max_rounds:
-            return False
-        if all(a[3] is None for a in self.answers):
-            return True  # only "About the same" so far: keep asking until it's three of them
-        return math.exp(self.b - self.a) >= self.stop_ratio
+    def same_share(self) -> float:
+        if not self.answers:
+            return 0.0
+        return sum(louder is None for _r, louder in self.answers) / len(self.answers)
 
-    def _check_pair(self) -> tuple[float, float, float] | None:
-        """(x1, x2, louder) of the pair to repeat: the latest answer that should have been clear.
-
-        A pair is clear when one tone lies much nearer the result than the
-        other; repeating a pair that straddles the peak would only test chance.
-        """
-        clear = [(r.options, louder) for _a, _b, r, louder in self.answers if louder is not None]
-        if not clear:
-            return None
-        center = (self.a + self.b) / 2
-
-        def clarity(options):
-            x1, x2 = (abs(math.log(x) - center) for x in options)
-            return abs(x1 - x2) / math.log(2)
-        clearest = [c for c in clear if clarity(c[0]) >= CHECK_MIN_CLARITY]
-        options, louder = clearest[-1] if clearest else max(clear, key=lambda c: clarity(c[0]))
-        return min(options), max(options), louder
+    def surprises(self) -> int:
+        """Answers the current belief finds very unlikely: slips, or answers that disagree."""
+        p = self.posterior()
+        count = 0
+        for round_, louder in self.answers:
+            a, b = (self._index[hz] for hz in round_.options)
+            probs = outcome_probabilities(self._levels[:, :, a] - self._levels[:, :, b])
+            outcome = 2 if louder is None else (0 if louder == round_.options[0] else 1)
+            count += float((probs[outcome] * p).sum()) < SURPRISE
+        return count
 
     @property
     def done(self) -> bool:
-        if self.searching:
-            return False
-        return self.fell_back or self.check_answer is not None or self._check_pair() is None
+        n = len(self.answers)
+        if n >= self.max_rounds:
+            return True
+        if n >= OPENING_SAMES and all(louder is None for _r, louder in self.answers):
+            return True
+        # a surprising answer keeps the test going: more rounds settle which answers to trust
+        return n >= LOUDER_MIN_ROUNDS and self.spread < self.stop_ratio and self.surprises() == 0
+
+    # ── rounds ─────────────────────────────────────────────────────────────
+    def _best_pair(self) -> tuple[int, int]:
+        """The pair whose answer is expected to narrow the peak's place most."""
+        p = self.posterior()
+        pi, pj = self._pairs
+        probs = outcome_probabilities(self._levels[:, :, pi] - self._levels[:, :, pj])  # (3, W, F, P)
+        joint = (probs * p[None, :, :, None]).sum(axis=1)                               # (3, F, P)
+        p_outcome = joint.sum(axis=1)                                                    # (3, P)
+        cond = joint / np.maximum(p_outcome[:, None, :], 1e-300)
+        entropy = -(cond * np.log(np.maximum(cond, 1e-300))).sum(axis=1)               # (3, P)
+        expected = (p_outcome * entropy).sum(axis=0)
+        best = float(expected.min())
+        near = np.flatnonzero(expected <= best + 1e-3)
+        k = int(near[self.rng.randrange(len(near))])
+        return int(pi[k]), int(pj[k])
 
     def options(self) -> Round:
         """The current round (stable until it's answered or undone)."""
         if self.done:
             raise RuntimeError("The louder test is finished.")
         if self._round is None:
-            if self.searching:
-                pair = list(self._points())
-                check = False
-            else:
-                x1, x2, earlier = self._check_pair()
-                # swapped: the louder one of the earlier round now comes second
-                pair = [x2, x1] if earlier == x1 else [x1, x2]
-                check = True
-            if not check:
-                self.rng.shuffle(pair)
-            self._round = Round(tuple(pair), check)
+            i, j = self._best_pair()
+            pair = [self.candidates[i], self.candidates[j]]
+            self.rng.shuffle(pair)
+            self._round = Round(tuple(pair))
         return self._round
 
     def answer(self, louder: int | None) -> None:
         """``louder``: index of the louder option in the round, ``None`` = "About the same"."""
         current = self.options()
-        hz = None if louder is None else current.options[louder]
-        if current.check:
-            self.check_answer = (current, hz)
-        else:
-            self.answers.append((self.a, self.b, current, hz))
-            x1, x2 = self._points()
-            if hz is None:
-                self.a, self.b = math.log(x1), math.log(x2)
-            elif hz == x1:
-                self.b = math.log(x2)
-            else:
-                self.a = math.log(x1)
+        self.answers.append((current, None if louder is None else current.options[louder]))
         self._round = None
+        self._posterior = None
 
     def undo(self) -> bool:
         """Take back the last answer; False when there's none."""
-        if self.check_answer is not None:
-            self._round = self.check_answer[0]
-            self.check_answer = None
-            return True
         if not self.answers:
             return False
-        self.a, self.b, self._round, _hz = self.answers.pop()
+        self._round, _hz = self.answers.pop()
+        self._posterior = None
         return True
-
-    @property
-    def consistent(self) -> bool:
-        """False when the repeated pair got the opposite answer."""
-        if self.check_answer is None or self.check_answer[1] is None:
-            return True
-        x1, x2, earlier = self._check_pair()
-        return self.check_answer[1] == earlier
 
     def result(self) -> LouderResult:
         if not self.done:
             raise RuntimeError("The louder test isn't finished yet.")
-        hz = None if self.fell_back else _clip(math.exp((self.a + self.b) / 2), self.lo, self.hi)
-        return LouderResult(hz, self.consistent and not self.fell_back, self.fell_back, len(self.answers))
+        spread = self.spread
+        heard_nothing = self.same_share == 1.0  # a belief from "same" alone only says where the peak isn't
+        confident = not heard_nothing and spread <= LOUDER_CONFIDENT_RATIO and self.surprises() <= 1
+        fell_back = heard_nothing or (not confident and self.same_share >= NO_PEAK_SAME_SHARE)
+        return LouderResult(self.estimate(), confident, fell_back, len(self.answers), spread)
 
     def progress(self) -> float:
-        """0…1, from how far the interval has narrowed (or the rounds used)."""
+        """0…1, from how far the belief has narrowed (or the rounds used)."""
         if self.done:
             return 1.0
-        total = math.log(math.log(self.hi / self.lo) / math.log(self.stop_ratio))
-        narrowed = math.log(max(math.log(self.hi / self.lo) / max(self.b - self.a, 1e-9), 1.0))
-        by_width = narrowed / total if total > 0 else 1.0
-        return min(0.9, max(by_width, len(self.answers) / self.max_rounds))
+        full = math.log(self.hi / self.lo) / math.log(self.stop_ratio)
+        narrowed = math.log(max(math.log(self.hi / self.lo) / math.log(max(self.spread, 1.0001)), 1.0))
+        by_spread = narrowed / math.log(full) if full > 1 else 1.0
+        return min(0.9, max(by_spread, len(self.answers) / self.max_rounds))
 
 
 class SmoothnessSearch:
-    """Stage 2: which of three EQs (resonance a little low / as found / a little high) is smoothest."""
+    """Which of three EQs (resonance a little low / as found / a little high) is smoothest."""
 
     def __init__(self, center_hz: float, delta: float = SMOOTH_DELTA, hz_range=CONTROL_RANGE,
                  rng: random.Random | None = None, max_rounds: int = SMOOTH_MAX_ROUNDS,
@@ -200,7 +248,7 @@ class SmoothnessSearch:
         self.max_rounds = max_rounds
         self.min_delta = min_delta
         self.center = _clip(center_hz, self.lo, self.hi)
-        self.delta = float(delta)
+        self.delta = self.start_delta = float(delta)
         self.moves = 0               # edge picks in a row at this spacing
         self.cant_tell = False
         self.answers: list[tuple[float, float, int, Round, float | None]] = []
@@ -230,7 +278,7 @@ class SmoothnessSearch:
         current = self.options()
         hz = None if smoothest is None else current.options[smoothest]
         self.answers.append((self.center, self.delta, self.moves, current, hz))
-        low, mid, high = self._triple()
+        _low, mid, _high = self._triple()
         if hz is None:
             self.cant_tell = True
             self.center = mid
@@ -256,46 +304,71 @@ class SmoothnessSearch:
     def result(self) -> float:
         return _clip(self.center, self.lo, self.hi)
 
+    def estimate(self) -> float:
+        return self.result()
+
     def progress(self) -> float:
         if self.done:
             return 1.0
-        halvings = math.log2(SMOOTH_DELTA / self.min_delta) + 1
-        by_delta = math.log2(max(SMOOTH_DELTA / self.delta, 1.0)) / halvings
+        halvings = math.log2(self.start_delta / self.min_delta) + 1
+        by_delta = math.log2(max(self.start_delta / self.delta, 1.0)) / halvings
         return min(0.9, max(by_delta, len(self.answers) / self.max_rounds))
 
 
 @dataclass
 class _Stage:
     side: str
-    kind: str
+    kind: str        # LOUDER / SMOOTHNESS
+    target: str      # PRIMARY / UPPER
     search: LouderSearch | SmoothnessSearch
 
 
 @dataclass
 class GuidedTest:
-    """Both stages for each ear in turn, with one undo history across them.
+    """Both stages for each ear in turn — the primary resonance, then optionally the upper one.
 
-    ``default_hz``: per side, where Stage 2 starts if Stage 1 falls back.
-    ``status``: "testing", "unsure" (Stage 1's check failed: ask the customer
-    to redo the ear or adjust by hand) or "finished".
+    ``default_hz``: per side, where the primary smoothness check starts when
+    the louder test heard no clear peak. ``status``:
+
+    - "testing": a round is waiting for an answer;
+    - "unsure": a louder test ended with answers pointing to more than one
+      place — redo the ear, use the estimate anyway, or adjust by hand;
+    - "upper_offer": both primary resonances are found; the upper treble is
+      offered (``start_upper()`` / ``skip_upper()``);
+    - "finished".
+
+    ``upper_results[side]`` is ``None`` when no clear upper peak was heard
+    (the upper treble then stays as it is).
     """
 
     sides: tuple[str, ...]
     default_hz: dict[str, float] = field(default_factory=dict)
     rng: random.Random = field(default_factory=random.Random)
     hz_range: tuple[float, float] = CONTROL_RANGE
+    upper_range: tuple[float, float] = PERSONAL_TREBLE_RANGE
+    offer_upper: bool = True
     stages: list[_Stage] = field(default_factory=list)
     results: dict[str, float] = field(default_factory=dict)
+    upper_results: dict[str, float | None] = field(default_factory=dict)
     status: str = "testing"
 
     def __post_init__(self):
         self.sides = tuple(self.sides)
         if not self.sides:
             raise ValueError("Nothing to test: no ears.")
-        self.stages = [self._louder(self.sides[0])]
+        self.stages = [self._louder(self.sides[0], PRIMARY)]
 
-    def _louder(self, side: str) -> _Stage:
-        return _Stage(side, LOUDER, LouderSearch(self.hz_range, self.rng))
+    def _louder(self, side: str, target: str) -> _Stage:
+        if target == UPPER:
+            return _Stage(side, LOUDER, UPPER, LouderSearch(self.upper_range, self.rng, widths=UPPER_PEAK_WIDTHS))
+        return _Stage(side, LOUDER, PRIMARY, LouderSearch(self.hz_range, self.rng))
+
+    def _smoothness(self, side: str, target: str, center: float, wide: bool) -> _Stage:
+        if target == UPPER:
+            delta, hz_range = (UPPER_SMOOTH_WIDE_DELTA if wide else UPPER_SMOOTH_DELTA), self.upper_range
+        else:
+            delta, hz_range = (SMOOTH_WIDE_DELTA if wide else SMOOTH_DELTA), self.hz_range
+        return _Stage(side, SMOOTHNESS, target, SmoothnessSearch(center, delta, hz_range, self.rng))
 
     @property
     def stage(self) -> _Stage:
@@ -310,10 +383,16 @@ class GuidedTest:
         return self.stage.kind
 
     @property
+    def target(self) -> str:
+        return self.stage.target
+
+    @property
     def round_number(self) -> int:
         """1-based number of the current round within this stage."""
-        search = self.stage.search
-        return len(search.answers) + 1 + (1 if getattr(search, "check_answer", None) else 0)
+        return len(self.stage.search.answers) + 1
+
+    def _results_for(self, target: str) -> dict:
+        return self.upper_results if target == UPPER else self.results
 
     def options(self) -> Round:
         return self.stage.search.options()
@@ -330,29 +409,55 @@ class GuidedTest:
             return
         if stage.kind == LOUDER:
             found = stage.search.result()
-            if not found.confident and not found.fell_back:
-                self.status = "unsure"
-                return
-            if found.fell_back:
-                center, delta = self.default_hz.get(stage.side, sum(self.hz_range) / 2), SMOOTH_WIDE_DELTA
+            if found.confident:
+                self.stages.append(self._smoothness(stage.side, stage.target, found.hz, wide=False))
+            elif found.fell_back:
+                if stage.target == UPPER:  # no clear upper peak: leave the upper treble as it is
+                    self.upper_results[stage.side] = None
+                    self._next_ear()
+                    return
+                center = self.default_hz.get(stage.side, found.hz)
+                self.stages.append(self._smoothness(stage.side, PRIMARY, center, wide=True))
             else:
-                center, delta = found.hz, SMOOTH_DELTA
-            self.stages.append(_Stage(stage.side, SMOOTHNESS,
-                                      SmoothnessSearch(center, delta, self.hz_range, self.rng)))
+                self.status = "unsure"
             return
-        self.results[stage.side] = stage.search.result()
+        self._results_for(stage.target)[stage.side] = stage.search.result()
+        self._next_ear()
+
+    def _next_ear(self) -> None:
+        stage = self.stage
         index = self.sides.index(stage.side)
         if index + 1 < len(self.sides):
-            self.stages.append(self._louder(self.sides[index + 1]))
+            self.stages.append(self._louder(self.sides[index + 1], stage.target))
+        elif stage.target == PRIMARY and self.offer_upper:
+            self.status = "upper_offer"
         else:
             self.status = "finished"
+
+    def start_upper(self) -> None:
+        """Go on to the upper resonance (after both primary resonances)."""
+        if self.status != "upper_offer":
+            raise RuntimeError("The upper treble comes after the primary resonances.")
+        self.status = "testing"
+        self.stages.append(self._louder(self.sides[0], UPPER))
+
+    def skip_upper(self) -> None:
+        if self.status == "upper_offer":
+            self.status = "finished"
+
+    def use_estimate(self) -> None:
+        """After an unsure louder test: carry on from its best guess, with wider steps."""
+        if self.status != "unsure":
+            return
+        stage = self.stage
+        self.status = "testing"
+        self.stages.append(self._smoothness(stage.side, stage.target, stage.search.estimate(), wide=True))
 
     def undo(self) -> bool:
         """Take back the last answer, across stages and ears; False at the very start."""
         while True:
             stage = self.stage
-            if self.status == "finished" or stage.kind == SMOOTHNESS:
-                self.results.pop(stage.side, None)
+            self._results_for(stage.target).pop(stage.side, None)
             self.status = "testing"
             if stage.search.undo():
                 return True
@@ -361,26 +466,31 @@ class GuidedTest:
             self.stages.pop()
 
     def redo_ear(self) -> None:
-        """Start the current ear again from Stage 1 (after an inconsistent check)."""
-        side = self.side
-        while len(self.stages) > 1 and self.stages[-2].side == side:
-            self.stages.pop()
-        self.stages[-1] = self._louder(side)
-        self.results.pop(side, None)
+        """Start the current ear's louder test again (after an unsure one)."""
+        stage = self.stage
+        self.stages[-1] = self._louder(stage.side, stage.target)
+        self._results_for(stage.target).pop(stage.side, None)
         self.status = "testing"
 
-    def best_guess(self, side: str) -> float | None:
-        """What's been found for ``side`` so far: its result, or Stage 2's current centre."""
-        if side in self.results:
-            return self.results[side]
+    def best_guess(self, side: str, target: str = PRIMARY) -> float | None:
+        """What's been found for ``side`` so far: its result, the smoothness check's current
+        centre, or (with a few answers) the louder test's estimate."""
+        found = self._results_for(target)
+        if side in found:
+            return found[side]
         for stage in reversed(self.stages):
-            if stage.side == side and stage.kind == SMOOTHNESS:
+            if stage.side != side or stage.target != target:
+                continue
+            if stage.kind == SMOOTHNESS:
                 return stage.search.result()
+            if len(stage.search.answers) >= 3 and stage.search.spread <= KEEP_ESTIMATE_RATIO:
+                return stage.search.estimate()
+            return None
         return None
 
     def progress(self) -> float:
-        """Overall 0…1 across every ear and stage (each stage weighs the same)."""
-        if self.status == "finished":
+        """0…1 within the current part (primary resonances, or the upper treble)."""
+        if self.status in ("finished", "upper_offer"):
             return 1.0
         total = 2 * len(self.sides)
         done = 2 * self.sides.index(self.side) + (1 if self.kind == SMOOTHNESS else 0)
