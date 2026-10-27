@@ -15,6 +15,9 @@ from scipy.signal import find_peaks
 from eq_helper.dsp.graphic_eq import GraphicEQ, GraphicEQBand, graphic_eq_to_apo_text
 from eq_helper.dsp.overlay import load_frequency_response
 
+# Bump whenever training or prediction changes, so cached models are retrained.
+MODEL_VERSION = 1
+
 PEAK_RANGE = (5000.0, 11000.0)
 CONTROL_RANGE = (6000, 9000)
 PERSONAL_TREBLE_RANGE = (10500, 18000)
@@ -133,6 +136,29 @@ class ResonanceModel:
         self.edge_trend = 0.0
         self.validation = {}
         self._train()
+
+    def state(self):
+        """Everything needed to rebuild this trained model without retraining."""
+        return {"freqs": self.freqs, "peaks": self.peaks, "curves": self.curves,
+                "sources": self.sources, "sample_count": self.sample_count,
+                "alignment": self.alignment, "edge_trend": self.edge_trend,
+                "validation": self.validation}
+
+    @classmethod
+    def from_state(cls, state):
+        model = cls.__new__(cls)
+        model.freqs = np.asarray(state["freqs"], dtype=float)
+        model.peaks = np.asarray(state["peaks"], dtype=float)
+        model.curves = np.asarray(state["curves"], dtype=float)
+        model.sources = tuple(state["sources"])
+        model.sample_count = int(state["sample_count"])
+        model.alignment = float(state["alignment"])
+        model.edge_trend = float(state["edge_trend"])
+        model.validation = dict(state["validation"])
+        if (model.curves.shape != (len(model.peaks), len(model.freqs))
+                or model.alignment not in (0.0, 0.5, 1.0)):
+            raise ValueError("Inconsistent cached resonance model.")
+        return model
 
     @property
     def method(self):
