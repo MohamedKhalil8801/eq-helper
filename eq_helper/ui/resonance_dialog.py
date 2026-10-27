@@ -15,9 +15,10 @@ from PySide6.QtWidgets import (
 from eq_helper.apo.errors import ApoError
 from eq_helper.apo.writer import atomic_write_with_backup, poke
 from eq_helper.audio.shared_state import ChannelMode
+from eq_helper.calibration.tuning import TuningSession
 from eq_helper.dsp.overlay import load_frequency_response
 from eq_helper.dsp.resonance import (
-    CONTROL_RANGE, PERSONAL_TREBLE_RANGE, ChannelEQ, Measurements, match_channels, match_target,
+    CONTROL_RANGE, PERSONAL_TREBLE_RANGE, ChannelEQ, Measurements, match_target,
 )
 from eq_helper.ui.spectrum_view import SpectrumView
 from eq_helper.ui.widgets import LabeledSlider, ThreeWaySwitch
@@ -52,11 +53,11 @@ class ResonanceDialog(QDialog):
         self.setWindowTitle("Resonance EQ — measurement-trained L/R")
         self.resize(1100, 810)
         self.main = main
-        self.measurements = Measurements.bundled()
-        self.peaks = {}
+        # Tuning state lives in a Qt-free session shared with the customer app;
+        # the properties below keep this dialog's existing attribute names.
+        self.session = TuningSession(Measurements.bundled())
+        self.session.primary = {}  # sides appear once measurements are installed
         self.personal_treble_peaks = self._load_personal_treble_peaks()
-        self.target = None
-        self.target_name = ""
         self.versions = []
         self._selected = None
         self._generated = False
@@ -252,6 +253,17 @@ class ResonanceDialog(QDialog):
         if previous:
             QTimer.singleShot(0, lambda: self.load_measurements(previous, quiet=True))
 
+    measurements = property(lambda self: self.session.measurements,
+                            lambda self, value: setattr(self.session, "measurements", value))
+    peaks = property(lambda self: self.session.primary,
+                     lambda self, value: setattr(self.session, "primary", value))
+    personal_treble_peaks = property(lambda self: self.session.upper,
+                                     lambda self, value: setattr(self.session, "upper", value))
+    target = property(lambda self: self.session.target,
+                      lambda self, value: setattr(self.session, "target", value))
+    target_name = property(lambda self: self.session.target_name,
+                           lambda self, value: setattr(self.session, "target_name", value))
+
     @property
     def side(self):
         return self.ears.tabData(self.ears.currentIndex())
@@ -410,9 +422,7 @@ class ResonanceDialog(QDialog):
 
     def load_target(self, path):
         freqs, db = load_frequency_response(path)
-        match_channels(self.measurements, self.peaks, freqs, db, Path(path).name)
-        self.target = (freqs, db)
-        self.target_name = Path(path).name
+        self.session.set_target(freqs, db, Path(path).name, path=str(path))
         self.target_label.setText(self.target_name)
         self.generate.setEnabled(self._loader is None)
         self._show_prediction()
@@ -565,9 +575,8 @@ class ResonanceDialog(QDialog):
         self._commit_timer.stop()
         if self.target is None:
             return
-        personal = self.personal_treble_peaks if self.personal_treble_enabled.isChecked() else None
-        eq = match_channels(self.measurements, self.peaks, *self.target, self.target_name,
-                            personal_treble=personal)
+        self.session.upper_enabled = self.personal_treble_enabled.isChecked()
+        eq = self.session.channel_eq()
         for i, old in enumerate(self.versions):
             if (old.measurements is self.measurements and old.eq.target_name == self.target_name
                     and old.eq.personal_treble_enabled == eq.personal_treble_enabled
