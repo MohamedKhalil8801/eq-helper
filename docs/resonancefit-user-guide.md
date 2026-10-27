@@ -3,8 +3,8 @@
 ResonanceFit turns the calibration of **your** IEMs into an EQ for **your** ears. Your IEMs were measured
 on a coupler at several insertion depths; that is your *calibration*. Because everyone's ears are
 different, the app asks you one thing: where the strongest treble peak, your *resonance*, sits in each
-ear. You find it by ear in about a minute, choose the sound you want (a *target*), and the app builds a
-separate EQ for your left and right ear.
+ear. You find it by ear with a short guided listening test (about 2 minutes), choose the sound you want
+(a *target*), and the app builds a separate EQ for your left and right ear.
 
 ## What you received
 
@@ -49,6 +49,39 @@ sound.** The bar at the bottom of the window always shows the **Output** you're 
 effects…), Equalizer APO or Peace, and your dongle's EQ. Otherwise you hear it on top of this one and
 find the resonance in the wrong place. The app names the EQ apps it finds on your computer, and if your
 own EQ is still on in Equalizer APO it offers to turn it off while you tune (apply again when you're done).
+
+### Find it for me (the guided test)
+
+Press **Find it for me (about 2 minutes)**. A short screen reminds you to wear both IEMs as usual, keep
+the volume low and turn other EQs off; press **Start the test**. Then, for the left ear and then the
+right (one ear only for a calibration made for both ears at once):
+
+1. **Louder test.** Two cards, **Play A** and **Play B**, each a tone in that ear at the same level.
+   Press **Play** (the bar on top) and click the cards to switch between them as often as you like: the
+   sound switches at once. When you've heard both, answer **Louder: A** (or B; the wide button follows
+   the card you selected) or **About the same**. About six rounds narrow it down; at the end one
+   earlier pair comes back the other way round to check your answers agree.
+2. **Smoothness check.** Three cards, **A**, **B** and **C**: pink noise through three slightly
+   different EQs around what the louder test found. Pick the one whose treble sounds **smoothest**, with
+   no harsh, hissy or dull spot (**Smoothest: B**), or **Can't tell them apart**. A few rounds.
+
+The cards are in a different order every round and never show frequencies, and the moving bars on the
+playing card only follow how loud the sound is, the same for every card, so you choose by ear. The
+answer buttons wake up once you've listened to each card for a moment (**Listen to each one first**).
+
+When an ear is done the app shows its result, e.g. **Left resonance: 7,640 Hz**, and sets it in the
+graph and the EQ exactly as the slider would. **Back** takes back your last answer; **Adjust by hand**
+leaves the test and keeps what's been found so far. If an answer near the end doesn't match an earlier
+one, the app says so and offers **Do this ear again** or **Adjust by hand**. If the tones all sound
+alike, the test skips ahead to the smoothness check with wider steps.
+
+Keys: **1 2 3** pick a card, **P** play/pause, **Enter** answers for the selected card, **S** is
+*About the same* / *Can't tell them apart*, **Backspace** goes back, **Space** stops all sound.
+
+### Adjust by hand
+
+Press **Adjust by hand** to show the slider and its sound buttons (they're shown from the start once
+you've found your resonance before):
 
 1. Put both IEMs in as you normally wear them, with your usual tips.
 2. On the **Left** tab, press **▶ Play tone**. The tone plays in your left ear only, and a dotted line on
