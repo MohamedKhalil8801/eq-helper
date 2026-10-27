@@ -15,7 +15,7 @@ from pathlib import Path
 
 import numpy as np
 from PySide6.QtCore import QMarginsF, QPointF, QRectF, Qt
-from PySide6.QtGui import QColor, QFont, QPageLayout, QPageSize, QPainter, QPainterPath, QImage, QPdfWriter, QPen
+from PySide6.QtGui import QColor, QFont, QFontDatabase, QPageLayout, QPageSize, QPainter, QPainterPath, QImage, QPdfWriter, QPen
 
 SIDE_NAMES = {"L": "Left", "R": "Right", None: "Both ears", "M": "Both ears"}
 SIDE_COLORS = {"L": "#0072B2", "R": "#D55E00", None: "#009E73"}
@@ -88,7 +88,9 @@ def _mm(value: float) -> float:
 
 
 def _font(size_pt: float, bold: bool = False) -> QFont:
-    font = QFont("Helvetica")
+    # The system UI font (Segoe UI, SF, Noto/DejaVu…) is always installed and embeds
+    # with a text mapping, so the sheet's text stays selectable and searchable.
+    font = QFont(QFontDatabase.systemFont(QFontDatabase.GeneralFont))
     font.setPointSizeF(size_pt)
     font.setBold(bold)
     return font

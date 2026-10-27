@@ -62,17 +62,21 @@ class SingleInstance(QObject):
         while self.server.hasPendingConnections():
             socket = self.server.nextPendingConnection()
             socket.readyRead.connect(lambda s=socket: self._read(s))
-            socket.disconnected.connect(socket.deleteLater)
+            socket.disconnected.connect(lambda s=socket: (self._read(s), s.deleteLater()))
+            # The message may already be in the pipe (Windows can deliver it, or even the
+            # disconnect, before readyRead is connected): read it now.
+            if not socket.canReadLine():
+                socket.waitForReadyRead(500)
+            self._read(socket)
 
     def _read(self, socket: QLocalSocket) -> None:
-        if not socket.canReadLine():
-            return
-        try:
-            paths = json.loads(bytes(socket.readLine()).decode("utf-8"))
-        except ValueError:
-            return
-        if isinstance(paths, list) and self._on_message is not None:
-            self._on_message([str(p) for p in paths])
+        while socket.canReadLine():
+            try:
+                paths = json.loads(bytes(socket.readLine()).decode("utf-8"))
+            except ValueError:
+                continue
+            if isinstance(paths, list) and self._on_message is not None:
+                self._on_message([str(p) for p in paths])
 
 
 class FileOpenFilter(QObject):

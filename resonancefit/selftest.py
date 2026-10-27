@@ -85,11 +85,11 @@ def _run(lines: list[str], argv) -> int:
             MainThreadGC(parent=app)
         with tempfile.TemporaryDirectory(prefix="selftest-") as tmp:
             tmp = Path(tmp)
-            calibrations = tmp / "download" / "Calibrations"
-            calibrations.mkdir(parents=True)
-            write_rescal(calibrations / "Self test.rescal", synthetic_calibration())
             platform = current_platform()
             paths = AppPaths(platform, tmp / "data", tmp / "download")
+            # where this OS's app looks (next to the app; the data folder on macOS)
+            paths.calibrations_folder.mkdir(parents=True)
+            write_rescal(paths.calibrations_folder / "Self test.rescal", synthetic_calibration())
             ctx = AppContext.create(paths)
             # no first-launch prompts: nobody is there to answer them
             ctx.settings.update(walkthrough_seen=True, quiet_warning_seen=True, file_association_offered=True)

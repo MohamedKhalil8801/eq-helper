@@ -1,5 +1,7 @@
 """Secondary tabs: test songs, sound tools, settings, about."""
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 import soundfile as sf
@@ -117,7 +119,7 @@ def test_settings_page(win, opened):
     assert page.device_combo.itemText(0) == "System default"
     assert "isn't available" in page.apo_status.text() or "only on Windows" in page.apo_status.text()
     page.open_calibrations.click()
-    assert opened[-1].toLocalFile() == str(win.ctx.paths.calibrations_folder)
+    assert Path(opened[-1].toLocalFile()) == win.ctx.paths.calibrations_folder
     assert win.ctx.paths.calibrations_folder.is_dir()
     assert page.version_label.text()
 
@@ -132,4 +134,4 @@ def test_about_page_branding_licences_and_sheet(win, qtbot, tmp_path, opened):
     about.refresh_sheets()
     assert about.sheet_combo.count() == 1
     about.open_sheet.click()
-    assert opened[-1].toLocalFile() == str(sheet)
+    assert Path(opened[-1].toLocalFile()) == sheet
