@@ -26,6 +26,7 @@ class Mode(enum.IntEnum):
     SWEEP = 3
     PLAYBACK = 4
     GREY = 5
+    MUSIC = 6  # stereo file playback (customer app test songs)
 
 
 class ChannelMode(enum.IntEnum):

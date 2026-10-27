@@ -260,6 +260,12 @@ class AudioEngine:
         self._playback_buf: Optional[np.ndarray] = None
         self._playback_pos: int = 0
 
+        # Stereo music (test songs): (n, 2) at the device rate.
+        self._music_buf: Optional[np.ndarray] = None
+        self._music_pos: int = 0
+        self._music_paused: bool = False
+        self._music_loop: bool = False
+
     # -------------------------------------------------------------- output streams
 
     def _open_stream(self, device: Optional[int], callback) -> Optional["sd.OutputStream"]:
@@ -565,6 +571,60 @@ class AudioEngine:
         self._playback_buf = None
         self._playback_pos = 0
 
+    def start_music(self, buf: np.ndarray, loop: bool = False) -> None:
+        """Play an ``(n, 2)`` buffer already at :attr:`sample_rate`, from the start."""
+        data = np.asarray(buf, dtype=np.float32)
+        if data.ndim != 2 or data.shape[1] != 2:
+            raise ValueError("Music must be an (n, 2) stereo buffer.")
+        self._music_buf = data
+        self._music_pos = 0
+        self._music_paused = False
+        self._music_loop = loop
+        self.state.update(mode=Mode.MUSIC)
+        self.start_stream()
+
+    def pause_music(self, paused: bool) -> None:
+        self._music_paused = bool(paused)
+
+    def seek_music(self, frame: int) -> None:
+        if self._music_buf is not None:
+            self._music_pos = int(np.clip(frame, 0, self._music_buf.shape[0]))
+
+    @property
+    def music_position(self) -> int:
+        return self._music_pos
+
+    @property
+    def music_finished(self) -> bool:
+        buf = self._music_buf
+        return buf is not None and not self._music_loop and self._music_pos >= buf.shape[0]
+
+    def stop_music(self) -> None:
+        if self.state.snapshot().mode == Mode.MUSIC:
+            self.state.update(mode=Mode.IDLE)
+        self._music_buf = None
+        self._music_pos = 0
+
+    def _music_block(self, st, frames: int):
+        buf = self._music_buf
+        out = np.zeros((frames, 2), dtype=np.float32)
+        if buf is None or self._music_paused or buf.shape[0] == 0:
+            return out[:, 0], out[:, 1]
+        pos, written = self._music_pos, 0
+        while written < frames:
+            if pos >= buf.shape[0]:
+                if not self._music_loop:
+                    break
+                pos = 0
+            take = min(frames - written, buf.shape[0] - pos)
+            out[written:written + take] = buf[pos:pos + take]
+            pos += take
+            written += take
+        self._music_pos = pos
+        out *= np.float32(st.amp)
+        # Songs are always stereo; "force mono" is a test-signal setting.
+        return out[:, 0].copy(), out[:, 1].copy()
+
     # --------------------------------------------------------- input callback
 
     def _input_callback(self, indata: np.ndarray, frames: int, time_info, status) -> None:
@@ -619,6 +679,8 @@ class AudioEngine:
                     pos = 0  # always loop
             self._grey_pos = pos
             return mono, None
+        elif st.mode == Mode.MUSIC:
+            return self._music_block(st, frames)
         elif st.mode == Mode.PLAYBACK:
             pb = self._playback_buf
             if pb is None or pb.shape[0] == 0:
@@ -704,10 +766,13 @@ class AudioEngine:
 
         mono, right = self._apply_processing(st, frames, mono, right)
         self.ring.push(mono)
-        self._route_dual(outdata, mono, st, frames)
+        # Only music carries a real right channel to the output; other
+        # sources keep their existing mono routing.
+        self._route_dual(outdata, mono, st, frames, right if st.mode == Mode.MUSIC else None)
 
     def _route_dual(
-        self, outdata: np.ndarray, mono: np.ndarray, st, frames: int
+        self, outdata: np.ndarray, mono: np.ndarray, st, frames: int,
+        right: Optional[np.ndarray] = None,
     ) -> None:
         """Route the mono source to device A and push data for device B.
 
@@ -720,7 +785,7 @@ class AudioEngine:
         ear silent). The Channel switch is ignored.
         """
         if not st.dual_output:
-            stereo = self._stereo_fir.process(route(mono, st.channel_mode, st.force_mono, None))
+            stereo = self._stereo_fir.process(route(mono, st.channel_mode, st.force_mono and right is None, right))
             outdata[:] = stereo
             self._dual_ring.push(stereo.flatten())
             return
@@ -746,7 +811,7 @@ class AudioEngine:
         else:
             # Mirror: identical output on both devices, channel switch
             # controls L/R ears the same way as single-device mode.
-            stereo = self._stereo_fir.process(route(mono, st.channel_mode, st.force_mono, None))
+            stereo = self._stereo_fir.process(route(mono, st.channel_mode, st.force_mono and right is None, right))
             outdata[:] = stereo
             self._dual_ring.push(stereo.flatten())
 
