@@ -58,7 +58,7 @@ def _render_named(curves, rates, phase, fmt, folder: Path, name_for) -> tuple[li
 def camilla_snippet(base_name: str, folder: Path) -> list[str]:
     path = (folder / f"{base_name} $samplerate$.wav").as_posix()
     return [
-        "CamillaDSP (v3) configuration snippet — the $samplerate$ token picks the file",
+        "CamillaDSP (v2 or later) configuration snippet — the $samplerate$ token picks the file",
         "matching the running rate:",
         "",
         "filters:",

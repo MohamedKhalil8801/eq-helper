@@ -32,7 +32,8 @@ def eq():
 def test_bundled_catalog_validates_and_has_seed_entries(catalog):
     assert {a.id for a in catalog.apps} == SEED
     for app in catalog.apps:
-        assert app.verified is False  # nothing is claimed as checked yet
+        if app.verified:  # a verified claim always says what was checked and where
+            assert app.checked.startswith("20")
         assert app.setup_steps and app.description
         for fmt in app.formats:
             assert fmt.format in registered_formats()

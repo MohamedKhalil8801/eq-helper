@@ -2,7 +2,8 @@
 
 Apps are data in ``catalog.json``; export formats are code. Adding an app
 that uses an existing format is a catalog edit only. Every claim about an app
-(L/R support, limits, import steps) carries ``verified: false`` until checked.
+(L/R support, limits, import steps) carries ``verified: false`` until checked;
+``checked`` says what was checked, when and against which source.
 """
 
 from __future__ import annotations
@@ -55,6 +56,7 @@ class CatalogApp:
     setup_steps: tuple[str, ...]
     detection: dict = field(default_factory=dict)
     verified: bool = False
+    checked: str = ""
     advanced: bool = False
 
     @property
@@ -98,6 +100,7 @@ def _parse_app(entry, known_formats) -> CatalogApp:
         balance_control=bool(_need(entry, "balance_control", bool, where)),
         formats=tuple(formats), setup_steps=tuple(_need(entry, "setup_steps", list, where)),
         detection=dict(entry.get("detection") or {}), verified=bool(entry.get("verified", False)),
+        checked=str(entry.get("checked", "")),
         advanced=bool(entry.get("advanced", False)),
     )
 

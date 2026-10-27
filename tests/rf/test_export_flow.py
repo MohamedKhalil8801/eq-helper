@@ -80,7 +80,7 @@ def test_listening_choices_filter_and_installed_first(qtbot, win, tmp_path):
 def test_card_labels_and_shared_only_compromise(qtbot, win, tmp_path):
     flow = _flow(qtbot, win, tmp_path)
     flow.choose("other_computer", "macos")
-    card = flow.cards["eqmac"]
+    card = flow.cards["soundsource"]
     text = card.text_summary()
     assert "Left/right correction: shared only" in text
     assert "balance" in text.lower() and "dB" in text
