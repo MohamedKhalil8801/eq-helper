@@ -157,7 +157,7 @@ class TuningPanel(QWidget):
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(8)
         self.step1_stack.addWidget(self.manual_page)
-        self.guided = GuidedTestView(self.audio, self._option_eqs)
+        self.guided = GuidedTestView(self.audio, self._option_eqs, self._balance_job)
         self.guided.resultFound.connect(self._guided_result)
         self.guided.upperFound.connect(self._guided_upper)
         self.guided.adjustByHand.connect(self._guided_to_manual)
@@ -528,6 +528,23 @@ class TuningPanel(QWidget):
                 built.append((eq, audio.design_firs(eq, rate)))
             return built
         return work
+
+    def _balance_job(self, rng):
+        """For the balance check: the bands to centre, and a worker job making the current tuning's EQ,
+        its preview filters and the model that reads the leans. The session is copied now."""
+        from eq_helper.dsp.resonance import match_channels
+        from resonancefit.balance_check import BalanceModel, plan_bands
+        s = self.session
+        primary = dict(s.primary)
+        upper = dict(s.upper) if s.upper_enabled else None
+        measurements, target, name = s.measurements, s.target, s.target_name
+        rate, audio = int(self.audio.engine.sample_rate), self.audio
+        bands = plan_bands(primary, upper, rng)
+
+        def work():
+            eq = match_channels(measurements, primary, *target, name, personal_treble=upper)
+            return eq, audio.design_firs(eq, rate), BalanceModel(measurements.models, target, name, primary, upper)
+        return bands, work
 
     def _select_side(self, side: str) -> None:
         index = next((i for i in range(self.ears.count()) if self.ears.tabData(i) == side), None)
