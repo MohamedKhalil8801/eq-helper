@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
 
 from eq_helper.admin.build_cache import SYSTEM_NAMES, SYSTEMS, BuildCache
 from eq_helper.admin.customer_library import CustomerLibrary, MeasurementSource
-from eq_helper.admin.generate import GenerateRequest, generate, preview
+from eq_helper.admin.generate import DIAGNOSTIC_TARGETS, GenerateRequest, generate, preview
 from eq_helper.calibration.branding import load_branding
 from eq_helper.calibration.rescal import (
     Accessory, Customer, Iem, Manifest, Operator, SongLink, new_calibration_id,
@@ -227,7 +227,10 @@ class GenerateCustomerDialog(QDialog):
             item = QListWidgetItem(path.name)
             item.setData(Qt.UserRole, str(path))
             item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
-            item.setCheckState(Qt.Checked)
+            diagnostic = path.name in DIAGNOSTIC_TARGETS
+            item.setCheckState(Qt.Unchecked if diagnostic else Qt.Checked)
+            if diagnostic:
+                item.setToolTip("Not a coupler target (no ear gain): for checks in EQ Helper, not for customers.")
             self.target_list.addItem(item)
         self.target_list.itemChanged.connect(lambda _i: self._sync_default_targets())
         v.addWidget(self.target_list)

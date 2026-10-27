@@ -26,6 +26,9 @@ from .customer_library import CalibrationRecord, CustomerLibrary, MeasurementSou
 from .packager import calibration_only, package, rescal_name
 
 MIN_FITS_PER_SIDE = 3
+# Not coupler targets (no ear gain): useful in EQ Helper as diagnostics, but a trap for a
+# customer — against raw IEC-711 predictions a flat target cuts ~10 dB around 3 kHz.
+DIAGNOSTIC_TARGETS = ("Flat Line.txt",)
 SIDE_NAMES = {"L": "Left", "R": "Right", "M": "Both ears"}
 
 

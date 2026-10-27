@@ -51,8 +51,9 @@ def test_defaults_diamond_coupler_today_and_all_targets(qtbot, env):
     assert d.default_target.currentText() == "PEQdB Diamond.txt"
     assert d.coupler.text() == "IEC-711 clone"
     assert d.date_edit.date() == QDate.currentDate()
-    checked = d.chosen_targets()
-    assert len(checked) == d.target_list.count() >= 10
+    checked = [p.name for p in d.chosen_targets()]
+    assert len(checked) == d.target_list.count() - 1 >= 10
+    assert "Flat Line.txt" not in checked  # diagnostic, not a coupler target
     assert d.system_checks["windows"].isChecked()
 
 

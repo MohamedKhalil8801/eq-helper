@@ -126,7 +126,8 @@ def main(argv=None) -> int:
                             accessories=[Accessory("tips", "Spinfit W1 M", "customer"),
                                          Accessory("dac", "Apple USB-C dongle", "operator")],
                             coupler="IEC-711 clone", operator=Operator("Mohamed Khalil"))
-        targets = sorted((ROOT / "assets" / "targets").glob("*.txt"))
+        from eq_helper.admin.generate import DIAGNOSTIC_TARGETS
+        targets = [t for t in sorted((ROOT / "assets" / "targets").glob("*.txt")) if t.name not in DIAGNOSTIC_TARGETS]
         result = generate(GenerateRequest(manifest, MeasurementSource.from_folder(measurements), targets, [system],
                                           work / "out"),
                           CustomerLibrary(work / "library"), cache, load_branding(), progress=lambda m: None)

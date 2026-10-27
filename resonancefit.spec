@@ -24,7 +24,9 @@ UTI = BUNDLE_ID + ".calibration"
 
 datas = [
     (str(ROOT / "resonancefit" / "assets"), "resonancefit/assets"),
-    (str(ROOT / "assets" / "targets"), "assets/targets"),
+    # bundled targets, minus diagnostic ones that aren't coupler targets (see eq_helper/admin/generate.py)
+    *[(str(t), "assets/targets") for t in sorted((ROOT / "assets" / "targets").glob("*.txt"))
+      if t.name not in ("Flat Line.txt",)],
     (str(ROOT / "assets" / "grey_noise.wav"), "assets"),
     (str(ROOT / "eq_helper" / "exports" / "catalog.json"), "eq_helper/exports"),
     (str(ROOT / "LICENSE"), "."),

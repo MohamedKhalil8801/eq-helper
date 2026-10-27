@@ -117,3 +117,16 @@ def test_unusable_measurements_explained(tmp_path):
     (tmp_path / "empty").mkdir()
     with pytest.raises(ValueError, match="No usable measurements"):
         preview(MeasurementSource.from_folder(tmp_path / "empty"))
+
+
+def test_bundled_customer_targets_are_coupler_targets():
+    """Every target offered to customers carries the IEC-711 ear gain (≈ +8–12 dB near 3 kHz);
+    flat or compensated curves would make the EQ boost the upper mids by ~10 dB."""
+    from eq_helper.admin.generate import DIAGNOSTIC_TARGETS
+    from eq_helper.dsp.overlay import load_frequency_response
+    for path in sorted(TARGETS.glob("*.txt")):
+        if path.name in DIAGNOSTIC_TARGETS:
+            continue
+        f, db = (np.asarray(x, float) for x in load_frequency_response(path))
+        rise = np.interp(np.log(3000), np.log(f), db) - np.interp(np.log(1000), np.log(f), db)
+        assert 6 <= rise <= 14, f"{path.name}: {rise:.1f} dB at 3 kHz vs 1 kHz"
