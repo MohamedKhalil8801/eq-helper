@@ -62,6 +62,7 @@ def audio_init_error() -> Optional[str]:
 
 from eq_helper.audio.filters import BandPassFilter
 from eq_helper.audio.generators import (
+    BandNoiseGenerator,
     LogSweepGenerator,
     PingPongSweepGenerator,
     PinkNoiseGenerator,
@@ -78,7 +79,7 @@ from eq_helper.audio.shared_state import (
 
 DEFAULT_SAMPLE_RATE = 48000
 DEFAULT_BLOCK_SIZE = 480  # 10 ms @ 48 kHz
-TONE_SWITCH_FADE_S = 0.02  # crossfade length of switch_sine()
+TONE_SWITCH_FADE_S = 0.02  # crossfade length of switch_sine() / switch_band()
 
 
 # ----------------------------------------------------------------- helpers
@@ -489,9 +490,17 @@ class AudioEngine:
     def switch_sine(self, freq: float, fade_s: float = TONE_SWITCH_FADE_S) -> None:
         """Play a sine at ``freq``, crossfading from whatever tone is playing (or
         fading in from silence) over ``fade_s`` seconds: no click, no gap."""
+        self._switch_voice(SineGenerator(self.sample_rate), float(freq), fade_s)
+
+    def switch_band(self, center_hz: float, width_oct: float, fade_s: float = TONE_SWITCH_FADE_S) -> None:
+        """Like :meth:`switch_sine`, for noise in a band ``width_oct`` octaves wide around
+        ``center_hz`` (equal RMS for every band); bands and tones crossfade into each other."""
+        self._switch_voice(BandNoiseGenerator(self.sample_rate, center_hz, width_oct), float(center_hz), fade_s)
+
+    def _switch_voice(self, generator, freq: float, fade_s: float) -> None:
         with self._voice_lock:
-            self._voice_cmds.append(("switch", float(freq), max(1, int(fade_s * self.sample_rate))))
-        self.state.update(freq=float(freq), mode=Mode.SINE)
+            self._voice_cmds.append(("switch", generator, freq, max(1, int(fade_s * self.sample_rate))))
+        self.state.update(freq=freq, mode=Mode.SINE)
         self.start_stream()
 
     def stop(self) -> None:
@@ -747,13 +756,13 @@ class AudioEngine:
                 self._voices = [self._voices[-1]]
                 self._voices[0][1], self._voices[0][2], self._voices[0][3] = cmd[1], 1.0, 1.0
             elif cmd[0] == "switch":
-                _kind, freq, fade = cmd
+                _kind, generator, freq, fade = cmd
                 for voice in self._voices:
                     voice[3] = 0.0
-                self._voices.append([SineGenerator(self.sample_rate), freq, 0.0, 1.0, 1.0 / fade])
+                self._voices.append([generator, freq, 0.0, 1.0, 1.0 / fade])
 
     def _voices_block(self, frames: int) -> np.ndarray:
-        """Sum of the crossfading tones from switch_sine (equal-power fades)."""
+        """Sum of the crossfading tones and bands from switch_sine / switch_band (equal-power fades)."""
         out = np.zeros(frames, dtype=np.float64)
         steps = np.arange(1, frames + 1)
         for voice in self._voices:

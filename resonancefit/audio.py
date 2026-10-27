@@ -68,7 +68,7 @@ class AudioService:
         self.engine = engine or AudioEngine()
         self.ready = False
         self.error: Optional[str] = None
-        self.playing: Optional[str] = None  # "tone" | "focus" | "sweep" | "pink" | None
+        self.playing: Optional[str] = None  # "tone" | "band" | "focus" | "sweep" | "pink" | None
         self.side: Optional[str] = "both"
         self._eq = None
         self._eq_enabled = False
@@ -163,6 +163,16 @@ class AudioService:
         self.engine.switch_sine(float(hz))
         if self.playing != "tone":
             self._started("tone")
+
+    def switch_band(self, hz: float, width_oct: float, side=None) -> None:
+        """Noise in a band around ``hz`` that crossfades from the playing tone or band (or fades in)."""
+        if self.playing != "band" and not self.may_play():
+            return
+        if side is not None and side != self.side:
+            self.route(side)
+        self.engine.switch_band(float(hz), float(width_oct))
+        if self.playing != "band":
+            self._started("band")
 
     def play_focus_sweep(self, hz: float, side=None) -> None:
         if not self.may_play():

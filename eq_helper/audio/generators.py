@@ -297,3 +297,38 @@ class PingPongSweepGenerator:
         self._phase = float(phase[-1] % (2.0 * np.pi)) if frames > 0 else self._phase
         self._n += frames
         return out
+
+
+BAND_NOISE_RMS = 0.5  # every band plays at this RMS (×volume), whatever its centre and width
+
+
+class BandNoiseGenerator:
+    """Noise in one band (``width_oct`` octaves around ``center_hz``) at a fixed RMS.
+
+    White noise through a 4th-order Butterworth band-pass, scaled by the
+    filter's noise bandwidth, so bands of any width or place sound equally
+    strong digitally. ``next_block(frames, freq)`` ignores ``freq`` (it
+    matches :class:`SineGenerator` so both can be crossfaded the same way).
+    """
+
+    def __init__(self, sample_rate: int, center_hz: float, width_oct: float,
+                 rms: float = BAND_NOISE_RMS, seed: Optional[int] = None) -> None:
+        from scipy.signal import butter, sosfilt_zi, sosfreqz
+        sr = int(sample_rate)
+        nyquist = sr / 2.0
+        half = 2.0 ** (float(width_oct) / 2.0)
+        lo = max(20.0, float(center_hz) / half)
+        hi = min(0.95 * nyquist, float(center_hz) * half)
+        if not lo < hi:
+            raise ValueError(f"No room for a band around {center_hz} Hz at {sr} Hz.")
+        self.center_hz, self.width_oct = float(center_hz), float(width_oct)
+        self._sos = butter(4, [lo, hi], btype="bandpass", fs=sr, output="sos")
+        _w, h = sosfreqz(self._sos, worN=16384, fs=sr)
+        self._scale = float(rms) / math.sqrt(float(np.mean(np.abs(h) ** 2)))
+        self._zi = sosfilt_zi(self._sos) * 0.0
+        self._rng = np.random.default_rng(seed)
+
+    def next_block(self, frames: int, freq: float = 0.0) -> np.ndarray:
+        from scipy.signal import sosfilt
+        y, self._zi = sosfilt(self._sos, self._rng.standard_normal(int(frames)), zi=self._zi)
+        return (y * self._scale).astype(np.float32)

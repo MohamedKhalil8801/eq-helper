@@ -86,3 +86,43 @@ def test_set_freq_retunes_a_crossfaded_tone(engine):
     x = run(engine, 0.1)[-2400:]
     spectrum = np.abs(np.fft.rfft(x * np.hanning(len(x))))
     assert np.fft.rfftfreq(len(x), 1 / FS)[np.argmax(spectrum)] == pytest.approx(8500, abs=25)
+
+
+def band_share(x, lo, hi):
+    spectrum = np.abs(np.fft.rfft(x * np.hanning(len(x)))) ** 2
+    freqs = np.fft.rfftfreq(len(x), 1 / FS)
+    return float(spectrum[(freqs >= lo) & (freqs <= hi)].sum() / spectrum.sum())
+
+
+@pytest.mark.parametrize("width", [1 / 12, 1 / 6, 1 / 3])
+@pytest.mark.parametrize("center", [6200.0, 7500.0, 8800.0, 15000.0])
+def test_bands_have_equal_level_and_stay_in_their_band(engine, center, width):
+    engine.switch_band(center, width)
+    run(engine, 0.1)
+    x = run(engine, 1.0)
+    rms = float(np.sqrt(np.mean(x ** 2)))
+    assert rms == pytest.approx(0.5 * AMP, rel=0.08)  # BAND_NOISE_RMS × volume, whatever the band
+    half = 2 ** (width / 2)
+    assert band_share(x, center / half / 1.15, center * half * 1.15) > 0.9
+
+
+def test_switching_bands_crossfades_without_a_gap_or_click(engine):
+    engine.switch_band(6500, 1 / 6)
+    out = [run(engine, 0.2)]
+    for hz in (8800, 7000, 9000):
+        engine.switch_band(hz, 1 / 6)
+        out.append(run(engine, 0.1, block=333))
+    x = np.concatenate(out)
+    rms = [np.sqrt(np.mean(x[i:i + 480] ** 2)) for i in range(9600, len(x) - 480, 480)]
+    assert min(rms) > 0.5 * AMP * 0.45  # no gap (noise wobbles; equal-power fade keeps the level)
+    assert click_energy(x) < 1e-5
+
+
+def test_bands_and_plain_tones_keep_eq_helper_behaviour(engine):
+    engine.switch_band(7000, 1 / 6)
+    run(engine, 0.05)
+    engine.stop()
+    assert np.all(engine.process_block(480) == 0)
+    engine.start_sine(1000)
+    x = run(engine, 0.05)
+    assert np.max(np.abs(x)) == pytest.approx(AMP, rel=0.01)
