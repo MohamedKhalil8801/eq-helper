@@ -87,9 +87,12 @@ class ListenSaveCard(Card):
         self.eq_toggle.setChecked(on)
 
     def _toggled(self, on: bool) -> None:
+        self._toggled_text(on)
+        self.eqToggled.emit(on)
+
+    def _toggled_text(self, on: bool) -> None:
         self.eq_toggle.setText(tr("EQ is on — click to compare without it") if on
                                else tr("EQ is off — click to turn on"))
-        self.eqToggled.emit(on)
 
     def _save(self) -> None:
         self.saveRequested.emit(self.note.text().strip())

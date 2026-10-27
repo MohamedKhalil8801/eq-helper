@@ -25,6 +25,7 @@ from ..audio import AudioService
 from ..history import HistoryStore
 from ..library import LibraryEntry
 from ..paths import is_translocated
+from .about_page import AboutPage
 from .app_catalog_page import AppCatalogPage
 from .common import APP_STYLE, Worker, side_name, tr
 from .export_flow import PREDICTED_APP_ID, ExportFlow, ExportJob
@@ -32,6 +33,9 @@ from .header_card import HeaderCard
 from .history_panel import HistoryPanel, friendly_date
 from .import_screen import ImportScreen
 from .listen_save import ListenSaveCard
+from .settings_page import SettingsPage
+from .sound_tools import SoundToolsPage
+from .test_songs import TestSongsPage
 
 
 @dataclass(frozen=True)
@@ -152,9 +156,22 @@ class MainWindow(QMainWindow):
         self.history_panel.app_names[PREDICTED_APP_ID] = tr("Predicted response")
         self.tabs.addTab(self.tune_tab, tr("Tune"))
 
+        self.songs_page = TestSongsPage(self.ctx, self.audio)
+        self.calibrationLoaded.connect(self.songs_page.set_calibration)
+        self.tabs.addTab(self.songs_page, tr("Test songs"))
+        self.sound_tools = SoundToolsPage(self.audio)
+        self.tabs.addTab(self.sound_tools, tr("Sound tools"))
+
         self.catalog_page = AppCatalogPage(self.catalog, self.ctx.paths.platform)
         self.catalog_page.exportRequested.connect(self.open_export)
         self.tabs.addTab(self.catalog_page, tr("Where can I use my EQ?"))
+
+        self.settings_page = SettingsPage(self.ctx, self.audio, self.apo)
+        self.settings_page.apoDeviceChangeRequested.connect(self.change_apo_device)
+        self.tabs.addTab(self.settings_page, tr("Settings"))
+        self.about_page = AboutPage(self.ctx)
+        self.tabs.addTab(self.about_page, tr("About"))
+        self.audio.on_change(self._sync_eq_toggle)
 
     def _apps_detected(self, installed) -> None:
         self.installed = set(installed)
@@ -198,9 +215,28 @@ class MainWindow(QMainWindow):
             self.show_apo_problem(problem)
             return False
         self.record_history("apply", files=[str(path)], app=APO_APP_ID)
+        self.settings_page.refresh_apo()
         self.listen.show_status(tr("Applied to Equalizer APO on {device}. Everything you play there now "
                                    "uses this tuning.").format(device=self.apo.device))
         return True
+
+    def change_apo_device(self) -> None:
+        devices = self.apo.devices() if self.apo.available() else []
+        if not devices:
+            QMessageBox.information(self, tr("Equalizer APO"), tr(self.apo.no_devices_help()))
+            return
+        device = self.choose_apo_device(devices)
+        if device:
+            self.apo.set_device(device)
+        self.settings_page.refresh_apo()
+
+    def _sync_eq_toggle(self) -> None:
+        on = self.audio.eq_enabled
+        if self.listen.eq_toggle.isChecked() != on:
+            self.listen.eq_toggle.blockSignals(True)
+            self.listen.eq_toggle.setChecked(on)
+            self.listen.eq_toggle.blockSignals(False)
+            self.listen._toggled_text(on)
 
     def switch_apo_tuning(self, entry_id: str) -> None:
         self.reapply(entry_id)
@@ -257,7 +293,9 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(tr("Tuning reapplied."), 5000)
 
     def _on_audio_ready(self, ok: bool) -> None:
-        if not ok:
+        if ok:
+            self.settings_page.refresh_devices()
+        else:
             self.statusBar().showMessage(
                 tr("Sound is not available: {reason}").format(reason=self.audio.error or tr("no output device")))
 

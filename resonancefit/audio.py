@@ -92,11 +92,13 @@ class AudioService:
     def set_volume(self, amp: float) -> None:
         self.volume = max(0.0, min(1.0, float(amp)))
         self.engine.set_volume(self.volume)
+        self._changed()
 
     def route(self, side) -> None:
         """Play on one ear ("L"/"R") or both ("M", "both", None)."""
         self.side = side
         self.engine.set_channel_mode(_ROUTES.get(side, ChannelMode.BOTH))
+        self._changed()
 
     # ── sources ────────────────────────────────────────────────────────────
     def play_tone(self, hz: float, side=None) -> None:
@@ -127,6 +129,10 @@ class AudioService:
         self.engine.start_pink()
         self._started("pink")
 
+    def mark_playing(self, kind: str) -> None:
+        """Something else (e.g. the song player) started sound of ``kind``."""
+        self._started(kind)
+
     def _started(self, kind: str) -> None:
         self.playing = kind
         self._refresh_rate()
@@ -152,6 +158,7 @@ class AudioService:
     def set_eq_enabled(self, enabled: bool) -> None:
         self._eq_enabled = bool(enabled)
         self._apply()
+        self._changed()
 
     @property
     def eq_enabled(self) -> bool:
