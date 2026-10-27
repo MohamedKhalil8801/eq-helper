@@ -137,3 +137,31 @@ def test_bypass_is_exact_for_any_block_size():
     stereo = StereoFIR(partition=256)
     block = np.random.default_rng(4).standard_normal((1000, 2)).astype(np.float32)
     np.testing.assert_array_equal(stereo.process(block), block)
+
+
+def test_new_filter_is_exact_at_once_and_swapping_is_cheap():
+    """A filter loaded mid-stream filters past input too (shared input spectra): no catch-up in the callback."""
+    rng = np.random.default_rng(7)
+    h1 = rng.standard_normal(3000) * np.exp(-np.arange(3000) / 300)
+    h2 = rng.standard_normal(5000) * np.exp(-np.arange(5000) / 400)
+    x = rng.standard_normal((512 * 40, 2))
+    stereo = StereoFIR(partition=256, fade=1)
+    stereo.set_firs({"L": h1, "R": h1})
+    out = [stereo.process(x[i:i + 512]) for i in range(0, 512 * 20, 512)]
+    stereo.set_firs({"L": h2, "R": h2[::-1].copy()})
+    out += [stereo.process(x[i:i + 512]) for i in range(512 * 20, 512 * 40, 512)]
+    y = np.concatenate(out)
+    start = 512 * 20 + 256  # after the one-sample fade, right from the swap
+    for ch, h in ((0, h2), (1, h2[::-1])):
+        want = np.convolve(x[:, ch], h)[start:512 * 40]
+        np.testing.assert_allclose(y[start:, ch], want, atol=1e-4)
+    big = design_channel(np.geomspace(20, 20000, 300), np.zeros(300), FS)
+    stereo.set_firs({"L": big, "R": big})
+    stereo.process(x[:512])
+    worst = 0.0
+    for _ in range(10):
+        stereo.set_firs({"L": big, "R": big})
+        t = time.perf_counter()
+        stereo.process(x[:512])
+        worst = max(worst, time.perf_counter() - t)
+    assert worst < 0.25 * 512 / FS

@@ -180,7 +180,14 @@ class AppCard(Card):
         actions.addStretch(1)
         link = app.links.get("store") or app.links.get("site")
         self.download_button = None
-        if link:
+        self.website_button = None
+        if link and installed:  # already here: no download, just its website (manuals, updates)
+            self.website_button = QPushButton(tr("Website"))
+            self.website_button.setFlat(True)
+            self.website_button.setToolTip(link)
+            self.website_button.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(link)))
+            actions.addWidget(self.website_button)
+        elif link:
             self.download_button = QPushButton(tr("Download"))
             self.download_button.setToolTip(link)
             self.download_button.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(link)))

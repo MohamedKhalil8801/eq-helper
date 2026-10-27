@@ -31,6 +31,38 @@ def amp_to_db(amp: float) -> float:
     return 20 * math.log10(max(float(amp), 1e-6))
 
 
+def shared_mode_rate(sd, device: Optional[int]) -> Optional[int]:
+    """Windows: the rate the device really runs at (its WASAPI shared-mode format).
+
+    PortAudio's default host API on Windows is MME, which reports 44.1 kHz for
+    nearly every device whatever Windows is set to; WASAPI reports the
+    device's actual format. ``device`` is an index from the default host API
+    (``None`` = the default output). Returns ``None`` when there's no WASAPI.
+    """
+    try:
+        apis = list(sd.query_hostapis())
+        wasapi = next((i for i, api in enumerate(apis) if "wasapi" in str(api.get("name", "")).lower()), None)
+        if wasapi is None:
+            return None
+        devices = list(sd.query_devices())
+        if device is None:
+            index = apis[wasapi].get("default_output_device", -1)
+            if index is None or index < 0:
+                return None
+            return int(round(float(devices[index]["default_samplerate"])))
+        name = str(devices[device]["name"]).strip()
+        for info in devices:
+            if info.get("hostapi") != wasapi or info.get("max_output_channels", 0) <= 0:
+                continue
+            other = str(info["name"]).strip()
+            # MME cuts names to 31 characters: match on the common start
+            if other == name or other.startswith(name) or (len(name) >= 31 and other.startswith(name[:31])):
+                return int(round(float(info["default_samplerate"])))
+    except Exception:  # noqa: BLE001 - any oddity: fall back to the other answer
+        return None
+    return None
+
+
 class AudioService:
     def __init__(self, engine: Optional[AudioEngine] = None):
         self.engine = engine or AudioEngine()
@@ -85,6 +117,9 @@ class AudioService:
         """The output device's sample rate (what exports should be pre-filled with)."""
         sd = audio_engine.sd
         if sd is not None:
+            rate = shared_mode_rate(sd, self.engine._device_a)
+            if rate:
+                return rate
             try:
                 info = sd.query_devices(self.engine._device_a, "output")
                 return int(round(float(info["default_samplerate"])))
@@ -144,6 +179,15 @@ class AudioService:
         self.engine.start_pink()
         self._started("pink")
 
+    def playing_frequency(self) -> Optional[float]:
+        """The frequency being played right now (tone or sweep), else ``None``."""
+        if self.playing == "tone":
+            return float(self.engine.state.snapshot().freq)
+        if self.playing in ("focus", "sweep"):
+            sweep = getattr(self.engine, "_sweep", None)
+            return None if sweep is None else float(sweep.current_freq)
+        return None
+
     def mark_playing(self, kind: str) -> None:
         """Something else (e.g. the song player) started sound of ``kind``."""
         self._started(kind)
@@ -164,9 +208,24 @@ class AudioService:
         self._changed()
 
     # ── in-app EQ preview ──────────────────────────────────────────────────
+    def design_firs(self, channel_eq, rate: int | None = None):
+        """(rate, on, off) preview FIRs for ``channel_eq``. Pure: safe on a worker thread."""
+        rate = int(rate or self.engine.sample_rate)
+        return rate, channel_firs(channel_eq, rate, True), channel_firs(channel_eq, rate, False)
+
+    def offer_firs(self, channel_eq, designed) -> None:
+        """FIRs already designed (off the GUI thread) for the next ``set_eq(channel_eq)``."""
+        self._offered = (channel_eq, designed)
+
     def set_eq(self, channel_eq) -> None:
-        """The EQ to preview (``None`` = no EQ yet). Recomputes the per-ear FIRs."""
+        """The EQ to preview (``None`` = no EQ yet). Uses offered FIRs, else designs them."""
         self._eq = channel_eq
+        offered, self._offered = getattr(self, "_offered", None), None
+        if offered is not None and offered[0] is channel_eq and offered[1][0] == int(self.engine.sample_rate):
+            rate, on, off = offered[1]
+            self._firs, self._fir_rate = (on, off), rate
+            self._apply()
+            return
         self._fir_rate = None
         self._refresh_rate()
 

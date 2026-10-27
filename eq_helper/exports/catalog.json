@@ -18,22 +18,23 @@
    "balance_control": false,
    "formats": [
     {
-     "format": "graphic_eq",
-     "options": {}
+     "format": "convolution",
+     "label": "Convolution (recommended)",
+     "options": {
+      "packaging": "apo_rates"
+     }
     },
     {
-     "format": "convolution",
-     "label": "Convolution (optional)",
-     "options": {
-      "packaging": "stereo_single_rate",
-      "sample_rate": "device"
-     }
+     "format": "graphic_eq",
+     "label": "GraphicEQ (optional)",
+     "options": {}
     }
    ],
    "setup_steps": [
     "Install Equalizer APO and select your headphone output in its Configurator, then restart Windows.",
-    "Use “Apply to Equalizer APO” in this app, or copy the exported file into C:\\Program Files\\EqualizerAPO\\config and add “Include: <file>” to config.txt.",
-    "For the convolution file: add “Convolution: <file>.wav” instead; it only works at the sample rate in its name."
+    "Easiest: use “Apply to Equalizer APO” in this app.",
+    "Convolution (recommended): copy every exported file into C:\\Program Files\\EqualizerAPO\\config and add “Include: <name> convolution.txt” to config.txt. It contains a file for each sample rate and picks the one your device runs at.",
+    "GraphicEQ (optional): copy the .txt file into the same folder and add “Include: <file>” to config.txt instead."
    ],
    "detection": {
     "windows": {
@@ -47,7 +48,7 @@
     }
    },
    "verified": true,
-   "checked": "2026-10-27: APO configuration reference — GraphicEQ, Channel: L/R, Include; Convolution files must match the device rate (no resampling)."
+   "checked": "2026-10-27: APO configuration reference — GraphicEQ, Channel: L/R, Include; Convolution files must match the device rate (no resampling). If:/ElseIf: with the sampleRate constant select the convolution file per rate."
   },
   {
    "id": "peace",

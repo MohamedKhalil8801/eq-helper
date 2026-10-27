@@ -8,47 +8,54 @@ regenerates the EQ after a short pause; a playing tone follows the slider.
 
 from __future__ import annotations
 
+import atexit
 from pathlib import Path
 
 import numpy as np
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QLabel, QMessageBox, QPushButton,
+    QButtonGroup, QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QLabel, QMessageBox, QPushButton,
     QSizePolicy, QSlider, QSpinBox, QTabBar, QToolButton, QVBoxLayout, QWidget,
 )
 
 from eq_helper.calibration.tuning import TuningSession, target_hash
 from eq_helper.dsp.resonance import CONTROL_RANGE, PERSONAL_TREBLE_RANGE, detect_high_treble_peak
 
-from .common import Card, chip, hint, side_name, tr
+from .common import Card, Worker, chip, hint, side_name, tr
 from .response_graph import ResponseGraph
 
+_LIVE_JOBS: set = set()  # keep running workers alive even if the panel goes away
+
+
+@atexit.register
+def _join_live_jobs() -> None:
+    for job in list(_LIVE_JOBS):
+        job.wait(5000)
+
+
 REGENERATE_DELAY_MS = 250
+CURVE_REDRAW_MS = 15  # coalesce "Your IEM" redraws while a slider or line is dragged
 LIVE_REGENERATE_DELAY_MS = 60   # while pink noise plays through the EQ: follow the slider closely
 DEFAULT_UPPER_HZ = 15500
 
 
-class ResonanceControls(QWidget):
-    """Slider + Hz box + Play tone / Sweep around it / Pink noise + EQ.
-
-    Used for both the primary and the upper resonance so they work the same way.
-    """
+class ResonanceRow(QWidget):
+    """Label + slider + Hz box for one resonance (primary or upper): both work the same way."""
 
     valueChanged = Signal(int)
 
     def __init__(self, label: str, accessible: str, hz_range, step: int, page: int, parent=None):
         super().__init__(parent)
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
-        row = QHBoxLayout()
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 0, 0)
         self.label = QLabel(label)
-        self.label.setObjectName("hint")
+        self.label.setMinimumWidth(self.label.fontMetrics().horizontalAdvance(tr("Upper treble")) + 12)
         row.addWidget(self.label)
         self.slider = QSlider(Qt.Horizontal)
         self.slider.setRange(*hz_range)
         self.slider.setSingleStep(step)
         self.slider.setPageStep(page)
-        self.slider.setMinimumHeight(36)
+        self.slider.setMinimumHeight(32)
         self.slider.setAccessibleName(accessible)
         self.slider.valueChanged.connect(self.valueChanged)
         self.label.setBuddy(self.slider)
@@ -60,23 +67,8 @@ class ResonanceControls(QWidget):
         self.spin.setAccessibleName(tr("{name} in hertz").format(name=accessible))
         self.spin.valueChanged.connect(self.valueChanged)
         row.addWidget(self.spin)
-        outer.addLayout(row)
-        self.buttons = QHBoxLayout()
-        self.tone_button = QPushButton(tr("▶ Play tone"))
-        self.tone_button.setCheckable(True)
-        self.buttons.addWidget(self.tone_button)
-        self.sweep_button = QPushButton(tr("〰 Sweep around it"))
-        self.sweep_button.setCheckable(True)
-        self.sweep_button.setToolTip(tr("A slow sweep around the slider's frequency: the resonance is "
-                                        "where it sounds loudest."))
-        self.buttons.addWidget(self.sweep_button)
-        self.pink_button = QPushButton(tr("≈ Pink noise + EQ"))
-        self.pink_button.setCheckable(True)
-        self.pink_button.setToolTip(tr("Plays pink noise through your EQ. Move the slider while it plays "
-                                       "until the treble sounds smooth, with no harsh or hissy spot."))
-        self.buttons.addWidget(self.pink_button)
-        self.buttons.addStretch(1)
-        outer.addLayout(self.buttons)
+        self.extra = QHBoxLayout()
+        row.addLayout(self.extra)
 
     def set_value(self, hz: int) -> None:
         for widget in (self.slider, self.spin):
@@ -87,10 +79,16 @@ class ResonanceControls(QWidget):
     def value(self) -> int:
         return self.slider.value()
 
-    def set_playing(self, what: str | None) -> None:
-        self.tone_button.setChecked(what == "tone")
-        self.sweep_button.setChecked(what == "focus")
-        self.pink_button.setChecked(what == "pink")
+    def set_focused(self, focused: bool) -> None:
+        font = self.label.font()
+        font.setBold(focused)
+        self.label.setFont(font)
+
+
+# (kind, idle label, playing label)
+SOUNDS = (("tone", "▶ Play tone", "■ Stop tone"),
+          ("focus", "〰 Sweep around it", "■ Stop sweep"),
+          ("pink", "≈ Pink noise + EQ", "■ Stop noise"))
 
 
 class _TargetItem:
@@ -118,11 +116,21 @@ class TuningPanel(QWidget):
         self.channel_eq = None
         self._targets: list[_TargetItem] = []
         self._syncing = False
-        self._owner: str | None = None   # which control the playing sound belongs to: primary / upper / graph
+        self._graph_tone = False  # the playing tone came from a press on the graph, not a resonance
         self._regen = QTimer(self)
         self._regen.setSingleShot(True)
         self._regen.setInterval(REGENERATE_DELAY_MS)
-        self._regen.timeout.connect(self.regenerate)
+        self._regen.timeout.connect(self._regenerate_live)
+        self._live_job = None
+        self._live_again = False
+        self._sync_generation = 0
+        self._iem_redraw = QTimer(self)
+        self._iem_redraw.setSingleShot(True)
+        self._iem_redraw.setInterval(CURVE_REDRAW_MS)
+        self._iem_redraw.timeout.connect(self._show_iem_curve)
+        self._playing_poll = QTimer(self)
+        self._playing_poll.setInterval(40)
+        self._playing_poll.timeout.connect(self._show_playing)
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -188,23 +196,68 @@ class TuningPanel(QWidget):
         self.readout.setFont(font)
         self.readout.setMinimumWidth(self.readout.fontMetrics().horizontalAdvance("00,000 Hz") + 8)
         readout.addWidget(self.readout)
+        readout.addStretch(1)
         row.addLayout(readout)
-        self.primary = ResonanceControls(tr("Resonance"), tr("Resonance frequency"), CONTROL_RANGE, 10, 100)
+        rows = QVBoxLayout()
+        self.primary = ResonanceRow(tr("Resonance"), tr("Resonance frequency"), CONTROL_RANGE, 10, 100)
         self.primary.valueChanged.connect(self.set_primary_hz)
         self.peak_slider, self.peak_spin = self.primary.slider, self.primary.spin
-        self.tone_button, self.sweep_button = self.primary.tone_button, self.primary.sweep_button
-        self.pink_button = self.primary.pink_button
+        rows.addWidget(self.primary)
+        self.upper = ResonanceRow(tr("Upper treble"), tr("Upper resonance frequency"),
+                                  PERSONAL_TREBLE_RANGE, 50, 250)
+        self.upper.valueChanged.connect(self._upper_moved)
+        self.upper_slider, self.upper_spin = self.upper.slider, self.upper.spin
+        self.reset_upper = QPushButton(tr("Reset"))
+        self.reset_upper.setToolTip(tr("Put this ear's upper treble back as calibrated."))
+        self.reset_upper.clicked.connect(self._reset_upper)
+        self.upper.extra.addWidget(self.reset_upper)
+        self._reset_space = QWidget()  # keeps both sliders the same length
+        self._reset_space.setFixedWidth(self.reset_upper.sizeHint().width())
+        self.primary.extra.addWidget(self._reset_space)
+        self.upper.hide()
+        rows.addWidget(self.upper)
+
+        # one set of sound buttons for whichever resonance is selected; each starts and stops its sound
+        listen = QHBoxLayout()
+        self.sound_buttons: dict[str, QPushButton] = {}
+        for kind, idle, _playing in SOUNDS:
+            button = QPushButton(tr(idle))
+            button.setCheckable(True)
+            button.clicked.connect(lambda _=False, k=kind: self._toggle(k))
+            listen.addWidget(button)
+            self.sound_buttons[kind] = button
+        self.tone_button = self.sound_buttons["tone"]
+        self.sweep_button = self.sound_buttons["focus"]
+        self.pink_button = self.sound_buttons["pink"]
         self.tone_button.setObjectName("primary")
-        self.tone_button.clicked.connect(lambda: self._toggle("tone", "primary"))
-        self.sweep_button.clicked.connect(lambda: self._toggle("focus", "primary"))
-        self.pink_button.clicked.connect(lambda: self._toggle("pink", "primary"))
-        self.stop_button = QPushButton(tr("■ Stop (Space)"))
-        self.stop_button.clicked.connect(self.audio.stop_all)
-        self.primary.buttons.insertWidget(3, self.stop_button)
-        row.addWidget(self.primary, 1)
+        self.sweep_button.setToolTip(tr("A slow sweep around the selected frequency: the resonance is where "
+                                        "it sounds loudest."))
+        self.pink_button.setToolTip(tr("Pink noise through your EQ. Move the slider while it plays until the "
+                                       "treble sounds smooth, with no harsh or hissy spot."))
+        for button in self.sound_buttons.values():  # wide enough for either label: no jumping
+            width = max(button.fontMetrics().horizontalAdvance(tr(t)) for _k, *texts in SOUNDS for t in texts)
+            button.setMinimumWidth(width + 28)
+        listen.addSpacing(8)
+        self.focus_label = QLabel(tr("at"))
+        self.focus_label.setObjectName("hint")
+        listen.addWidget(self.focus_label)
+        self.focus_primary = QPushButton(tr("Resonance"))
+        self.focus_upper = QPushButton(tr("Upper treble"))
+        self._focus_group = QButtonGroup(self)
+        for button, which in ((self.focus_primary, "primary"), (self.focus_upper, "upper")):
+            button.setCheckable(True)
+            button.setObjectName("segment")
+            self._focus_group.addButton(button)
+            button.clicked.connect(lambda _=False, w=which: self.set_focus(w))
+            listen.addWidget(button)
+        listen.addStretch(1)
+        rows.addLayout(listen)
+        row.addLayout(rows, 1)
         card.body.addLayout(row)
+        self.focus = "primary"
+        self._sync_focus_widgets()
         self.pink_hint = hint(tr(
-            "Pink noise is playing through your EQ. Move the resonance slowly: where it's right, the treble "
+            "Pink noise is playing through your EQ. Move the slider slowly: where it's right, the treble "
             "sounds smooth and even, with no harsh, hissy or dull spot. Switch the EQ off and on to compare."))
         self.pink_hint.hide()
         card.body.addWidget(self.pink_hint)
@@ -255,26 +308,12 @@ class TuningPanel(QWidget):
         self.advanced_body = QWidget()
         body = QVBoxLayout(self.advanced_body)
         body.setContentsMargins(0, 0, 0, 0)
-        body.addWidget(hint(tr("Only if you hear a second, higher peak that still bothers you. Play a tone "
-                               "and move the slider to where you hear it, per ear. Off keeps the EQ as "
-                               "calibrated.")))
+        body.addWidget(hint(tr("Only if you hear a second, higher peak that still bothers you. Turn this on: "
+                               "an Upper treble slider and a pink line appear in step ①. Find the peak the "
+                               "same way, per ear. Off keeps the EQ as calibrated.")))
         self.upper_enabled = QCheckBox(tr("Adjust the upper treble"))
         self.upper_enabled.toggled.connect(self._set_upper_enabled)
         body.addWidget(self.upper_enabled)
-        self.upper = ResonanceControls(tr("Upper resonance"), tr("Upper resonance frequency"),
-                                       PERSONAL_TREBLE_RANGE, 50, 250)
-        self.upper.valueChanged.connect(self._upper_moved)
-        self.upper_slider, self.upper_spin = self.upper.slider, self.upper.spin
-        self.upper_tone = self.upper.tone_button
-        self.upper_tone.clicked.connect(lambda: self._toggle("tone", "upper"))
-        self.upper.sweep_button.clicked.connect(lambda: self._toggle("focus", "upper"))
-        self.upper.pink_button.clicked.connect(lambda: self._toggle("pink", "upper"))
-        self.reset_upper = QPushButton(tr("Reset"))
-        self.reset_upper.setToolTip(tr("Put this ear's upper treble back as calibrated."))
-        self.reset_upper.clicked.connect(self._reset_upper)
-        self.upper.buttons.insertWidget(3, self.reset_upper)
-        body.addWidget(self.upper)
-        body.addWidget(hint(tr("Or drag the pink line on the graph.")))
         self.advanced_body.hide()
         card.body.addWidget(self.advanced_body)
         card.body.addStretch(1)
@@ -397,9 +436,9 @@ class TuningPanel(QWidget):
         if self._syncing or self.session is None:
             return
         value = self.session.set_primary(self.side, round(float(hz)))
+        self._follow("primary", value)       # sound first: it must not wait for drawing
         self._sync_peak_controls()
-        self._show_iem_curve()
-        self._follow("primary", value)
+        self._iem_redraw.start()
         self._schedule_regen()
 
     def _marker_dragged(self, hz: float) -> None:
@@ -411,48 +450,88 @@ class TuningPanel(QWidget):
         self._upper_moved(int(round(hz)))
 
     def _graph_clicked(self, hz: float) -> None:
+        """Press/drag on the graph: a tone at that frequency (it doesn't move a resonance)."""
         if self.session is None:
             return
-        if self.audio.playing == "tone" and self._owner == "graph":
+        if self.audio.playing == "tone" and self._graph_tone:
             self.audio.set_tone(hz)
+            self._show_playing()
         else:
             self.audio.play_tone(hz, self.side)
-            self._owner = "graph"
+            self._graph_tone = True
             self._sync_play_buttons()
 
-    def _follow(self, owner: str, hz: float) -> None:
-        """A playing tone follows the control being moved (and now belongs to it)."""
+    # ── which resonance the sound buttons play ─────────────────────────────
+    def set_focus(self, which: str) -> None:
+        """Select the resonance the sound buttons play at; a playing tone or sweep moves there."""
+        if which == "upper" and not (self.session is not None and self.session.upper_enabled):
+            which = "primary"
+        changed = which != self.focus
+        self.focus = which
+        self._sync_focus_widgets()
+        if changed and self.audio.playing in ("tone", "focus") and self.session is not None:
+            self._start(self.audio.playing)
+
+    def _sync_focus_widgets(self) -> None:
+        upper_on = self.session is not None and self.session.upper_enabled
+        if not upper_on:
+            self.focus = "primary"
+        for widget in (self.focus_label, self.focus_primary, self.focus_upper):
+            widget.setVisible(upper_on)
+        self.focus_primary.setChecked(self.focus == "primary")
+        self.focus_upper.setChecked(self.focus == "upper")
+        self.primary.set_focused(upper_on and self.focus == "primary")
+        self.upper.set_focused(upper_on and self.focus == "upper")
+        self._reset_space.setVisible(upper_on)
+        self._sync_readout()
+
+    def _sync_readout(self) -> None:
+        """The big number shows the selected resonance."""
+        if self.session is None or self.side is None:
+            return
+        side = side_name(self.side)
+        if self.focus == "upper":
+            self.readout_side.setText(tr("{side} upper treble").format(side=side))
+            self.readout.setText(f"{self.upper_slider.value():,} Hz")
+        else:
+            self.readout_side.setText(tr("{side} resonance").format(side=side))
+            self.readout.setText(f"{int(round(self.session.primary[self.side])):,} Hz")
+
+    def _follow(self, which: str, hz: float) -> None:
+        """Touching a slider or line selects it; a playing tone follows it."""
+        if self.focus != which:
+            self.focus = which
+            self._sync_focus_widgets()
         if self.audio.playing == "tone":
             self.audio.set_tone(hz)
-            if self._owner != owner:
-                self._owner = owner
-                self._sync_play_buttons()
+            self._graph_tone = False
+            self._show_playing()
 
     def _schedule_regen(self) -> None:
         self._regen.setInterval(LIVE_REGENERATE_DELAY_MS if self.audio.playing == "pink" else REGENERATE_DELAY_MS)
         self._regen.start()
 
-    def _control_hz(self, owner: str) -> float:
-        if owner == "upper":
+    def _focus_hz(self) -> float:
+        if self.focus == "upper":
             return float(self.upper_slider.value())
         return float(self.session.primary[self.side])
 
-    def _start(self, kind: str, owner: str) -> None:
-        hz = self._control_hz(owner)
+    def _start(self, kind: str) -> None:
         if kind == "tone":
-            self.audio.play_tone(hz, self.side)
+            self.audio.play_tone(self._focus_hz(), self.side)
         elif kind == "focus":
-            self.audio.play_focus_sweep(hz, self.side)
+            self.audio.play_focus_sweep(self._focus_hz(), self.side)
         else:
             self.audio.set_eq_enabled(True)  # the point is to hear the EQ while moving the resonance
             self.audio.play_pink(self.side)
-        self._owner = owner
+        self._graph_tone = False
 
-    def _toggle(self, kind: str, owner: str) -> None:
-        if self.audio.playing == kind and self._owner == owner:
+    def _toggle(self, kind: str) -> None:
+        """Each sound button starts its sound, and stops it when pressed again (as in EQ Helper)."""
+        if self.audio.playing == kind:
             self.audio.stop_all()
         elif self.session is not None:
-            self._start(kind, owner)
+            self._start(kind)
         self._sync_play_buttons()
 
     def _ear_changed(self, _index) -> None:
@@ -461,18 +540,29 @@ class TuningPanel(QWidget):
         self._sync_controls()
         self._show_eq_curves()
         playing = self.audio.playing
-        if playing in ("tone", "focus", "pink") and self._owner in ("primary", "upper"):
-            self._start(playing, self._owner)
+        if playing in ("tone", "focus", "pink") and not self._graph_tone:
+            self._start(playing)
         elif playing == "tone":
             self.audio.route(self.side)
 
     def _sync_play_buttons(self) -> None:
         playing = self.audio.playing
-        if playing is None:
-            self._owner = None
-        self.primary.set_playing(playing if self._owner == "primary" else None)
-        self.upper.set_playing(playing if self._owner == "upper" else None)
-        self.pink_hint.setVisible(playing == "pink" and self._owner in ("primary", "upper"))
+        if playing != "tone":
+            self._graph_tone = False
+        for kind, idle, active in SOUNDS:
+            button = self.sound_buttons[kind]
+            on = playing == kind
+            button.setChecked(on)
+            button.setText(tr(active) if on else tr(idle))
+        self.pink_hint.setVisible(playing == "pink")
+        if playing in ("tone", "focus", "sweep"):
+            self._playing_poll.start()
+        else:
+            self._playing_poll.stop()
+        self._show_playing()
+
+    def _show_playing(self) -> None:
+        self.graph.set_playing(self.audio.playing_frequency())
 
     def show_details(self) -> None:
         if self.session is None:
@@ -530,6 +620,7 @@ class TuningPanel(QWidget):
             return
         self.session.upper_enabled = bool(enabled)
         self._sync_upper_controls()
+        self.set_focus("upper" if enabled else "primary")
         self.regenerate()
 
     def _upper_moved(self, hz: int) -> None:
@@ -541,6 +632,7 @@ class TuningPanel(QWidget):
             return
         self.session.set_upper(self.side, hz)
         self._follow("upper", hz)
+        self._sync_readout()
         self._schedule_regen()
 
     def _reset_upper(self) -> None:
@@ -573,8 +665,7 @@ class TuningPanel(QWidget):
         self.peak_spin.setValue(hz)
         self._syncing = False
         self.graph.set_marker(hz)
-        self.readout.setText(f"{hz:,} Hz")
-        self.readout_side.setText(tr("{side} resonance").format(side=side_name(self.side)))
+        self._sync_readout()
         peaks = self.model.peaks
         lo, hi = float(np.min(peaks)), float(np.max(peaks))
         outside = not lo <= hz <= hi
@@ -591,12 +682,61 @@ class TuningPanel(QWidget):
         hz = int(round(self.session.upper.get(self.side) or self._predicted_upper()))
         self.upper.set_value(hz)
         self._syncing = False
-        self.upper.setEnabled(enabled)
+        self.upper.setVisible(enabled)
         self.graph.set_upper_marker(hz if enabled else None)
+        self._sync_focus_widgets()
 
     # ── EQ and graph ───────────────────────────────────────────────────────
+    def _regenerate_live(self) -> None:
+        """Rebuild the EQ and its preview filters on a worker while sliders move (latest wins)."""
+        if self.session is None or self.session.target is None:
+            return
+        if self._live_job is not None:
+            self._live_again = True
+            return
+        from eq_helper.dsp.resonance import match_channels
+        s = self.session
+        measurements, primary, target, name = s.measurements, dict(s.primary), s.target, s.target_name
+        upper = dict(s.upper) if s.upper_enabled else None
+        rate, audio, generation = int(self.audio.engine.sample_rate), self.audio, self._sync_generation
+
+        def work():
+            eq = match_channels(measurements, primary, *target, name, personal_treble=upper)
+            return generation, eq, audio.design_firs(eq, rate)
+
+        job = Worker(work)
+        job.finished_ok.connect(self._live_done)
+        job.failed.connect(self._live_failed)
+        job.finished.connect(lambda: _LIVE_JOBS.discard(job))
+        _LIVE_JOBS.add(job)
+        self._live_job = job
+        job.start()
+
+    def _live_finished(self) -> None:
+        self._live_job = None
+        if self._live_again:
+            self._live_again = False
+            self._regenerate_live()
+
+    def _live_done(self, result) -> None:
+        generation, eq, designed = result
+        self._live_finished()
+        if generation != self._sync_generation or self.session is None:
+            return  # a direct regenerate (target, history…) happened since: it wins
+        self.channel_eq = eq
+        self.audio.offer_firs(eq, designed)
+        self._show_eq_curves()
+        self.remember()
+        self.eqChanged.emit(eq)
+
+    def _live_failed(self, message: str) -> None:
+        self._live_finished()
+        self.range_warning.setText(message)
+        self.range_warning.show()
+
     def regenerate(self) -> None:
         self._regen.stop()
+        self._sync_generation += 1
         if self.session is None or self.session.target is None:
             return
         try:

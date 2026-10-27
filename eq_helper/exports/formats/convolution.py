@@ -7,6 +7,10 @@ Packaging variants (chosen per catalog entry):
 * ``per_rate_named`` — one stereo WAV per rate named ``<base> <rate>.wav`` so a
   CamillaDSP ``$samplerate$`` filename picks the right one; config snippet in
   the README.
+* ``apo_rates`` — one stereo WAV per common rate plus ``<base> convolution.txt``,
+  an Equalizer APO include file whose ``If: sampleRate == …`` blocks load the
+  WAV matching the device rate (APO refuses a convolution file at another rate,
+  so this keeps working when the device's rate changes).
 * ``roon_zip`` — upload-ready zip: per-rate stereo WAVs plus one ``.cfg`` per
   rate, relative paths only.
 
@@ -26,7 +30,8 @@ from eq_helper.dsp.resonance import ChannelEQ
 
 from .base import ExportMeta, prepend_readme, register
 
-PACKAGINGS = ("stereo_single_rate", "per_rate_named", "roon_zip")
+PACKAGINGS = ("stereo_single_rate", "per_rate_named", "apo_rates", "roon_zip")
+APO_RATES = (44100, 48000, 88200, 96000, 176400, 192000)
 CAMILLA_RATES = (44100, 48000, 88200, 96000)
 ROON_RATES = (44100, 48000, 88200, 96000, 176400, 192000)
 
@@ -84,6 +89,17 @@ def camilla_snippet(base_name: str, folder: Path) -> list[str]:
     ]
 
 
+def apo_include(base_name: str, rates, meta: ExportMeta) -> str:
+    """Equalizer APO config that convolves with the file matching the running sample rate."""
+    lines = [f"# {line}" for line in meta.header_lines()]
+    lines += ["# Convolution: the file matching the device's sample rate is used.",
+              "# Equalizer APO can't resample a convolution file, so each rate has its own."]
+    for i, rate in enumerate(rates):
+        lines += [f"{'If' if i == 0 else 'ElseIf'}: sampleRate == {rate}", f"Convolution: {base_name} {rate}.wav"]
+    lines += ["EndIf:"]
+    return "\n".join(lines) + "\n"
+
+
 def roon_cfg(rate: int, wav_name: str) -> str:
     """Roon convolution config: stereo in/out, file channel 0 -> L, 1 -> R."""
     return "\n".join([f"{rate} 2 2 0", "0 0", "0 0",
@@ -126,6 +142,18 @@ class ConvolutionFormat:
             readme = conv.write_readme(folder, base_name, entries, phase=phase, fmt=fmt, layout="stereo")
             prepend_readme(readme, meta, camilla_snippet(base_name, folder))
             return written + [readme]
+
+        if packaging == "apo_rates":
+            rates = _check_rates(options.get("sample_rates", APO_RATES))
+            written, entries = _render_named(curves, rates, phase, fmt, folder,
+                                             lambda rate: f"{base_name} {rate}.wav")
+            include = folder / f"{base_name} convolution.txt"
+            include.write_text(apo_include(base_name, rates, meta), encoding="utf-8")
+            readme = conv.write_readme(folder, base_name, entries, phase=phase, fmt=fmt, layout="stereo")
+            prepend_readme(readme, meta, [
+                "Equalizer APO: copy every file into Equalizer APO's config folder and add",
+                f"“Include: {include.name}” to config.txt. It picks the file for the current sample rate."])
+            return [include, *written, readme]
 
         # roon_zip: build in memory so no loose files are left beside the zip.
         rates = _check_rates(options.get("sample_rates", ROON_RATES))

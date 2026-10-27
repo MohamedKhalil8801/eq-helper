@@ -91,9 +91,24 @@ def test_every_catalog_app_exports_files(catalog, eq, tmp_path, app_id):
 
 
 def test_device_rate_fills_placeholder(catalog, eq, tmp_path):
-    result = export_for_app(catalog.get("equalizer-apo"), eq, tmp_path, "Nova", META,
-                            format_index=1, device_rate=44100)
+    result = export_for_app(catalog.get("easyeffects"), eq, tmp_path, "Nova", META,
+                            format_index=0, device_rate=44100)
     assert [p.name for p in result.files if p.suffix == ".wav"] == ["Nova 44.1kHz.wav"]
+
+
+def test_equalizer_apo_defaults_to_convolution_for_every_rate(catalog, eq, tmp_path):
+    """APO can't resample a convolution file, so the export has one per rate and picks by sampleRate."""
+    apo = catalog.get("equalizer-apo")
+    assert [f.format for f in apo.formats] == ["convolution", "graphic_eq"]
+    result = export_for_app(apo, eq, tmp_path, "Nova", META, format_index=0, device_rate=44100)
+    wavs = sorted(p.name for p in result.files if p.suffix == ".wav")
+    assert wavs == sorted(f"Nova {r}.wav" for r in (44100, 48000, 88200, 96000, 176400, 192000))
+    include = next(p for p in result.files if p.name == "Nova convolution.txt")
+    lines = include.read_text(encoding="utf-8").splitlines()
+    body = [line for line in lines if not line.startswith("#")]
+    assert body[:2] == ["If: sampleRate == 44100", "Convolution: Nova 44100.wav"]
+    assert "ElseIf: sampleRate == 48000" in body and body[-1] == "EndIf:"
+    assert any("Customer:" in line for line in lines if line.startswith("#"))
 
 
 def test_adding_an_app_needs_no_code(eq, tmp_path):

@@ -51,12 +51,16 @@ find the resonance in the wrong place. The app names the EQ apps it finds on you
 own EQ is still on in Equalizer APO it offers to turn it off while you tune (apply again when you're done).
 
 1. Put both IEMs in as you normally wear them, with your usual tips.
-2. On the **Left** tab, press **▶ Play tone**. The tone plays in your left ear only.
+2. On the **Left** tab, press **▶ Play tone**. The tone plays in your left ear only, and a dotted line on
+   the graph shows the frequency that's playing.
 3. Move the slider, type a frequency or drag the orange **Resonance** line on the graph until the tone
    sounds **loudest or most piercing**. That's your left resonance. **Sweep around it** plays a slow
-   sweep around the slider's frequency if that's easier to judge. The resonance is where the sweep gets
-   loudest.
+   sweep around that frequency if that's easier to judge (the dotted line follows the sweep). The
+   resonance is where the sweep gets loudest.
 4. Do the same on the **Right** tab.
+
+Each sound button starts its sound and stops it when you press it again (it reads **■ Stop tone** while
+playing). Space, or **Stop all sound** at the bottom, stops everything.
 
 To check by ear, press **≈ Pink noise + EQ**: pink noise plays through your EQ (the EQ switches on). Move
 the resonance slowly while it plays; where it's right, the treble sounds smooth and even, with no harsh,
@@ -64,7 +68,7 @@ hissy or dull spot.
 
 The graph shows **Your IEM** (what the calibration predicts for your setting), the **Target** and
 **With your EQ**. Point at the graph to see the frequency under the mouse; click or drag on it to hear a
-tone at that frequency (Space stops it). If you land outside what was measured for your IEMs, the app
+tone at that frequency. If you land outside what was measured for your IEMs, the app
 tells you so: the EQ there is an estimate, which is fine if it sounds right.
 
 ## ② Choose your target
@@ -75,9 +79,9 @@ try any other, or **Import…** a target curve (TXT or CSV, frequency and level)
 ## ③ Fine-tune upper treble (advanced, optional)
 
 Only if you hear a second, higher peak (above about 10.5 kHz) that still bothers you. Turn on **Adjust
-the upper treble**: a pink **Upper** line appears on the graph, and the controls work like step ①
-(slider, frequency box, **Play tone**, **Sweep around it**, **Pink noise + EQ**, or drag the line). Move
-it to where you hear the peak, per ear. **Reset** puts the selected ear back. Leave it off otherwise: off
+the upper treble**: an **Upper treble** slider appears under the resonance slider in step ①, with a pink
+**Upper** line on the graph. The same sound buttons play at whichever one you last moved (or pick
+**Resonance** or **Upper treble** next to them). Move it to where you hear the peak, per ear. **Reset** puts the selected ear back. Leave it off otherwise: off
 keeps the EQ as calibrated.
 
 ## ④ Listen & save
@@ -107,9 +111,11 @@ note and files. **Reapply** puts every control back exactly as it was, even if t
 - for parametric EQ apps, how closely the filters match (for example “within ±1 dB up to 16 kHz”),
 - **Installed** if the app was found on this computer, a **Download** button and **How to set it up**.
 
-Press **Export for this app**, choose a folder, and follow the steps shown. For a phone, copy the files
+Press **Export for this app**, choose a folder, and follow the steps shown. For Equalizer APO the
+export is a convolution by default: one file for each sample rate plus `… convolution.txt`, which picks
+the file for the rate your device runs at (GraphicEQ is still there as an option). For a phone, copy the files
 over first (USB, a cloud drive or email). For convolution files, the only setting is the sample rate,
-pre-filled from your output device. Choose the rate your device runs at.
+pre-filled with the rate your output device runs at.
 
 The same cards are on the **Where can I use my EQ?** tab. **Predicted response** exports your IEM's
 predicted curves (left and right, optionally with the EQ) for squig.link or PEQdB studio.

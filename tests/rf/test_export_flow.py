@@ -157,7 +157,16 @@ def test_catalog_page_browses_same_cards_without_export(qtbot, tmp_path):
     assert "wavelet" in page.card_ids()
     card = page.cards["wavelet"]
     assert not card.export_buttons
-    assert card.download_button is not None
+    assert card.download_button is not None and card.website_button is None
+
+
+def test_installed_apps_show_website_instead_of_download(qtbot):
+    page = AppCatalogPage(load_catalog(), platform="windows", installed={"equalizer-apo"})
+    qtbot.addWidget(page)
+    page.choose("this_computer", "windows")
+    installed, other = page.cards["equalizer-apo"], page.cards["foobar2000"]
+    assert installed.download_button is None and installed.website_button is not None
+    assert other.download_button is not None and other.website_button is None
 
 
 def test_export_button_on_main_window_opens_flow(qtbot, win, monkeypatch):

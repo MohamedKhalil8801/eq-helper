@@ -21,6 +21,17 @@ from .common import COLOR_IEM, COLOR_MARKER, COLOR_TARGET, COLOR_UPPER, COLOR_WI
 
 _TICKS = [20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000]
 F_MIN, F_MAX = 20.0, 20000.0
+DISPLAY_POINTS = 1600  # ≈ 1/160 octave: finer than the screen, far lighter than a 55k-point measurement
+
+
+def thin_for_display(freqs, db, points: int = DISPLAY_POINTS):
+    """Resample a dense curve onto a log-spaced grid for drawing (the data itself is untouched)."""
+    freqs, db = np.asarray(freqs, dtype=float), np.asarray(db, dtype=float)
+    if freqs.size <= points * 1.5:
+        return freqs, db
+    lo, hi = max(freqs[0], F_MIN * 0.9), min(freqs[-1], F_MAX * 1.1)
+    grid = np.geomspace(lo, hi, points)
+    return grid, np.interp(np.log(grid), np.log(freqs), db)
 
 
 def hz_label(hz: float) -> str:
@@ -90,6 +101,15 @@ class ResponseGraph(QWidget):
         self.plot.addItem(self.hover_label, ignoreBounds=True)
         self.hover_hz: float | None = None
 
+        # what's playing now (tone or sweep position)
+        self.playing_line = pg.InfiniteLine(angle=90, movable=False, label="",
+                                            labelOpts={"position": 0.79, "movable": False,
+                                                       "anchors": [(0, 0.5), (0, 0.5)]})
+        self.playing_line.setZValue(9)
+        self.playing_line.hide()
+        self.plot.addItem(self.playing_line, ignoreBounds=True)
+        self.playing_hz: float | None = None
+
         self.marker = _marker(COLOR_MARKER, tr("Resonance"))
         self.plot.addItem(self.marker)
         self.marker.sigPositionChanged.connect(lambda line: self.markerMoved.emit(10 ** line.value()))
@@ -127,6 +147,9 @@ class ResponseGraph(QWidget):
         fill = pal.color(QPalette.Base)
         fill.setAlpha(220)
         self.hover_label.fill = pg.mkBrush(fill)
+        playing = pal.color(QPalette.Highlight)
+        self.playing_line.setPen(pg.mkPen(playing, width=2, style=Qt.DotLine))
+        self.playing_line.label.setColor(playing)
 
     def changeEvent(self, event) -> None:
         if event.type() in (QEvent.PaletteChange, QEvent.ApplicationPaletteChange):
@@ -138,7 +161,7 @@ class ResponseGraph(QWidget):
         if freqs is None:
             self._curves[key].setData([], [])
         else:
-            self._curves[key].setData(np.asarray(freqs, dtype=float), np.asarray(db, dtype=float))
+            self._curves[key].setData(*thin_for_display(freqs, db))
 
     def curve_names(self) -> list[str]:
         return [item.name() for item in self._curves.values()]
@@ -174,6 +197,16 @@ class ResponseGraph(QWidget):
 
     def upper_marker_hz(self) -> float:
         return 10 ** self.upper_marker.value()
+
+    def set_playing(self, hz: float | None) -> None:
+        """Show the frequency that's playing (a dotted line labelled "▶ 7,700 Hz")."""
+        self.playing_hz = hz
+        if hz is None or not F_MIN <= hz <= F_MAX:
+            self.playing_line.hide()
+            return
+        self.playing_line.setValue(math.log10(hz))
+        self.playing_line.label.setFormat("▶ " + hz_text(hz))
+        self.playing_line.show()
 
     # ── hover ──────────────────────────────────────────────────────────────
     def _view_hz(self, scene_pos) -> float | None:

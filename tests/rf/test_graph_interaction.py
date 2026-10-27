@@ -84,13 +84,17 @@ def test_upper_resonance_has_its_own_line_like_the_primary(qtbot, panel):
     assert panel.session.upper == {"L": 14200}
     panel.upper_spin.setValue(15000)
     assert graph.upper_marker_hz() == pytest.approx(15000, rel=1e-6)
-    # same buttons as the primary resonance; a playing tone follows its own slider
-    panel.upper_tone.click()
+    # one set of sound buttons; turning the upper treble on selects it, touching a slider selects that one
+    assert panel.focus == "upper" and panel.upper.isVisibleTo(panel) and panel.focus_upper.isChecked()
+    panel.tone_button.click()
     assert panel.audio.engine.state.snapshot().freq == pytest.approx(15000)
-    assert panel.upper_tone.isChecked() and not panel.tone_button.isChecked()
     panel.upper_slider.setValue(13000)
     assert panel.audio.engine.state.snapshot().freq == pytest.approx(13000)
-    panel.upper.sweep_button.click()
+    panel.peak_slider.setValue(7600)                                  # the tone follows whichever you move
+    assert panel.focus == "primary" and panel.audio.engine.state.snapshot().freq == pytest.approx(7600)
+    panel.focus_upper.click()                                         # or pick it explicitly
+    assert panel.audio.engine.state.snapshot().freq == pytest.approx(13000)
+    panel.sweep_button.click()
     assert panel.audio.engine.state.snapshot().mode == Mode.SWEEP
     panel.audio.stop_all()
     panel.upper_enabled.setChecked(False)
@@ -170,3 +174,41 @@ def test_dragging_the_resonance_line_with_the_mouse_moves_the_resonance(qtbot, p
     assert panel.session.primary["L"] == pytest.approx(8600, rel=0.02)
     assert panel.peak_slider.value() == panel.session.primary["L"]
     assert panel.audio.playing is None  # grabbing the line doesn't start a tone
+
+
+def test_a_line_shows_what_is_playing(qtbot, panel):
+    graph = panel.graph
+    assert not graph.playing_line.isVisible()
+    panel.tone_button.click()
+    hz = panel.session.primary[panel.side]
+    assert graph.playing_line.isVisible() and graph.playing_hz == pytest.approx(hz)
+    assert graph.playing_line.label.toPlainText() == f"▶ {hz:,.0f} Hz"
+    panel.peak_slider.setValue(8100)
+    assert graph.playing_hz == pytest.approx(8100)
+    _send(graph, QEvent.MouseButtonPress, _point_for(graph, 2000, -20), Qt.LeftButton)
+    assert graph.playing_hz == pytest.approx(2000, rel=0.03)
+    _send(graph, QEvent.MouseButtonRelease, _point_for(graph, 2000, -20), Qt.NoButton)
+    panel.sweep_button.click()                      # the line follows the sweep
+    first = graph.playing_hz
+    for _ in range(40):
+        panel.audio.engine.process_block(512)   # no sound card in tests: run the engine by hand
+    qtbot.wait(100)
+    assert graph.playing_hz is not None and graph.playing_hz != pytest.approx(first, rel=1e-6)
+    panel.audio.stop_all()
+    assert not graph.playing_line.isVisible()
+
+
+def test_each_sound_button_starts_and_stops_its_sound(panel):
+    audio = panel.audio
+    assert not panel.focus_primary.isVisibleTo(panel)        # only one resonance: no "at" choice
+    panel.tone_button.click()
+    assert audio.playing == "tone" and panel.tone_button.isChecked()
+    assert panel.tone_button.text().startswith("■")
+    panel.sweep_button.click()                              # another sound replaces it
+    assert audio.playing == "focus" and not panel.tone_button.isChecked()
+    assert panel.tone_button.text().startswith("▶")
+    panel.sweep_button.click()                              # pressing again stops
+    assert audio.playing is None and not panel.sweep_button.isChecked()
+    panel.pink_button.click()
+    panel.pink_button.click()
+    assert audio.playing is None
