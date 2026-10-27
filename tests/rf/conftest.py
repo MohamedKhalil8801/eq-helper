@@ -22,3 +22,11 @@ def write_calibration():
     def write(path, **kwargs):
         return write_rescal(path, make_calibration(**kwargs))
     return write
+
+
+@pytest.fixture(autouse=True)
+def _no_modal_first_launch(monkeypatch):
+    """The walkthrough and "start quiet" prompts are modal; answer them in tests."""
+    from resonancefit.ui import main_window, walkthrough
+    monkeypatch.setattr(walkthrough.Walkthrough, "exec", lambda self: 1)
+    monkeypatch.setattr(main_window.MainWindow, "confirm_quiet_start", lambda self: True)

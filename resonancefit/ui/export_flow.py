@@ -269,7 +269,7 @@ class ExportFlow(QDialog):
             if app.setup_steps:
                 lines += ["", tr("Next, in {app}:").format(app=app.name)]
                 if where == "phone":
-                    lines += [tr("First copy the file(s) to your phone — by USB, a cloud drive, or by "
+                    lines += [tr("First copy the file(s) to your phone by USB, a cloud drive, or by "
                                  "emailing them to yourself.")]
                 lines += [f"{n}. {step}" for n, step in enumerate(app.setup_steps, 1)]
         self.done_title.setText(tr("Exported for {app}").format(app=app.name) if app else tr("Exported"))

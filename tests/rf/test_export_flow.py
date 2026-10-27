@@ -62,7 +62,7 @@ def test_listening_choices_filter_and_installed_first(qtbot, win, tmp_path):
     ids = flow.card_ids()
     assert ids[0] == "roon" and "easyeffects" in ids and ids[-1] == "other"
     assert flow.cards["roon"].installed_badge.isVisibleTo(flow)
-    assert listening_label("this_computer", "linux").endswith("Linux")
+    assert "Linux" in listening_label("this_computer", "linux")
     flow.choose("phone", "android")
     assert "wavelet" in flow.card_ids() and "easyeffects" not in flow.card_ids()
     flow.choose("phone", "ios")

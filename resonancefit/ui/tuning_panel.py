@@ -36,7 +36,7 @@ class _TargetItem:
 
     @property
     def label(self) -> str:
-        return self.name + (tr(" — default") if self.is_default else "")
+        return self.name + (tr(" (default)") if self.is_default else "")
 
 
 class TuningPanel(QWidget):
@@ -86,14 +86,29 @@ class TuningPanel(QWidget):
         card.body.addWidget(self.hint)
 
         self.graph = ResponseGraph()
-        self.graph.setMinimumHeight(260)
+        self.graph.setMinimumHeight(200)
         self.graph.set_marker_bounds(*CONTROL_RANGE)
         self.graph.markerMoved.connect(self._marker_dragged)
         self.graph.frequencyClicked.connect(self._graph_clicked)
         card.body.addWidget(self.graph, 1)
 
         row = QHBoxLayout()
+        readout = QVBoxLayout()
+        readout.setSpacing(0)
+        self.readout_side = QLabel()
+        self.readout_side.setObjectName("hint")
+        readout.addWidget(self.readout_side)
+        self.readout = QLabel()
+        self.readout.setObjectName("bigReadout")
+        font = self.readout.font()
+        font.setPointSizeF(font.pointSizeF() * 2.2)
+        font.setBold(True)
+        self.readout.setFont(font)
+        self.readout.setMinimumWidth(self.readout.fontMetrics().horizontalAdvance("00,000 Hz") + 8)
+        readout.addWidget(self.readout)
+        row.addLayout(readout)
         label = QLabel(tr("Resonance"))
+        label.setObjectName("hint")
         row.addWidget(label)
         self.peak_slider = QSlider(Qt.Horizontal)
         self.peak_slider.setRange(*CONTROL_RANGE)
@@ -164,7 +179,7 @@ class TuningPanel(QWidget):
     def _build_step3(self) -> Card:
         card = Card()
         self.advanced_toggle = QToolButton()
-        self.advanced_toggle.setText(tr("③ Fine-tune upper treble — Advanced (optional)"))
+        self.advanced_toggle.setText(tr("③ Fine-tune upper treble (advanced, optional)"))
         self.advanced_toggle.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self.advanced_toggle.setArrowType(Qt.RightArrow)
         self.advanced_toggle.setCheckable(True)
@@ -440,6 +455,8 @@ class TuningPanel(QWidget):
         self.peak_spin.setValue(hz)
         self._syncing = False
         self.graph.set_marker(hz)
+        self.readout.setText(f"{hz:,} Hz")
+        self.readout_side.setText(tr("{side} resonance").format(side=side_name(self.side)))
         peaks = self.model.peaks
         lo, hi = float(np.min(peaks)), float(np.max(peaks))
         outside = not lo <= hz <= hi

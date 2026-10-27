@@ -43,6 +43,8 @@ class AudioService:
         self._fir_rate: Optional[int] = None
         self._firs = (None, None)
         self._listeners: list[Callable[[], None]] = []
+        self.device_id: Optional[int] = None
+        self.gate: Optional[Callable[[], bool]] = None  # asked before sound starts (quiet warning)
         self.volume = SAFE_START_VOLUME
         self.engine.set_volume(self.volume)
         self.engine.stop()
@@ -74,7 +76,9 @@ class AudioService:
         return audio_engine.list_output_devices()
 
     def set_output_device(self, device_id: Optional[int]) -> None:
+        self.device_id = device_id
         self.engine.set_device_a(device_id)
+        self._changed()
 
     @property
     def device_rate(self) -> int:
@@ -101,7 +105,12 @@ class AudioService:
         self._changed()
 
     # ── sources ────────────────────────────────────────────────────────────
+    def may_play(self) -> bool:
+        """Ask the gate (if any) before making sound; False = stay silent."""
+        return self.gate is None or bool(self.gate())
     def play_tone(self, hz: float, side=None) -> None:
+        if not self.may_play():
+            return
         if side is not None:
             self.route(side)
         self.engine.start_sine(float(hz))
@@ -111,12 +120,16 @@ class AudioService:
         self.engine.set_freq(float(hz))
 
     def play_focus_sweep(self, hz: float, side=None) -> None:
+        if not self.may_play():
+            return
         if side is not None:
             self.route(side)
         self.engine.start_focused_sweep(float(hz), FOCUS_WIDTH_OCTAVES, FOCUS_SECONDS_PER_OCTAVE)
         self._started("focus")
 
     def play_full_sweep(self, side=None) -> None:
+        if not self.may_play():
+            return
         if side is not None:
             self.route(side)
         lo, hi, seconds = FULL_SWEEP
@@ -124,6 +137,8 @@ class AudioService:
         self._started("sweep")
 
     def play_pink(self, side=None) -> None:
+        if not self.may_play():
+            return
         if side is not None:
             self.route(side)
         self.engine.start_pink()

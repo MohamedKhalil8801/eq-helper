@@ -8,6 +8,7 @@ accent colours used for curves are chosen to stay readable on either.
 from __future__ import annotations
 
 from PySide6.QtCore import QCoreApplication, QObject, QThread, Signal
+from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import QFrame, QLabel, QSizePolicy, QVBoxLayout, QWidget
 
 CONTEXT = "CustomerApp"
@@ -72,16 +73,66 @@ def chip(text: str, kind: str = "") -> QLabel:
     return label
 
 
-APP_STYLE = """
-QFrame#card { border: 1px solid palette(mid); border-radius: 10px; background: palette(base); }
-QLabel#hint { color: palette(placeholder-text); }
-QLabel#chip { border: 1px solid palette(mid); border-radius: 9px; padding: 1px 8px; }
-QLabel#chip[kind="yours"] { border-color: #0072B2; }
-QLabel#chip[kind="operator"] { border-color: #009E73; }
-QLabel#chip[kind="default"] { border-color: #E69F00; }
-QLabel#warning { color: #B35900; }
-QPushButton#primary { font-weight: bold; padding: 6px 14px; }
+def _luminance(color: str) -> float:
+    c = QColor(color)
+    def channel(v):
+        v /= 255
+        return v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
+    return 0.2126 * channel(c.red()) + 0.7152 * channel(c.green()) + 0.0722 * channel(c.blue())
+
+
+def contrast_ratio(a: str, b: str) -> float:
+    la, lb = sorted((_luminance(a), _luminance(b)), reverse=True)
+    return (la + 0.05) / (lb + 0.05)
+
+
+def _mix(a: QColor, b: QColor, t: float) -> str:
+    return QColor(round(a.red() * (1 - t) + b.red() * t), round(a.green() * (1 - t) + b.green() * t),
+                  round(a.blue() * (1 - t) + b.blue() * t)).name()
+
+
+def _readable(candidates, background: str) -> str:
+    """First colour with at least 4.5:1 contrast (WCAG AA) on ``background``."""
+    for color in candidates:
+        if contrast_ratio(color, background) >= 4.5:
+            return color
+    return candidates[-1]
+
+
+def theme_colors(palette: QPalette) -> dict[str, str]:
+    """Colour tokens for the current light or dark palette, all AA-readable."""
+    base, text = palette.color(QPalette.Base), palette.color(QPalette.Text)
+    dark = base.lightness() < 128
+    bg = base.name()
+    hint = _readable([_mix(text, base, t) for t in (0.38, 0.3, 0.22, 0.12, 0.0)], bg)
+    warning = _readable(["#FFB366", "#FFC98F"] if dark else ["#A64B00", "#8A3E00"], bg)
+    primary = "#3A9AD9" if dark else "#0072B2"
+    on_primary = _readable(["#FFFFFF", "#000000"], primary)
+    return {"base": bg, "text": text.name(), "hint": hint, "warning": warning, "primary": primary,
+            "primary_text_on_primary": on_primary, "border": _mix(text, base, 0.78), "dark": dark}
+
+
+def build_style(palette: QPalette) -> str:
+    c = theme_colors(palette)
+    return f"""
+QFrame#card {{ border: 1px solid {c['border']}; border-radius: 10px; background: {c['base']}; }}
+QLabel#hint {{ color: {c['hint']}; }}
+QLabel#warning {{ color: {c['warning']}; }}
+QLabel#chip {{ border: 1px solid {c['border']}; border-radius: 9px; padding: 1px 8px; }}
+QLabel#chip[kind="yours"] {{ border-color: {COLOR_TARGET}; }}
+QLabel#chip[kind="operator"] {{ border-color: {COLOR_WITH_EQ}; }}
+QLabel#chip[kind="default"] {{ border-color: {COLOR_IEM}; }}
+QLabel#bigReadout {{ color: {c['text']}; }}
+QPushButton#primary {{ background: {c['primary']}; color: {c['primary_text_on_primary']}; font-weight: bold;
+    border: 1px solid {c['primary']}; border-radius: 6px; padding: 6px 14px; }}
+QPushButton#primary:checked {{ background: {_mix(QColor(c['primary']), QColor('#000000'), 0.25)}; }}
+QPushButton#primary:disabled {{ background: {c['border']}; border-color: {c['border']}; }}
+QPushButton:focus, QToolButton:focus, QComboBox:focus, QSlider:focus, QSpinBox:focus,
+QLineEdit:focus, QListWidget:focus, QRadioButton:focus, QCheckBox:focus, QTabBar:focus {{
+    outline: 2px solid {c['primary']}; }}
+QPushButton:focus {{ border: 2px solid {c['primary']}; }}
 """
+
 
 
 class Worker(QThread):

@@ -97,7 +97,7 @@ class HeaderCard(Card):
 
     def set_manifest(self, manifest) -> None:
         self.iem.setText(manifest.iem.display_name)
-        serial = f" · {tr('serial')} {manifest.iem.serial}" if manifest.iem.serial else ""
+        serial = f", {tr('serial')} {manifest.iem.serial}" if manifest.iem.serial else ""
         self.customer.setText(tr("Calibrated for {name} on {date}").format(
             name=manifest.customer.name, date=manifest.created) + serial)
         for widget in self._chips:
@@ -106,7 +106,7 @@ class HeaderCard(Card):
         self._chips = []
         for acc in manifest.accessories:
             kind = "yours" if acc.supplied_by == "customer" else "operator"
-            label = chip(f"{accessory_label(acc.kind)}: {acc.description} — {supplied_label(acc, manifest)}", kind)
+            label = chip(f"{accessory_label(acc.kind)}: {acc.description} ({supplied_label(acc, manifest)})", kind)
             label.setToolTip(tr("Use the same gear when you listen: the calibration was measured with it."))
             self.gear_row.addWidget(label)
             self._chips.append(label)

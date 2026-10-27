@@ -19,7 +19,7 @@ class ListenSaveCard(Card):
         super().__init__(tr("④ Listen & save"), parent)
         self.body.addWidget(hint(tr(
             "Play a tone, a sweep or one of your test songs and switch the EQ on and off to compare.")))
-        self.eq_toggle = QPushButton(tr("EQ is off — click to turn on"))
+        self.eq_toggle = QPushButton(tr("EQ off: click to turn it on"))
         self.eq_toggle.setCheckable(True)
         self.eq_toggle.setMinimumHeight(34)
         self.eq_toggle.toggled.connect(self._toggled)
@@ -91,8 +91,8 @@ class ListenSaveCard(Card):
         self.eqToggled.emit(on)
 
     def _toggled_text(self, on: bool) -> None:
-        self.eq_toggle.setText(tr("EQ is on — click to compare without it") if on
-                               else tr("EQ is off — click to turn on"))
+        self.eq_toggle.setText(tr("EQ on: click to hear without it") if on
+                               else tr("EQ off: click to turn it on"))
 
     def _save(self) -> None:
         self.saveRequested.emit(self.note.text().strip())

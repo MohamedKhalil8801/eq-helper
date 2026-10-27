@@ -6,10 +6,10 @@ from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QEvent, Qt, QTimer, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
-    QHBoxLayout, QInputDialog, QMainWindow, QMessageBox, QStackedWidget, QTabWidget, QVBoxLayout, QWidget,
+    QHBoxLayout, QInputDialog, QMainWindow, QMessageBox, QScrollArea, QStackedWidget, QTabWidget, QVBoxLayout, QWidget,
 )
 
 from eq_helper.calibration.model_cache import load_measurements
@@ -27,7 +27,7 @@ from ..library import LibraryEntry
 from ..paths import is_translocated
 from .about_page import AboutPage
 from .app_catalog_page import AppCatalogPage
-from .common import APP_STYLE, Worker, side_name, tr
+from .common import Worker, build_style, side_name, tr
 from .export_flow import PREDICTED_APP_ID, ExportFlow, ExportJob
 from .header_card import HeaderCard
 from .history_panel import HistoryPanel, friendly_date
@@ -35,7 +35,9 @@ from .import_screen import ImportScreen
 from .listen_save import ListenSaveCard
 from .settings_page import SettingsPage
 from .sound_tools import SoundToolsPage
+from .sound_bar import SoundBar
 from .test_songs import TestSongsPage
+from .walkthrough import Walkthrough
 
 
 @dataclass(frozen=True)
@@ -79,7 +81,7 @@ class MainWindow(QMainWindow):
         self.apo = apo if apo is not None else ApoApplier(ctx.paths.platform, ctx.settings)
         self.setWindowTitle(ctx.branding.title)
         self.setAcceptDrops(True)
-        self.setStyleSheet(APP_STYLE)
+        self.setStyleSheet(build_style(self.palette()))
         self.resize(1180, 860)
 
         self.stack = QStackedWidget()
@@ -98,8 +100,11 @@ class MainWindow(QMainWindow):
         self.tabs = QTabWidget()
         self.tabs.setDocumentMode(True)
         layout.addWidget(self.tabs, 1)
+        self.sound_bar = SoundBar(ctx, self.audio)
+        layout.addWidget(self.sound_bar)
         self.stack.addWidget(self.main_view)
         self._build_tabs()
+        self.audio.gate = self._quiet_gate
 
         self.stop_shortcut = QShortcut(QKeySequence(Qt.Key_Space), self)
         self.stop_shortcut.setContext(Qt.WindowShortcut)
@@ -154,7 +159,12 @@ class MainWindow(QMainWindow):
         self.history_panel.changed.connect(self._sync_saved_tunings)
         self.history_panel.app_names = {app.id: app.name for app in self.catalog.apps}
         self.history_panel.app_names[PREDICTED_APP_ID] = tr("Predicted response")
-        self.tabs.addTab(self.tune_tab, tr("Tune"))
+        tune_scroll = QScrollArea()
+        tune_scroll.setWidgetResizable(True)
+        tune_scroll.setFrameShape(QScrollArea.NoFrame)
+        tune_scroll.setWidget(self.tune_tab)
+        self.tune_tab.setMinimumHeight(700)  # below this, scroll instead of squeezing the graph
+        self.tabs.addTab(tune_scroll, tr("Tune"))
 
         self.songs_page = TestSongsPage(self.ctx, self.audio)
         self.calibrationLoaded.connect(self.songs_page.set_calibration)
@@ -168,10 +178,41 @@ class MainWindow(QMainWindow):
 
         self.settings_page = SettingsPage(self.ctx, self.audio, self.apo)
         self.settings_page.apoDeviceChangeRequested.connect(self.change_apo_device)
+        self.settings_page.walkthroughRequested.connect(self.show_walkthrough)
         self.tabs.addTab(self.settings_page, tr("Settings"))
         self.about_page = AboutPage(self.ctx)
         self.tabs.addTab(self.about_page, tr("About"))
         self.audio.on_change(self._sync_eq_toggle)
+
+    # ── first launch and listening safety ──────────────────────────────────
+    def show_walkthrough(self) -> None:
+        Walkthrough(self.ctx.branding.product_name, self).exec()
+        self.ctx.settings.set("walkthrough_seen", True)
+
+    def confirm_quiet_start(self) -> bool:
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Warning)
+        box.setWindowTitle(tr("Start quiet"))
+        box.setText(tr("Turn your volume down before the first sound."))
+        box.setInformativeText(tr("Test tones can be piercing at the resonance. Start low and raise the "
+                                  "volume slowly; press Space at any time to stop all sound."))
+        play = box.addButton(tr("Volume is down, play"), QMessageBox.AcceptRole)
+        box.addButton(QMessageBox.Cancel)
+        box.exec()
+        return box.clickedButton() is play
+
+    def _quiet_gate(self) -> bool:
+        if self.ctx.settings.get("quiet_warning_seen"):
+            return True
+        if not self.confirm_quiet_start():
+            return False
+        self.ctx.settings.set("quiet_warning_seen", True)
+        return True
+
+    def changeEvent(self, event) -> None:
+        if event.type() in (QEvent.PaletteChange, QEvent.ApplicationPaletteChange):
+            self.setStyleSheet(build_style(self.palette()))
+        super().changeEvent(event)
 
     def _apps_detected(self, installed) -> None:
         self.installed = set(installed)
@@ -183,8 +224,8 @@ class MainWindow(QMainWindow):
         items = []
         for e in entries:
             sides = " ".join(f"{s} {hz:.0f}" for s, hz in sorted(e.tuning.primary.items()))
-            label = f"{friendly_date(e.date)} · {e.target_name} · {sides}"
-            items.append((e.id, label + (f" · {e.note}" if e.note else "")))
+            label = f"{friendly_date(e.date)}: {e.target_name}, {sides}"
+            items.append((e.id, label + (f" ({e.note})" if e.note else "")))
         self.listen.set_saved_tunings(items)
 
     def choose_apo_device(self, devices: list[str]) -> str | None:
@@ -295,6 +336,7 @@ class MainWindow(QMainWindow):
     def _on_audio_ready(self, ok: bool) -> None:
         if ok:
             self.settings_page.refresh_devices()
+            self.sound_bar.output.refresh()
         else:
             self.statusBar().showMessage(
                 tr("Sound is not available: {reason}").format(reason=self.audio.error or tr("no output device")))
@@ -364,6 +406,8 @@ class MainWindow(QMainWindow):
         self.loading = False
         self.statusBar().clearMessage()
         self.calibrationLoaded.emit(loaded)
+        if not self.ctx.settings.get("walkthrough_seen"):
+            QTimer.singleShot(0, self.show_walkthrough)
 
     def _load_failed(self, token: int, entry: LibraryEntry, message: str) -> None:
         if token != self._load_token:

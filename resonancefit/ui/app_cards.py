@@ -28,12 +28,12 @@ def os_name(code: str) -> str:
 
 def listening_label(where: str, os_code: str | None = None) -> str:
     if where == "this_computer":
-        return tr("This computer — {os}").format(os=os_name(os_code))
+        return tr("This computer ({os})").format(os=os_name(os_code))
     if where == "phone":
-        return tr("Phone or tablet — {os}").format(os=os_name(os_code))
+        return tr("Phone or tablet ({os})").format(os=os_name(os_code))
     if where == "hardware":
         return tr("Dongle or DAP")
-    return tr("Another computer — {os}").format(os=os_name(os_code))
+    return tr("Another computer ({os})").format(os=os_name(os_code))
 
 
 def balance_text(balance_db: float) -> str:

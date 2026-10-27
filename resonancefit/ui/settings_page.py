@@ -6,10 +6,11 @@ from importlib import metadata
 
 from PySide6.QtCore import QUrl, Signal
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QMessageBox, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QMessageBox, QPushButton, QVBoxLayout, QWidget
 
 from ..apo_apply import ApoUnwritable
 from .common import Card, hint, tr
+from .sound_bar import OutputPicker
 
 
 def app_version() -> str:
@@ -29,15 +30,9 @@ class SettingsPage(QWidget):
         layout = QVBoxLayout(self)
 
         out = Card(tr("Output"))
-        row = QHBoxLayout()
-        label = QLabel(tr("Play sound on"))
-        row.addWidget(label)
-        self.device_combo = QComboBox()
-        self.device_combo.setAccessibleName(tr("Output device"))
-        self.device_combo.activated.connect(self._device_chosen)
-        label.setBuddy(self.device_combo)
-        row.addWidget(self.device_combo, 1)
-        out.body.addLayout(row)
+        self.output = OutputPicker(ctx, audio, tr("Play sound on"))
+        self.device_combo = self.output.combo
+        out.body.addWidget(self.output)
         out.body.addWidget(hint(tr("Choose the output your IEMs are plugged into. The app remembers it.")))
         layout.addWidget(out)
 
@@ -73,6 +68,7 @@ class SettingsPage(QWidget):
         help_card = Card(tr("Help"))
         row = QHBoxLayout()
         walkthrough = QPushButton(tr("Show the walkthrough again"))
+        walkthrough.setObjectName("walkthroughButton")
         walkthrough.clicked.connect(self.walkthroughRequested)
         row.addWidget(walkthrough)
         row.addStretch(1)
@@ -87,20 +83,7 @@ class SettingsPage(QWidget):
 
     # ── output device ──────────────────────────────────────────────────────
     def refresh_devices(self) -> None:
-        remembered = self.ctx.settings.get("output_device")
-        self.device_combo.clear()
-        self.device_combo.addItem(tr("System default"), None)
-        for device_id, name in self.audio.output_devices():
-            self.device_combo.addItem(name, device_id)
-        index = self.device_combo.findText(remembered) if remembered else 0
-        self.device_combo.setCurrentIndex(max(index, 0))
-        if index > 0:
-            self.audio.set_output_device(self.device_combo.itemData(index))
-
-    def _device_chosen(self, index: int) -> None:
-        self.audio.stop_all()
-        self.audio.set_output_device(self.device_combo.itemData(index))
-        self.ctx.settings.set("output_device", self.device_combo.itemText(index) if index > 0 else None)
+        self.output.refresh()
 
     # ── APO ────────────────────────────────────────────────────────────────
     def refresh_apo(self) -> None:

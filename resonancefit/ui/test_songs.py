@@ -63,7 +63,7 @@ class TestSongsPage(QWidget):
         layout.addWidget(card, 1)
 
         transport = Card(tr("Now playing"))
-        self.now = QLabel(tr("Nothing yet — double-click a song."))
+        self.now = QLabel(tr("Nothing yet. Double-click a song to play it."))
         self.now.setWordWrap(True)
         transport.body.addWidget(self.now)
         row = QHBoxLayout()
@@ -81,7 +81,7 @@ class TestSongsPage(QWidget):
         self.time_label = QLabel("0:00 / 0:00")
         row.addWidget(self.time_label)
         transport.body.addLayout(row)
-        self.eq_toggle = QPushButton(tr("EQ is off — click to turn on"))
+        self.eq_toggle = QPushButton(tr("EQ off: click to turn it on"))
         self.eq_toggle.setCheckable(True)
         self.eq_toggle.setMinimumHeight(34)
         self.eq_toggle.clicked.connect(lambda on: self.audio.set_eq_enabled(on))
@@ -123,7 +123,7 @@ class TestSongsPage(QWidget):
         icon = "🔗" if item.get("kind") == "link" else "♪"
         text = f"{icon}  {item.get('label') or Path(item['path']).name}"
         if operator:
-            text += "  " + tr("— suggested by {name}").format(name=item.get("from"))
+            text += "  " + tr("(suggested by {name})").format(name=item.get("from"))
         row = QListWidgetItem(text)
         row.setData(Qt.UserRole, (item, operator))
         row.setToolTip(item["path"])
@@ -212,6 +212,8 @@ class TestSongsPage(QWidget):
             self.time_label.setText(f"{_clock(self.player.position)} / {_clock(self.player.song.duration)}")
 
     def _start(self) -> None:
+        if not self.audio.may_play():
+            return
         self.audio.engine.stop()  # tones and sweeps give way to the song
         self.audio.route("both")
         self.player.play()
@@ -238,5 +240,5 @@ class TestSongsPage(QWidget):
         self.play_button.setText(tr("❚❚ Pause") if playing else tr("▶ Play"))
         on = self.audio.eq_enabled
         self.eq_toggle.setChecked(on)
-        self.eq_toggle.setText(tr("EQ is on — click to compare without it") if on
-                               else tr("EQ is off — click to turn on"))
+        self.eq_toggle.setText(tr("EQ on: click to hear without it") if on
+                               else tr("EQ off: click to turn it on"))

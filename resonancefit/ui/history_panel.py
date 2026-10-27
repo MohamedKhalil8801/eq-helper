@@ -22,12 +22,12 @@ def friendly_date(iso: str) -> str:
 
 def describe_entry(entry, app_names=None) -> str:
     t = entry.tuning
-    sides = " · ".join(f"{side_name(s)} {t.primary[s]:.0f} Hz" for s in sorted(t.primary))
-    lines = [f"{friendly_date(entry.date)} — {tr(REASON_LABELS.get(entry.reason, entry.reason))}",
+    sides = ", ".join(f"{side_name(s)} {t.primary[s]:.0f} Hz" for s in sorted(t.primary))
+    lines = [f"{tr(REASON_LABELS.get(entry.reason, entry.reason))} {friendly_date(entry.date)}",
              tr("Target: {name}").format(name=entry.target_name or "—"), sides]
     if t.upper_enabled and t.upper:
         lines.append(tr("Upper treble: {values}").format(
-            values=" · ".join(f"{side_name(s)} {hz:.0f} Hz" for s, hz in sorted(t.upper.items()))))
+            values=", ".join(f"{side_name(s)} {hz:.0f} Hz" for s, hz in sorted(t.upper.items()))))
     if entry.app:
         lines.append(tr("For: {app}").format(app=(app_names or {}).get(entry.app, entry.app)))
     if entry.files:
