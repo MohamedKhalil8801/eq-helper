@@ -1,0 +1,641 @@
+{
+  "version": 1,
+  "apps": [
+    {
+      "id": "equalizer-apo",
+      "name": "Equalizer APO",
+      "description": "System-wide equalizer for Windows; everything you play goes through it.",
+      "platforms": [
+        "windows"
+      ],
+      "device_kind": "computer",
+      "links": {
+        "site": "https://sourceforge.net/projects/equalizerapo/"
+      },
+      "price": "free",
+      "scope": "system",
+      "lr": "full",
+      "balance_control": false,
+      "formats": [
+        {
+          "format": "graphic_eq",
+          "options": {}
+        },
+        {
+          "format": "convolution",
+          "label": "Convolution (optional)",
+          "options": {
+            "packaging": "stereo_single_rate",
+            "sample_rate": "device"
+          }
+        }
+      ],
+      "setup_steps": [
+        "Install Equalizer APO and select your headphone output in its Configurator, then restart Windows.",
+        "Use “Apply to Equalizer APO” in this app, or copy the exported file into C:\\Program Files\\EqualizerAPO\\config and add “Include: <file>” to config.txt.",
+        "For the convolution file: add “Convolution: <file>.wav” instead; it only works at the sample rate in its name."
+      ],
+      "detection": {
+        "windows": {
+          "paths": [
+            "%ProgramFiles%\\EqualizerAPO\\Editor.exe",
+            "%ProgramFiles%\\EqualizerAPO\\Configurator.exe"
+          ],
+          "registry_uninstall": [
+            "EqualizerAPO"
+          ]
+        }
+      },
+      "verified": false
+    },
+    {
+      "id": "peace",
+      "name": "Peace",
+      "description": "Friendly interface for Equalizer APO on Windows.",
+      "platforms": [
+        "windows"
+      ],
+      "device_kind": "computer",
+      "links": {
+        "site": "https://sourceforge.net/projects/peace-equalizer-apo-extension/"
+      },
+      "price": "free",
+      "scope": "system",
+      "lr": "full",
+      "balance_control": true,
+      "formats": [
+        {
+          "format": "parametric",
+          "options": {
+            "writer": "apo_filters",
+            "limits": {
+              "max_filters": 20,
+              "gain_range": [
+                -30,
+                30
+              ],
+              "q_range": [
+                0.1,
+                20
+              ]
+            }
+          }
+        }
+      ],
+      "setup_steps": [
+        "Install Equalizer APO first, then Peace.",
+        "In Peace choose Import, pick the exported file, then Save."
+      ],
+      "detection": {
+        "windows": {
+          "paths": [
+            "%ProgramFiles%\\EqualizerAPO\\config\\Peace.exe"
+          ],
+          "registry_uninstall": [
+            "Peace"
+          ]
+        }
+      },
+      "verified": false
+    },
+    {
+      "id": "easyeffects",
+      "name": "EasyEffects",
+      "description": "System-wide audio effects for Linux (PipeWire).",
+      "platforms": [
+        "linux"
+      ],
+      "device_kind": "computer",
+      "links": {
+        "site": "https://github.com/wwmm/easyeffects",
+        "store": "https://flathub.org/apps/com.github.wwmm.easyeffects"
+      },
+      "price": "free",
+      "scope": "system",
+      "lr": "full",
+      "balance_control": true,
+      "formats": [
+        {
+          "format": "convolution",
+          "options": {
+            "packaging": "stereo_single_rate",
+            "sample_rate": "device"
+          }
+        },
+        {
+          "format": "parametric",
+          "label": "Parametric (Equalizer effect)",
+          "options": {
+            "writer": "apo_filters",
+            "limits": {
+              "max_filters": 32
+            }
+          }
+        }
+      ],
+      "setup_steps": [
+        "Add the Convolver effect to Output and import the exported .wav.",
+        "Tip: pin PipeWire to one rate (default.clock.rate) so the file's rate always matches.",
+        "Parametric: add the Equalizer effect, enable Split channels and use Import APO preset."
+      ],
+      "detection": {
+        "linux": {
+          "commands": [
+            "easyeffects"
+          ],
+          "flatpak": [
+            "com.github.wwmm.easyeffects"
+          ]
+        }
+      },
+      "verified": false
+    },
+    {
+      "id": "camilladsp",
+      "name": "CamillaDSP",
+      "description": "Flexible DSP engine for Windows, macOS and Linux, configured with a text file.",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "device_kind": "computer",
+      "links": {
+        "site": "https://github.com/HEnquist/camilladsp"
+      },
+      "price": "free",
+      "scope": "system",
+      "lr": "full",
+      "balance_control": false,
+      "formats": [
+        {
+          "format": "convolution",
+          "options": {
+            "packaging": "per_rate_named",
+            "sample_rates": [
+              44100,
+              48000,
+              88200,
+              96000
+            ]
+          }
+        }
+      ],
+      "setup_steps": [
+        "Copy the .wav files next to your CamillaDSP config.",
+        "Paste the snippet from the README into the config and reload."
+      ],
+      "detection": {
+        "windows": {
+          "paths": []
+        },
+        "macos": {
+          "bundles": []
+        },
+        "linux": {
+          "commands": [
+            "camilladsp"
+          ]
+        }
+      },
+      "verified": false
+    },
+    {
+      "id": "foobar2000",
+      "name": "foobar2000",
+      "description": "Music player for Windows with a convolver component.",
+      "platforms": [
+        "windows"
+      ],
+      "device_kind": "computer",
+      "links": {
+        "site": "https://www.foobar2000.org/"
+      },
+      "price": "free",
+      "scope": "player",
+      "lr": "full",
+      "balance_control": true,
+      "formats": [
+        {
+          "format": "convolution",
+          "options": {
+            "packaging": "per_rate_named",
+            "sample_rates": [
+              44100,
+              48000
+            ]
+          }
+        }
+      ],
+      "setup_steps": [
+        "Install the Convolver component (foo_convolve).",
+        "Add Convolver in Preferences > Playback > DSP Manager and load the file matching your music's rate."
+      ],
+      "detection": {
+        "windows": {
+          "paths": [
+            "%ProgramFiles%\\foobar2000\\foobar2000.exe",
+            "%ProgramFiles(x86)%\\foobar2000\\foobar2000.exe"
+          ],
+          "registry_uninstall": [
+            "foobar2000"
+          ]
+        }
+      },
+      "verified": false
+    },
+    {
+      "id": "roon",
+      "name": "Roon",
+      "description": "Music player with built-in convolution on its DSP engine.",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "device_kind": "computer",
+      "links": {
+        "site": "https://roon.app/"
+      },
+      "price": "paid",
+      "scope": "player",
+      "lr": "full",
+      "balance_control": false,
+      "formats": [
+        {
+          "format": "convolution",
+          "options": {
+            "packaging": "roon_zip",
+            "sample_rates": [
+              44100,
+              48000,
+              88200,
+              96000,
+              176400,
+              192000
+            ]
+          }
+        }
+      ],
+      "setup_steps": [
+        "Settings > Audio > (your zone) DSP Engine > Convolution > Add.",
+        "Upload the exported zip as is."
+      ],
+      "detection": {
+        "windows": {
+          "paths": [
+            "%LOCALAPPDATA%\\Roon\\Application\\Roon.exe"
+          ]
+        },
+        "macos": {
+          "bundles": [
+            "Roon.app"
+          ]
+        }
+      },
+      "verified": false
+    },
+    {
+      "id": "eqmac",
+      "name": "eqMac",
+      "description": "System-wide equalizer for macOS.",
+      "platforms": [
+        "macos"
+      ],
+      "device_kind": "computer",
+      "links": {
+        "site": "https://eqmac.app/"
+      },
+      "price": "freemium",
+      "scope": "system",
+      "lr": "shared",
+      "balance_control": true,
+      "formats": [
+        {
+          "format": "parametric",
+          "options": {
+            "writer": "csv",
+            "limits": {
+              "max_filters": 10,
+              "gain_range": [
+                -24,
+                24
+              ],
+              "q_range": [
+                0.1,
+                10
+              ]
+            }
+          }
+        }
+      ],
+      "setup_steps": [
+        "Open eqMac's Advanced equalizer and enter each filter from the exported table.",
+        "Set the balance as noted in the file."
+      ],
+      "detection": {
+        "macos": {
+          "bundles": [
+            "eqMac.app"
+          ]
+        }
+      },
+      "verified": false
+    },
+    {
+      "id": "soundsource",
+      "name": "SoundSource",
+      "description": "Per-app audio control and effects for macOS.",
+      "platforms": [
+        "macos"
+      ],
+      "device_kind": "computer",
+      "links": {
+        "site": "https://rogueamoeba.com/soundsource/"
+      },
+      "price": "paid",
+      "scope": "system",
+      "lr": "shared",
+      "balance_control": true,
+      "formats": [
+        {
+          "format": "parametric",
+          "options": {
+            "writer": "csv",
+            "limits": {
+              "max_filters": 10
+            }
+          }
+        }
+      ],
+      "setup_steps": [
+        "Add the built-in EQ effect to your output and enter each filter from the exported table."
+      ],
+      "detection": {
+        "macos": {
+          "bundles": [
+            "SoundSource.app"
+          ]
+        }
+      },
+      "verified": false
+    },
+    {
+      "id": "wavelet",
+      "name": "Wavelet",
+      "description": "System-wide headphone EQ for Android.",
+      "platforms": [
+        "android"
+      ],
+      "device_kind": "phone",
+      "links": {
+        "site": "https://play.google.com/store/apps/details?id=com.pittvandewitt.wavelet",
+        "store": "https://play.google.com/store/apps/details?id=com.pittvandewitt.wavelet"
+      },
+      "price": "freemium",
+      "scope": "system",
+      "lr": "shared",
+      "balance_control": true,
+      "formats": [
+        {
+          "format": "graphic_eq",
+          "options": {
+            "single_line": true,
+            "max_bands": 127
+          }
+        }
+      ],
+      "setup_steps": [
+        "Save the file to your phone.",
+        "In Wavelet open Graphic equalizer > Import (AutoEq GraphicEQ) and pick the file.",
+        "Set Channel balance as noted."
+      ],
+      "detection": {},
+      "verified": false
+    },
+    {
+      "id": "rootlessjamesdsp",
+      "name": "RootlessJamesDSP",
+      "description": "System-wide DSP for Android without root, with a convolver.",
+      "platforms": [
+        "android"
+      ],
+      "device_kind": "phone",
+      "links": {
+        "site": "https://github.com/timschneeb/RootlessJamesDSP"
+      },
+      "price": "free",
+      "scope": "system",
+      "lr": "full",
+      "balance_control": false,
+      "formats": [
+        {
+          "format": "convolution",
+          "options": {
+            "packaging": "stereo_single_rate",
+            "sample_rate": 48000
+          }
+        }
+      ],
+      "setup_steps": [
+        "Save the .wav to your phone.",
+        "Enable Convolver, choose the file as impulse response."
+      ],
+      "detection": {},
+      "verified": false
+    },
+    {
+      "id": "poweramp-eq",
+      "name": "Poweramp Equalizer",
+      "description": "System-wide equalizer for Android.",
+      "platforms": [
+        "android"
+      ],
+      "device_kind": "phone",
+      "links": {
+        "site": "https://play.google.com/store/apps/details?id=com.maxmpz.equalizer",
+        "store": "https://play.google.com/store/apps/details?id=com.maxmpz.equalizer"
+      },
+      "price": "paid",
+      "scope": "system",
+      "lr": "shared",
+      "balance_control": true,
+      "formats": [
+        {
+          "format": "parametric",
+          "options": {
+            "writer": "autoeq_text",
+            "limits": {
+              "max_filters": 10,
+              "gain_range": [
+                -15,
+                15
+              ]
+            }
+          }
+        }
+      ],
+      "setup_steps": [
+        "Save the file to your phone.",
+        "In Poweramp Equalizer use Presets > Import and pick the ParametricEQ file.",
+        "Set the balance as noted."
+      ],
+      "detection": {},
+      "verified": false
+    },
+    {
+      "id": "neutron",
+      "name": "Neutron Music Player",
+      "description": "Audiophile music player for Android and iPhone with parametric EQ.",
+      "platforms": [
+        "android",
+        "ios"
+      ],
+      "device_kind": "phone",
+      "links": {
+        "site": "https://neutroncode.com/"
+      },
+      "price": "paid",
+      "scope": "player",
+      "lr": "shared",
+      "balance_control": true,
+      "formats": [
+        {
+          "format": "parametric",
+          "options": {
+            "writer": "csv",
+            "limits": {
+              "max_filters": 10
+            }
+          }
+        }
+      ],
+      "setup_steps": [
+        "Open DSP Effects > Parametric EQ and enter each filter from the exported table."
+      ],
+      "detection": {},
+      "verified": false
+    },
+    {
+      "id": "uapp",
+      "name": "USB Audio Player PRO",
+      "description": "Android player for USB DACs, with parametric EQ.",
+      "platforms": [
+        "android"
+      ],
+      "device_kind": "phone",
+      "links": {
+        "site": "https://www.extreamsd.com/index.php/products/usb-audio-player-pro"
+      },
+      "price": "paid",
+      "scope": "player",
+      "lr": "shared",
+      "balance_control": true,
+      "formats": [
+        {
+          "format": "parametric",
+          "options": {
+            "writer": "csv",
+            "limits": {
+              "max_filters": 10
+            }
+          }
+        }
+      ],
+      "setup_steps": [
+        "Open the parametric EQ and enter each filter from the exported table."
+      ],
+      "detection": {},
+      "verified": false
+    },
+    {
+      "id": "qudelix-5k",
+      "name": "Qudelix 5K",
+      "description": "Bluetooth DAC/amp with built-in parametric EQ, set from its phone or desktop app.",
+      "platforms": [
+        "android",
+        "ios",
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "device_kind": "hardware",
+      "links": {
+        "site": "https://www.qudelix.com/"
+      },
+      "price": "free",
+      "scope": "system",
+      "lr": "full",
+      "balance_control": false,
+      "formats": [
+        {
+          "format": "parametric",
+          "options": {
+            "writer": "csv",
+            "limits": {
+              "max_filters": 10,
+              "gain_range": [
+                -12,
+                12
+              ],
+              "q_range": [
+                0.1,
+                20
+              ]
+            }
+          }
+        }
+      ],
+      "setup_steps": [
+        "In the Qudelix app open EQ > Custom PEQ, enable separate L/R if offered, and enter each filter."
+      ],
+      "detection": {},
+      "verified": false
+    },
+    {
+      "id": "other",
+      "name": "Other / Advanced",
+      "description": "Any other EQ or convolver: choose formats, rates and files yourself.",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux",
+        "android",
+        "ios"
+      ],
+      "device_kind": "other",
+      "links": {
+        "site": ""
+      },
+      "price": "free",
+      "scope": "player",
+      "lr": "full",
+      "balance_control": false,
+      "formats": [
+        {
+          "format": "graphic_eq",
+          "options": {}
+        },
+        {
+          "format": "convolution",
+          "options": {
+            "packaging": "stereo_single_rate",
+            "sample_rate": 48000
+          }
+        },
+        {
+          "format": "parametric",
+          "options": {
+            "writer": "autoeq_text"
+          }
+        }
+      ],
+      "setup_steps": [
+        "Use the files with any app that accepts them; the README explains each file."
+      ],
+      "detection": {},
+      "verified": false,
+      "advanced": true
+    }
+  ]
+}

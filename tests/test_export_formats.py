@@ -103,3 +103,16 @@ def test_convolution_rejects_unknown_options(eq, tmp_path):
         fmt.export(eq, {"packaging": "tape"}, tmp_path, "x", META)
     with pytest.raises(ValueError, match="sample rate"):
         fmt.export(eq, {"packaging": "stereo_single_rate", "sample_rate": 12345}, tmp_path, "x", META)
+
+
+def test_graphic_single_line_and_band_limit(eq, tmp_path):
+    from eq_helper.exports.formats.base import shared_only
+    fmt = get_format("graphic_eq")
+    with pytest.raises(ValueError, match="shared"):
+        fmt.export(eq, {"single_line": True}, tmp_path, "x", META)
+    shared = shared_only(eq, balance_control=False).channel_eq
+    path, readme = fmt.export(shared, {"single_line": True, "max_bands": 127}, tmp_path, "Nova GraphicEQ", META)
+    text = path.read_text(encoding="utf-8")
+    assert text.startswith("GraphicEQ:") and text.count("\n") == 1
+    assert len(parse_graphic_eq_line(text.strip()).bands) == 127
+    assert "Preamp" in readme.read_text(encoding="utf-8")
