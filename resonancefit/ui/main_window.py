@@ -14,11 +14,14 @@ from eq_helper.calibration.rescal import RESCAL_SUFFIX, Calibration, RescalError
 from eq_helper.dsp.resonance import Measurements
 
 from ..audio import AudioService
+from ..history import HistoryStore
 from ..library import LibraryEntry
 from ..paths import is_translocated
 from .common import APP_STYLE, Worker, tr
 from .header_card import HeaderCard
+from .history_panel import HistoryPanel
 from .import_screen import ImportScreen
+from .listen_save import ListenSaveCard
 
 
 @dataclass(frozen=True)
@@ -52,6 +55,7 @@ class MainWindow(QMainWindow):
         self.ctx = ctx
         self.audio = audio or AudioService()
         self.current: LoadedCalibration | None = None
+        self.history: HistoryStore | None = None
         self.loading = False
         self._load_token = 0
         self._workers: set[Worker] = set()
@@ -101,7 +105,47 @@ class MainWindow(QMainWindow):
         self.tuning.eqChanged.connect(self.audio.set_eq)
         self.calibrationLoaded.connect(self.tuning.set_calibration)
         tune.addWidget(self.tuning, 1)
+
+        side = QVBoxLayout()
+        self.listen = ListenSaveCard()
+        self.listen.eqToggled.connect(self.audio.set_eq_enabled)
+        self.listen.saveRequested.connect(lambda note: self.record_history("manual", note))
+        side.addWidget(self.listen)
+        self.history_panel = HistoryPanel()
+        self.history_panel.reapplyRequested.connect(self.reapply)
+        side.addWidget(self.history_panel, 1)
+        sidebar = QWidget()
+        sidebar.setLayout(side)
+        side.setContentsMargins(0, 0, 0, 0)
+        sidebar.setFixedWidth(330)
+        tune.addWidget(sidebar)
+        self.calibrationLoaded.connect(self._calibration_ready)
         self.tabs.addTab(self.tune_tab, tr("Tune"))
+
+    # ── history ────────────────────────────────────────────────────────────
+    def _calibration_ready(self, loaded) -> None:
+        self.history = HistoryStore(self.ctx.paths.history_dir, loaded.calibration_id)
+        self.history_panel.set_store(self.history)
+
+    def record_history(self, reason: str, note: str = "", files=(), app=None):
+        """Save the current tuning to history (export / apply / manual)."""
+        session = self.tuning.session
+        if session is None or session.target is None or self.history is None:
+            return None
+        entry = self.history.save(session.snapshot(), session.target, reason, note, files, app)
+        self.history_panel.refresh()
+        if reason == "manual":
+            self.listen.show_status(tr("Saved. You can come back to it from History."))
+        return entry
+
+    def reapply(self, entry_id: str) -> None:
+        tuning, target = self.history.reapply(entry_id)
+        try:
+            self.tuning.apply_tuning(tuning, target)
+        except ValueError as exc:
+            self.statusBar().showMessage(tr("Couldn't reapply this tuning: {reason}").format(reason=exc), 15000)
+            return
+        self.statusBar().showMessage(tr("Tuning reapplied."), 5000)
 
     def _on_audio_ready(self, ok: bool) -> None:
         if not ok:
