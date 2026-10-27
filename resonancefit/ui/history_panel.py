@@ -26,7 +26,7 @@ def describe_entry(entry, app_names=None) -> str:
     lines = [f"{tr(REASON_LABELS.get(entry.reason, entry.reason))} {friendly_date(entry.date)}",
              tr("Target: {name}").format(name=entry.target_name or "—"), sides]
     if t.upper_enabled and t.upper:
-        lines.append(tr("Upper treble: {values}").format(
+        lines.append(tr("Upper resonance: {values}").format(
             values=", ".join(f"{side_name(s)} {hz:.0f} Hz" for s, hz in sorted(t.upper.items()))))
     if entry.app:
         lines.append(tr("For: {app}").format(app=(app_names or {}).get(entry.app, entry.app)))

@@ -185,6 +185,10 @@ class MainWindow(QMainWindow):
         set_apo.triggered.connect(self._on_set_apo_path)
         menu.addAction(set_apo)
 
+        generate = QAction("Generate customer app…", self)
+        generate.triggered.connect(self._open_generate_customer_dialog)
+        menu.addAction(generate)
+
         menu.addSeparator()
 
         quit_act = QAction("Quit", self)
@@ -553,6 +557,14 @@ class MainWindow(QMainWindow):
 
         dlg = LiveBalanceDialog(self.engine, parent=self)
         dlg.exec()
+
+    def _open_generate_customer_dialog(self) -> None:
+        from eq_helper.ui.generate_customer_dialog import GenerateCustomerDialog
+
+        dialog = GenerateCustomerDialog(self, settings=self._settings)
+        dialog.exec()
+        self._schedule_save()
+        dialog.deleteLater()
 
     def _open_resonance_dialog(self) -> None:
         from eq_helper.ui.resonance_dialog import ResonanceDialog

@@ -342,3 +342,15 @@ def read_rescal(path) -> Calibration:
             fits.append(Fit(_DIR_SIDES[side_dir], name, freqs, db))
     _check_sides(f.side for f in fits)
     return Calibration(manifest, fits)
+
+
+# ── public manifest (de)serialisation (admin customer library) ──────────────
+
+def manifest_to_dict(manifest: Manifest) -> dict:
+    """The manifest as plain JSON-ready data (same shape as in the .rescal file)."""
+    return asdict(manifest)
+
+
+def manifest_from_dict(data) -> Manifest:
+    """Parse and validate manifest data. Raises :class:`RescalError`."""
+    return _manifest_from_json(data)
