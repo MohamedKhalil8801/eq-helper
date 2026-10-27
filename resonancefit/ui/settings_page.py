@@ -15,6 +15,7 @@ from .sound_bar import OutputPicker
 class SettingsPage(QWidget):
     walkthroughRequested = Signal()
     updateCheckRequested = Signal()
+    apoChanged = Signal()
     openUrlRequested = Signal(str)
     apoDeviceChangeRequested = Signal()
 
@@ -164,6 +165,7 @@ class SettingsPage(QWidget):
         except ApoUnwritable as problem:
             QMessageBox.warning(self, tr("Equalizer APO couldn't be changed"), tr(problem.fix))
         self.refresh_apo()
+        self.apoChanged.emit()
 
     # ── folders ────────────────────────────────────────────────────────────
     def _open_calibrations(self) -> None:

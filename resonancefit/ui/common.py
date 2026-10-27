@@ -18,6 +18,7 @@ COLOR_IEM = "#E69F00"
 COLOR_TARGET = "#0072B2"
 COLOR_WITH_EQ = "#009E73"
 COLOR_MARKER = "#D55E00"
+COLOR_UPPER = "#CC79A7"
 
 SIDE_NAMES = {"L": "Left", "R": "Right", "M": "Both ears"}
 

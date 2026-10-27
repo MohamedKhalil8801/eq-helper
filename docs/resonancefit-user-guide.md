@@ -45,16 +45,27 @@ sound.** The bar at the bottom of the window always shows the **Output** you're 
 
 ## ① Find your resonance
 
+**Turn off any other EQ first:** your music app's EQ, sound enhancements (Dolby, Windows or Realtek
+effects…), Equalizer APO or Peace, and your dongle's EQ. Otherwise you hear it on top of this one and
+find the resonance in the wrong place. The app names the EQ apps it finds on your computer, and if your
+own EQ is still on in Equalizer APO it offers to turn it off while you tune (apply again when you're done).
+
 1. Put both IEMs in as you normally wear them, with your usual tips.
 2. On the **Left** tab, press **▶ Play tone**. The tone plays in your left ear only.
-3. Move the slider (or type a frequency) until the tone sounds **loudest or most piercing**. That's your
-   left resonance. **Sweep around it** plays a slow sweep around the slider's frequency if that's easier
-   to judge. The resonance is where the sweep gets loudest.
+3. Move the slider, type a frequency or drag the orange **Resonance** line on the graph until the tone
+   sounds **loudest or most piercing**. That's your left resonance. **Sweep around it** plays a slow
+   sweep around the slider's frequency if that's easier to judge. The resonance is where the sweep gets
+   loudest.
 4. Do the same on the **Right** tab.
 
+To check by ear, press **≈ Pink noise + EQ**: pink noise plays through your EQ (the EQ switches on). Move
+the resonance slowly while it plays; where it's right, the treble sounds smooth and even, with no harsh,
+hissy or dull spot.
+
 The graph shows **Your IEM** (what the calibration predicts for your setting), the **Target** and
-**With your EQ**. If you land outside what was measured for your IEMs, the app tells you so: the EQ
-there is an estimate, which is fine if it sounds right.
+**With your EQ**. Point at the graph to see the frequency under the mouse; click or drag on it to hear a
+tone at that frequency (Space stops it). If you land outside what was measured for your IEMs, the app
+tells you so: the EQ there is an estimate, which is fine if it sounds right.
 
 ## ② Choose your target
 
@@ -64,8 +75,10 @@ try any other, or **Import…** a target curve (TXT or CSV, frequency and level)
 ## ③ Fine-tune upper treble (advanced, optional)
 
 Only if you hear a second, higher peak (above about 10.5 kHz) that still bothers you. Turn on **Adjust
-the upper treble**, play the tone and move the slider to where you hear it, per ear. **Reset** puts the
-selected ear back. Leave it off otherwise: off keeps the EQ as calibrated.
+the upper treble**: a pink **Upper** line appears on the graph, and the controls work like step ①
+(slider, frequency box, **Play tone**, **Sweep around it**, **Pink noise + EQ**, or drag the line). Move
+it to where you hear the peak, per ear. **Reset** puts the selected ear back. Leave it off otherwise: off
+keeps the EQ as calibrated.
 
 ## ④ Listen & save
 

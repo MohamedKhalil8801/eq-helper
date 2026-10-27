@@ -224,6 +224,7 @@ class MainWindow(QMainWindow):
         tune.setContentsMargins(0, 8, 0, 0)
         self.tuning = TuningPanel(self.ctx, self.audio)
         self.tuning.eqChanged.connect(self.audio.set_eq)
+        self.tuning.apoOffRequested.connect(self.turn_off_apo)
         self.calibrationLoaded.connect(self.tuning.set_calibration)
         tune.addWidget(self.tuning, 1)
 
@@ -268,6 +269,7 @@ class MainWindow(QMainWindow):
         self.settings_page = SettingsPage(self.ctx, self.audio, self.apo, self.updates)
         self.settings_page.updateCheckRequested.connect(lambda: self.check_for_updates(manual=True))
         self.settings_page.openUrlRequested.connect(self.open_url)
+        self.settings_page.apoChanged.connect(self.sync_other_eqs)
         self.settings_page.apoDeviceChangeRequested.connect(self.change_apo_device)
         self.settings_page.walkthroughRequested.connect(self.show_walkthrough)
         self.tabs.addTab(self.settings_page, tr("Settings"))
@@ -309,7 +311,9 @@ class MainWindow(QMainWindow):
         box.setWindowTitle(tr("Start quiet"))
         box.setText(tr("Turn your volume down before the first sound."))
         box.setInformativeText(tr("Test tones can be piercing at the resonance. Start low and raise the "
-                                  "volume slowly; press Space at any time to stop all sound."))
+                                  "volume slowly; press Space at any time to stop all sound.\n\n"
+                                  "Turn off any other EQ first (your music app's, sound enhancements, "
+                                  "Equalizer APO, your dongle's): you'd hear it on top of this one."))
         play = box.addButton(tr("Volume is down, play"), QMessageBox.AcceptRole)
         box.addButton(QMessageBox.Cancel)
         box.exec()
@@ -331,6 +335,25 @@ class MainWindow(QMainWindow):
     def _apps_detected(self, installed) -> None:
         self.installed = set(installed)
         self.catalog_page.set_installed(self.installed)
+        self.sync_other_eqs()
+
+    def sync_other_eqs(self) -> None:
+        """Tell the tuning panel which system-wide EQs are here, and whether ours is on in APO."""
+        found = [app.name for app in self.catalog.apps
+                 if app.id in self.installed and app.scope == "system"]
+        try:
+            apo_on = self.apo.available() and self.apo.is_on()
+        except OSError:
+            apo_on = False
+        self.tuning.set_other_eqs(found, apo_on)
+
+    def turn_off_apo(self) -> None:
+        try:
+            self.apo.turn_off()
+        except ApoUnwritable as problem:
+            self.show_apo_problem(problem)
+        self.settings_page.refresh_apo()
+        self.sync_other_eqs()
 
     # ── Equalizer APO ──────────────────────────────────────────────────────
     def _sync_saved_tunings(self) -> None:
@@ -371,6 +394,7 @@ class MainWindow(QMainWindow):
             return False
         self.record_history("apply", files=[str(path)], app=APO_APP_ID)
         self.settings_page.refresh_apo()
+        self.sync_other_eqs()
         self.listen.show_status(tr("Applied to Equalizer APO on {device}. Everything you play there now "
                                    "uses this tuning.").format(device=self.apo.device))
         return True
