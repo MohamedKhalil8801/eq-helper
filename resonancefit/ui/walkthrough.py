@@ -10,8 +10,8 @@ STEPS = (
     ("Step 1 of 3: find your resonance",
      "Put your IEMs in with the same ear tips you were measured with, turn your volume down and turn "
      "off any other EQ (your music app's, sound enhancements, your dongle's). "
-     "Press Play tone and move the slider until the tone sounds loudest or most piercing. "
-     "Do it for the left ear, then the right."),
+     "Press Find it for me: a short listening test (about 2 minutes) asks which sound is louder, "
+     "then which is smoothest, for each ear. Or adjust by hand with a tone and the slider."),
     ("Step 2 of 3: pick a target and listen",
      "The target is the sound you want; the one marked default was chosen for you. Play a song you "
      "know well and switch the EQ on and off to compare."),
