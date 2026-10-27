@@ -222,6 +222,11 @@ class AudioEngine:
         self._geq_fir: Optional[np.ndarray] = None
         self._geq_zi: Optional[np.ndarray] = None
 
+        # Per-ear FIRs after routing (customer-app EQ preview). Separate from
+        # the mono FIR above, which EQ Helper keeps using unchanged.
+        from eq_helper.audio.stereo_fir import StereoFIR
+        self._stereo_fir = StereoFIR()
+
         # Output streams (A = primary, B = secondary for dual mode)
         self._stream_a: Optional["sd.OutputStream"] = None
         self._stream_b: Optional["sd.OutputStream"] = None
@@ -519,6 +524,13 @@ class AudioEngine:
 
     # --------------------------------------------------------- mic controls
 
+    def set_channel_firs(self, firs: Optional[dict]) -> None:
+        """Per-ear FIRs ``{"L": fir, "R": fir}`` applied after routing; ``None`` = bypass.
+
+        Switching is crossfaded, so it can happen while sound is playing.
+        """
+        self._stereo_fir.set_firs(firs)
+
     def set_mic_monitoring(self, enabled: bool) -> None:
         self.state.update(mic_monitoring=bool(enabled))
         if enabled:
@@ -683,7 +695,10 @@ class AudioEngine:
                     self.ring.push(mono)
                     self._route_dual(outdata, mono, st, frames)
                     return
-            outdata.fill(0.0)
+            if self._stereo_fir.active and not st.dual_output:
+                outdata[:] = self._stereo_fir.process(np.zeros((frames, 2), dtype=np.float32))
+            else:
+                outdata.fill(0.0)
             self._dual_ring.push(np.zeros(frames * 2, dtype=np.float32))
             return
 
@@ -705,7 +720,7 @@ class AudioEngine:
         ear silent). The Channel switch is ignored.
         """
         if not st.dual_output:
-            stereo = route(mono, st.channel_mode, st.force_mono, None)
+            stereo = self._stereo_fir.process(route(mono, st.channel_mode, st.force_mono, None))
             outdata[:] = stereo
             self._dual_ring.push(stereo.flatten())
             return
@@ -731,7 +746,7 @@ class AudioEngine:
         else:
             # Mirror: identical output on both devices, channel switch
             # controls L/R ears the same way as single-device mode.
-            stereo = route(mono, st.channel_mode, st.force_mono, None)
+            stereo = self._stereo_fir.process(route(mono, st.channel_mode, st.force_mono, None))
             outdata[:] = stereo
             self._dual_ring.push(stereo.flatten())
 
