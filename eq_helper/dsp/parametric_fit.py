@@ -6,8 +6,9 @@ sizes). The fitter honours those limits and reports how close it got, e.g.
 "within ±1 dB up to 10 kHz".
 
 Method: on a log-spaced grid, greedily place a filter where the weighted
-residual is largest (sized from the residual's own width), then refine every
-filter jointly with bounded least squares over (log fc, gain, log Q). Errors
+residual is largest (sized from the residual's own width), refine it and the
+most recent filters with bounded least squares over (log fc, gain, log Q),
+then refine all filters jointly once at the end. Errors
 above 10 kHz count less, and above 16 kHz much less: coupler data there is least reliable and many apps
 can't follow fine treble detail anyway. No randomness, so fits are repeatable.
 Responses are exact cookbook biquads at the target sample rate.
@@ -169,32 +170,62 @@ def _initial_filter(grid, residual, weights, limits: PeqLimits, used_shelves) ->
                      float(np.clip(gain, lo_g, hi_g)), float(np.clip(q, lo_q, hi_q)))
 
 
-def _refine(filters, grid, target, weights, limits: PeqLimits):
+def _refine(filters, grid, target, weights, limits: PeqLimits, free=None, max_nfev=None):
+    """Bounded least squares over the ``free`` filters (default: all)."""
+    free = list(range(len(filters))) if free is None else list(free)
     lo_g, hi_g = limits.gain_range
     lo_q, hi_q = limits.q_range
     lo_f, hi_f = np.log(limits.fc_range[0]), np.log(limits.fc_max)
     eps = 1e-9
+    fixed = [f for i, f in enumerate(filters) if i not in free]
+    fixed_db = filters_response_db(fixed, grid, limits.sample_rate)
     x0, lb, ub = [], [], []
-    for filt in filters:
+    for i in free:
+        filt = filters[i]
         x0 += [np.clip(np.log(filt.fc), lo_f, hi_f), np.clip(filt.gain_db, lo_g, hi_g),
                np.clip(np.log(filt.q), np.log(lo_q), np.log(hi_q))]
         lb += [lo_f - eps, lo_g - eps, np.log(lo_q) - eps]
         ub += [hi_f + eps, hi_g + eps, np.log(hi_q) + eps]
-    types = [f.type for f in filters]
+    types = [filters[i].type for i in free]
 
     def unpack(x):
         return [PeqFilter(t, float(np.exp(x[3 * n])), float(x[3 * n + 1]), float(np.exp(x[3 * n + 2])))
                 for n, t in enumerate(types)]
 
-    def residual(x):
-        return (filters_response_db(unpack(x), grid, limits.sample_rate) - target) * weights
+    fs = limits.sample_rate
 
-    result = least_squares(residual, np.array(x0), bounds=(np.array(lb), np.array(ub)),
-                           x_scale=np.tile([0.3, 3.0, 0.5], len(filters)), max_nfev=300 * len(filters))
-    fitted = unpack(result.x)
-    return [replace(f, fc=float(np.clip(f.fc, limits.fc_range[0], limits.fc_max)),
-                    gain_db=float(np.clip(f.gain_db, lo_g, hi_g)),
-                    q=float(np.clip(f.q, lo_q, hi_q))) for f in fitted]
+    def one(t, x3):
+        return filters_response_db([PeqFilter(t, float(np.exp(x3[0])), float(x3[1]), float(np.exp(x3[2])))], grid, fs)
+
+    def residual(x):
+        return (fixed_db + filters_response_db(unpack(x), grid, fs) - target) * weights
+
+    def jacobian(x):
+        # Each parameter moves only its own filter: 3 single-filter
+        # evaluations per filter instead of re-summing the whole chain.
+        jac = np.empty((len(grid), len(x)))
+        steps = (1e-4, 1e-4, 1e-4)
+        for n, t in enumerate(types):
+            x3 = np.array(x[3 * n:3 * n + 3])
+            base = one(t, x3)
+            for k in range(3):
+                bumped = x3.copy()
+                bumped[k] += steps[k]
+                jac[:, 3 * n + k] = (one(t, bumped) - base) / steps[k] * weights
+        return jac
+
+    result = least_squares(residual, np.array(x0), jac=jacobian, bounds=(np.array(lb), np.array(ub)),
+                           x_scale=np.tile([0.3, 3.0, 0.5], len(free)),
+                           max_nfev=max_nfev or 100 * len(free))
+    fitted = iter(unpack(result.x))
+    out = []
+    for i, f in enumerate(filters):
+        if i in free:
+            g = next(fitted)
+            f = replace(g, fc=float(np.clip(g.fc, limits.fc_range[0], limits.fc_max)),
+                        gain_db=float(np.clip(g.gain_db, lo_g, hi_g)), q=float(np.clip(g.q, lo_q, hi_q)))
+        out.append(f)
+    return out
 
 
 def _quantise(filters, limits: PeqLimits):
@@ -221,18 +252,27 @@ def _fit_filters(freqs, target_db, limits: PeqLimits) -> list[PeqFilter]:
     target = np.interp(np.log(grid), np.log(f), y)
     weights = _weights(grid)
     filters: list[PeqFilter] = []
-    for _ in range(limits.max_filters):
+
+    def score(fl):
+        return np.sqrt(np.mean(((target - filters_response_db(fl, grid, limits.sample_rate)) * weights) ** 2))
+
+    for n in range(limits.max_filters):
         residual = target - filters_response_db(filters, grid, limits.sample_rate)
-        if np.max(np.abs(residual) * weights) < 0.05:
-            break
+        if np.max(np.abs(residual) * weights) < 0.05 or (n >= 4 and score(filters) < 0.1):
+            break  # already as close as any app can show
         used = {x.type for x in filters if x.type != "PK"}
         candidate = _initial_filter(grid, residual, weights, limits, used)
-        trial = _refine(filters + [candidate], grid, target, weights, limits)
-        before = np.sqrt(np.mean((residual * weights) ** 2))
-        after = np.sqrt(np.mean(((target - filters_response_db(trial, grid, limits.sample_rate)) * weights) ** 2))
-        if after >= before - 1e-4:
+        # Fit the new filter alone, then re-balance the five most recent ones.
+        trial = _refine(filters + [candidate], grid, target, weights, limits, free=[len(filters)])
+        recent = range(max(0, len(trial) - 5), len(trial))
+        trial = _refine(trial, grid, target, weights, limits, free=recent)
+        if score(trial) >= score(filters) - 1e-4:
             break  # another filter no longer helps
         filters = trial
+    if filters:
+        joint = _refine(filters, grid, target, weights, limits, max_nfev=60 * len(filters))
+        if score(joint) <= score(filters):
+            filters = joint
     return _quantise(filters, limits)
 
 
