@@ -78,6 +78,7 @@ from eq_helper.audio.shared_state import (
 
 DEFAULT_SAMPLE_RATE = 48000
 DEFAULT_BLOCK_SIZE = 480  # 10 ms @ 48 kHz
+TONE_SWITCH_FADE_S = 0.02  # crossfade length of switch_sine()
 
 
 # ----------------------------------------------------------------- helpers
@@ -206,6 +207,13 @@ class AudioEngine:
         self._pink_right = PinkNoiseGenerator(self.sample_rate, seed=0xC0FFEE)
         self._sweep: Optional[LogSweepGenerator | PingPongSweepGenerator] = None
         self._focus_center_hz: float = 1000.0  # centre of the current focused sweep
+
+        # Crossfaded tones (switch_sine): each voice is [generator, freq, gain,
+        # target gain, gain step per sample]. Empty = the plain sine above,
+        # exactly as before.
+        self._voices: list[list] = []
+        self._voice_cmds: list[tuple] = []
+        self._voice_lock = threading.Lock()
 
         # Grey noise (loaded from WAV, looped)
         self._grey_buf: Optional[np.ndarray] = _load_wav_mono(
@@ -387,6 +395,9 @@ class AudioEngine:
     # ---------------------------------------------------------------- controls
 
     def start_sine(self, freq: Optional[float] = None) -> None:
+        if self._voices or self._voice_cmds:  # a plain tone replaces crossfaded ones
+            with self._voice_lock:
+                self._voice_cmds = [("clear",)]
         if freq is not None:
             self.state.update(freq=float(freq))
         self.state.update(mode=Mode.SINE)
@@ -475,11 +486,25 @@ class AudioEngine:
         self.state.update(mode=Mode.GREY)
         self.start_stream()
 
+    def switch_sine(self, freq: float, fade_s: float = TONE_SWITCH_FADE_S) -> None:
+        """Play a sine at ``freq``, crossfading from whatever tone is playing (or
+        fading in from silence) over ``fade_s`` seconds: no click, no gap."""
+        with self._voice_lock:
+            self._voice_cmds.append(("switch", float(freq), max(1, int(fade_s * self.sample_rate))))
+        self.state.update(freq=float(freq), mode=Mode.SINE)
+        self.start_stream()
+
     def stop(self) -> None:
         self.state.update(mode=Mode.IDLE)
+        if self._voices or self._voice_cmds:
+            with self._voice_lock:
+                self._voice_cmds = [("clear",)]
 
     def set_freq(self, freq: float) -> None:
         self.state.update(freq=float(freq))
+        if self._voices or self._voice_cmds:
+            with self._voice_lock:
+                self._voice_cmds.append(("retune", float(freq)))
 
     def set_volume(self, amp: float) -> None:
         self.state.update(amp=float(amp))
@@ -646,7 +671,13 @@ class AudioEngine:
 
         Returns ``(mono, right)`` or ``(None, None)`` for IDLE.
         """
+        if self._voice_cmds:
+            self._take_voice_cmds()
+        if self._voices and st.mode != Mode.SINE:
+            self._voices = []  # another sound took over: nothing left to fade
         if st.mode == Mode.SINE:
+            if self._voices:
+                return self._voices_block(frames) * np.float32(st.amp), None
             mono = self._sine.next_block(frames, st.freq) * np.float32(st.amp)
             return mono, None
         elif st.mode == Mode.PINK:
@@ -705,6 +736,41 @@ class AudioEngine:
             return mono, None
         else:  # IDLE
             return None, None
+
+    def _take_voice_cmds(self) -> None:
+        with self._voice_lock:
+            cmds, self._voice_cmds = self._voice_cmds, []
+        for cmd in cmds:
+            if cmd[0] == "clear":
+                self._voices = []
+            elif cmd[0] == "retune" and self._voices:
+                self._voices = [self._voices[-1]]
+                self._voices[0][1], self._voices[0][2], self._voices[0][3] = cmd[1], 1.0, 1.0
+            elif cmd[0] == "switch":
+                _kind, freq, fade = cmd
+                for voice in self._voices:
+                    voice[3] = 0.0
+                self._voices.append([SineGenerator(self.sample_rate), freq, 0.0, 1.0, 1.0 / fade])
+
+    def _voices_block(self, frames: int) -> np.ndarray:
+        """Sum of the crossfading tones from switch_sine (equal-power fades)."""
+        out = np.zeros(frames, dtype=np.float64)
+        steps = np.arange(1, frames + 1)
+        for voice in self._voices:
+            gen, freq, gain, target, rate = voice
+            if gain == target:
+                ramp = np.full(frames, gain)
+            else:
+                direction = 1.0 if target > gain else -1.0
+                ramp = np.clip(gain + direction * rate * steps, 0.0, 1.0)
+                if direction < 0:
+                    ramp = np.maximum(ramp, target)
+                else:
+                    ramp = np.minimum(ramp, target)
+                voice[2] = float(ramp[-1])
+            out += gen.next_block(frames, freq) * np.sin(0.5 * np.pi * ramp)
+        self._voices = [v for v in self._voices if v[2] > 0.0 or v[3] > 0.0]
+        return out.astype(np.float32)
 
     def _apply_processing(
         self, st, frames: int, mono: np.ndarray, right: Optional[np.ndarray]

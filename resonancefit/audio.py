@@ -154,6 +154,16 @@ class AudioService:
     def set_tone(self, hz: float) -> None:
         self.engine.set_freq(float(hz))
 
+    def switch_tone(self, hz: float, side=None) -> None:
+        """A tone at ``hz`` that crossfades from the playing one (or fades in): no click, no gap."""
+        if self.playing != "tone" and not self.may_play():
+            return
+        if side is not None and side != self.side:
+            self.route(side)
+        self.engine.switch_sine(float(hz))
+        if self.playing != "tone":
+            self._started("tone")
+
     def play_focus_sweep(self, hz: float, side=None) -> None:
         if not self.may_play():
             return
