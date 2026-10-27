@@ -44,6 +44,9 @@ class SingleInstance(QObject):
         socket.write(json.dumps([str(p) for p in paths]).encode("utf-8") + b"\n")
         socket.flush()
         socket.waitForBytesWritten(TIMEOUT_MS)
+        # Wait for the running app's "ok" before hanging up: on Windows, unread data
+        # in the pipe is lost when the client disconnects first.
+        socket.waitForReadyRead(TIMEOUT_MS * 2)
         socket.disconnectFromServer()
         return True
 
@@ -75,8 +78,11 @@ class SingleInstance(QObject):
                 paths = json.loads(bytes(socket.readLine()).decode("utf-8"))
             except ValueError:
                 continue
-            if isinstance(paths, list) and self._on_message is not None:
-                self._on_message([str(p) for p in paths])
+            if isinstance(paths, list):
+                socket.write(b"ok\n")
+                socket.flush()
+                if self._on_message is not None:
+                    self._on_message([str(p) for p in paths])
 
 
 class FileOpenFilter(QObject):

@@ -51,9 +51,15 @@ def test_second_launch_forwards_files_to_the_first(qtbot, tmp_path):
     name = server_name(f"rf-test-{os.getpid()}-{tmp_path.name}")
     first, received = SingleInstance(name), []
     assert first.listen(received.extend)
-    second = SingleInstance(name)
-    assert second.forward([tmp_path / "a.rescal"])
-    qtbot.waitUntil(lambda: received == [str(tmp_path / "a.rescal")], timeout=5000)
+    target = str(tmp_path / "a.rescal")
+    probe = ("import sys\nfrom PySide6.QtCore import QCoreApplication\napp = QCoreApplication([])\n"
+             "from resonancefit.single_instance import SingleInstance\n"
+             f"sys.exit(0 if SingleInstance({name!r}).forward([{target!r}]) else 1)\n")
+    env = {**os.environ, "PYTHONPATH": str(ROOT), "QT_QPA_PLATFORM": "offscreen"}
+    second = subprocess.Popen([sys.executable, "-c", probe], env=env)  # a real second launch
+    qtbot.waitUntil(lambda: received == [target], timeout=20000)
+    qtbot.waitUntil(lambda: second.poll() is not None, timeout=20000)
+    assert second.returncode == 0
     first.server.close()
     assert not SingleInstance(name).forward([])  # nobody listening any more
 
