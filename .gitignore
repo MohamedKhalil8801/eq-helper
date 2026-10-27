@@ -181,3 +181,9 @@ cython_debug/
 .cursorindexingignore
 /.claude
 /docs/superpowers
+
+# Customer data never enters git (ADR 0003)
+*.rescal
+customer_library/
+build_cache/
+dist-customers/

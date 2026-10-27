@@ -14,6 +14,7 @@ dependencies = [
     "numpy>=1.26",
     "scipy>=1.11",
     "pyqtgraph>=0.13",
+    "soundfile>=0.12",
 ]
 
 [project.optional-dependencies]
@@ -24,14 +25,17 @@ dev = [
 
 [project.scripts]
 eq-helper = "eq_helper.app:main"
+resonancefit = "resonancefit.app:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["eq_helper*"]
+include = ["eq_helper*", "resonancefit*"]
 exclude = ["tests*"]
 
 [tool.setuptools.package-data]
 "eq_helper.dsp" = ["nova_w1.npz"]
+"eq_helper.exports" = ["catalog.json"]
+"resonancefit" = ["assets/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

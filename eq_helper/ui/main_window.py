@@ -554,12 +554,6 @@ class MainWindow(QMainWindow):
         dlg = LiveBalanceDialog(self.engine, parent=self)
         dlg.exec()
 
-    def _open_live_balance_dialog(self) -> None:
-        from eq_helper.ui.live_balance_dialog import LiveBalanceDialog
-
-        dlg = LiveBalanceDialog(self.engine, parent=self)
-        dlg.exec()
-
     def _open_resonance_dialog(self) -> None:
         from eq_helper.ui.resonance_dialog import ResonanceDialog
 

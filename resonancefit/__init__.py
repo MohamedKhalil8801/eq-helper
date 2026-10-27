@@ -1,0 +1,1 @@
+"""ResonanceFit customer app."""
