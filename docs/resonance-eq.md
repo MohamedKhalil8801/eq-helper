@@ -62,7 +62,8 @@ measurements to retrain the models. Model training does not modify source files.
    both peak settings, the target, and the measurement model used for that
    version, even after importing a different folder. History lasts this session.
 6. **Save selected EQ…** exports one APO TXT file. Add it to a preset using the
-   existing EQ library for permanent use.
+   existing EQ library for permanent use. **Save as convolution…** writes
+   impulse responses (any rates, minimum or linear phase) for other players.
 
 APO comments and history mark personalized versions. The user-fit peak and
 its detected coupler counterpart are recorded in export comments; when no
@@ -91,6 +92,41 @@ Audition temporarily replaces the selected device's preset with an isolated
 preview preset to avoid stacked corrections. Closing restores the previous
 preset and removes temporary files; exports are kept. Config-wide processing
 outside the selected device's preset is not bypassed.
+
+## Calibrations and the customer app (ResonanceFit)
+
+The same model is sold as a service (vocabulary: `GLOSSARY.md`; decisions:
+`docs/adr/`). **File → Generate customer app…** turns one measuring session
+into a *calibration*:
+
+1. Enter the customer, IEM and accessories (each marked as the customer's or
+   yours; your own accessories are remembered), the coupler and notes.
+2. Choose the measurement folder (L/R detected from names) or separate L and R
+   folders. The preview shows fits and the primary-resonance range per side and
+   warns below 3 fits per side.
+3. Pick the targets to include and the default (PEQdB Diamond). *Flat Line* is
+   unchecked: it has no IEC-711 ear gain, so it is a diagnostic, not a target
+   for raw coupler predictions.
+4. Choose the systems (Windows, macOS, Linux) or **Calibration file only** for a
+   recalibration, and **Generate**.
+
+Output: the `.rescal` calibration file (fits + manifest, versioned), a
+one-page calibration sheet PDF, and one download per system built from the
+latest prebuilt app in the public releases repo (checked against its
+`SHA256SUMS`, cached in `~/.eq_helper/build_cache/`). Every calibration is kept
+in the customer library (`~/.eq_helper/customer_library/`, never in git) and can
+be regenerated from **Start from a saved calibration**.
+
+The customer app trains the same model from the fits in the calibration and
+lets the customer find the *primary resonance* per ear by ear, pick a target,
+optionally place the *upper resonance*, preview the EQ in the app, keep a
+history of tunings, apply them to Equalizer APO (Windows) and export for the
+EQ apps in `eq_helper/exports/catalog.json`. Customer-facing guide:
+`docs/resonancefit-user-guide.md`.
+
+Releases of the customer app are built, self-tested and published by the
+releases repo's "Build and publish" workflow (ADR 0005); `packaging/` holds the
+PyInstaller spec helpers, release packaging and `e2e_check.py`.
 
 ## What is learned
 
