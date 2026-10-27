@@ -86,11 +86,22 @@ again**, **Use it anyway** (the smoothness check then starts from the best guess
 **Adjust by hand**. If the tones all sound alike, the test goes on to the smoothness check with wider
 steps.
 
-**Upper treble (optional).** After both ears the app offers **Find my upper treble (about 2 minutes)**
-or **Skip, I'm done**. It works the same way with higher sounds (10.5–18 kHz), then noise or a sweep
-through EQs that differ only in the highest treble. If you can barely hear the high sounds, answer
-**About the same**: when no clear peak is heard, that ear's upper treble stays as it is. A found upper treble turns
-on **Adjust the upper treble** (step ③) with that value.
+**Upper treble (optional).** After both ears the app offers **Fine-tune my upper treble** or **Skip, I'm
+done**. There's no louder test up there: above about 12 kHz hearing falls off steeply and differs a lot
+between people, so a high sound seeming quieter says more about your ears than about the IEM. Instead the
+app starts from where your calibration predicts the upper peak for the resonance you just found (it sits
+at about twice that frequency). For each ear:
+
+1. **Can you hear it?** Play a high sound there at your normal volume. If you hear it clearly, answer
+   **I hear it clearly**. If you hear it only faintly or not at all, answer **Barely, or not at all**:
+   that ear's upper treble stays as calibrated. That's normal and nothing is lost: what you can barely
+   hear matters little for your EQ.
+2. **Smoothness check**, a few rounds: three EQs that differ only in the highest treble, around the
+   prediction (never further than the EQ can move it). The **sweep** is selected first: your hearing's
+   fall-off only makes it fade smoothly as it rises, while a misplaced peak leaves a swell or dip as it
+   passes. Pick the one that fades most evenly. Noise works too.
+
+A found upper treble turns on **Adjust the upper treble** (step ③) with that value.
 
 **Balance check (optional, at the end).** If both resonances are right, the same sound in both ears
 sounds centred at every pitch. The app plays a series of short sounds in both ears through your EQ (use
