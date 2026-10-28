@@ -18,7 +18,7 @@ class ListenSaveCard(Card):
     def __init__(self, parent=None):
         super().__init__(tr("④ Listen & save"), parent)
         self.body.addWidget(hint(tr(
-            "Play a tone, a sweep or one of your test songs and switch the EQ on and off to compare.")))
+            "Play a tone, a sweep or something from Test audio and switch the EQ on and off to compare.")))
         self.eq_toggle = QPushButton(tr("EQ off: click to turn it on"))
         self.eq_toggle.setCheckable(True)
         self.eq_toggle.setMinimumHeight(34)

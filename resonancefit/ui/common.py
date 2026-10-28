@@ -128,6 +128,13 @@ QPushButton#primary {{ background: {c['primary']}; color: {c['primary_text_on_pr
     border: 1px solid {c['primary']}; border-radius: 6px; padding: 6px 14px; }}
 QPushButton#primary:checked {{ background: {_mix(QColor(c['primary']), QColor('#000000'), 0.25)}; }}
 QPushButton#primary:disabled {{ background: {c['border']}; border-color: {c['border']}; }}
+QPushButton[large="true"] {{ font-size: 11pt; font-weight: bold; padding: 12px 24px; border-radius: 8px;
+    border: 1px solid {c['border']}; background: {c['base']}; color: {c['text']}; }}
+QPushButton[large="true"]:hover {{ border-color: {c['primary']}; }}
+QPushButton[large="true"]:disabled {{ color: {c['hint']}; }}
+QPushButton#primary[large="true"] {{ background: {c['primary']}; color: {c['primary_text_on_primary']};
+    border-color: {c['primary']}; }}
+QLabel#emptyTitle {{ font-size: 13pt; font-weight: bold; }}
 QPushButton:focus, QToolButton:focus, QComboBox:focus, QSlider:focus, QSpinBox:focus,
 QLineEdit:focus, QListWidget:focus, QRadioButton:focus, QCheckBox:focus, QTabBar:focus {{
     outline: 2px solid {c['primary']}; }}

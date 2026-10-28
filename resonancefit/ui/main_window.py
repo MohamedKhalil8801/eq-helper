@@ -270,7 +270,7 @@ class MainWindow(QMainWindow):
 
         self.songs_page = TestSongsPage(self.ctx, self.audio)
         self.calibrationLoaded.connect(self.songs_page.set_calibration)
-        self.tabs.addTab(self.songs_page, tr("Test songs"))
+        self.tabs.addTab(self.songs_page, tr("Test audio"))
         self.sound_tools = SoundToolsPage(self.audio)
         self.tabs.addTab(self.sound_tools, tr("Sound tools"))
 

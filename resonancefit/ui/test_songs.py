@@ -1,4 +1,4 @@
-"""Test songs: your tuner's suggested links plus your own files and links.
+"""Test audio: your tuner's suggested links plus your own files and links (whatever you choose).
 
 Local files play inside the app, through your EQ, with an EQ on/off switch
 for A/B. Links open in the browser. Formats the app can't decode open in
@@ -40,30 +40,50 @@ class TestSongsPage(QWidget):
         self._loaded_path: Path | None = None
 
         layout = QVBoxLayout(self)
-        layout.addWidget(hint(tr("Songs you know well are the best test. Play them here and switch the EQ "
-                                 "on and off — or open your tuner's suggestions in the browser.")))
+        layout.addWidget(hint(tr("A recording you know well is the best test: whatever you like to listen to. "
+                                 "Play it here and switch the EQ on and off, or open your tuner's suggestions "
+                                 "in the browser.")))
         card = Card()
         self.list = QListWidget()
-        self.list.setAccessibleName(tr("Test songs"))
+        self.list.setAccessibleName(tr("Test audio"))
         self.list.itemDoubleClicked.connect(lambda _i: self.activate_selected())
         self.list.currentRowChanged.connect(self._sync_buttons)
         card.body.addWidget(self.list, 1)
+        # nothing added yet: a short invitation, with the buttons in the middle of the card
+        self.empty_top = QWidget()
+        card.body.addWidget(self.empty_top, 1)
+        self.empty_title = QLabel(tr("Nothing here yet"))
+        self.empty_title.setObjectName("emptyTitle")
+        self.empty_title.setAlignment(Qt.AlignCenter)
+        card.body.addWidget(self.empty_title)
+        self.empty_text = hint(tr("Add audio files from your computer, or a web link, to compare with "
+                                  "the EQ on and off."))
+        self.empty_text.setAlignment(Qt.AlignCenter)
+        card.body.addWidget(self.empty_text)
+        card.body.addSpacing(8)
         row = QHBoxLayout()
-        add_files = QPushButton(tr("Add songs…"))
-        add_files.clicked.connect(self._browse)
-        row.addWidget(add_files)
-        add_link = QPushButton(tr("Add link…"))
-        add_link.clicked.connect(self._ask_link)
-        row.addWidget(add_link)
+        row.setSpacing(12)
+        row.addStretch(1)
+        self.add_files_button = QPushButton(tr("+ Add audio files…"))
+        self.add_files_button.setObjectName("primary")
+        self.add_files_button.clicked.connect(self._browse)
+        self.add_link_button = QPushButton(tr("🔗 Add link…"))
+        self.add_link_button.clicked.connect(self._ask_link)
         self.remove_button = QPushButton(tr("Remove"))
+        self.remove_button.setToolTip(tr("Remove the selected item from the list (not from your computer)"))
         self.remove_button.clicked.connect(self._remove)
-        row.addWidget(self.remove_button)
+        for button in (self.add_files_button, self.add_link_button, self.remove_button):
+            button.setProperty("large", True)
+            button.setMinimumHeight(46)
+            row.addWidget(button)
         row.addStretch(1)
         card.body.addLayout(row)
+        self.empty_bottom = QWidget()
+        card.body.addWidget(self.empty_bottom, 1)
         layout.addWidget(card, 1)
 
         transport = Card(tr("Now playing"))
-        self.now = QLabel(tr("Nothing yet. Double-click a song to play it."))
+        self.now = QLabel(tr("Nothing yet. Double-click an item to play it."))
         self.now.setWordWrap(True)
         transport.body.addWidget(self.now)
         row = QHBoxLayout()
@@ -117,6 +137,11 @@ class TestSongsPage(QWidget):
             self._add_row(item, operator=True)
         for item in self._customer_items():
             self._add_row(item, operator=False)
+        empty = self.list.count() == 0
+        self.list.setVisible(not empty)
+        for widget in (self.empty_top, self.empty_title, self.empty_text, self.empty_bottom):
+            widget.setVisible(empty)
+        self.remove_button.setVisible(not empty)
         self._sync_buttons()
 
     def _add_row(self, item: dict, operator: bool) -> None:
@@ -147,12 +172,12 @@ class TestSongsPage(QWidget):
         self._fill()
 
     def _browse(self) -> None:
-        paths, _ = QFileDialog.getOpenFileNames(self, tr("Add songs"), "", tr(AUDIO_FILTER))
+        paths, _ = QFileDialog.getOpenFileNames(self, tr("Add audio files"), "", tr(AUDIO_FILTER))
         if paths:
             self.add_files(paths)
 
     def _ask_link(self) -> None:
-        url, ok = QInputDialog.getText(self, tr("Add link"), tr("Web address (for example a YouTube or Qobuz link):"))
+        url, ok = QInputDialog.getText(self, tr("Add link"), tr("Web address (for example a YouTube link):"))
         if ok and url.strip():
             label, _ = QInputDialog.getText(self, tr("Add link"), tr("Name (optional):"))
             self.add_link(label.strip(), url.strip())

@@ -1,4 +1,4 @@
-"""Test songs played inside the app, through the customer's EQ.
+"""Test audio (the customer's own files) played inside the app, through the customer's EQ.
 
 Files are decoded with ``soundfile`` (libsndfile ≥ 1.1: WAV, FLAC, OGG/Opus,
 MP3) on a worker thread, resampled to the device rate and played as stereo
