@@ -80,6 +80,8 @@ from eq_helper.audio.shared_state import (
 DEFAULT_SAMPLE_RATE = 48000
 DEFAULT_BLOCK_SIZE = 480  # 10 ms @ 48 kHz
 TONE_SWITCH_FADE_S = 0.02  # crossfade length of switch_sine() / switch_band()
+GREY_HIGHPASS_HZ = 80.0    # grey noise: deep bass removed (see _level_grey)
+GREY_LEVEL_DB = 33.0       # … then raised so 1–4 kHz matches pink noise at the same volume
 
 
 # ----------------------------------------------------------------- helpers
@@ -90,6 +92,39 @@ def _assets_dir() -> Path:
     if getattr(sys, "frozen", False):
         return Path(sys._MEIPASS) / "assets"  # type: ignore[attr-defined]
     return Path(__file__).resolve().parent.parent.parent / "assets"
+
+
+def _wav_rate(path: Path) -> Optional[int]:
+    try:
+        with wave.open(str(path), "rb") as wf:
+            return int(wf.getframerate())
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _resampled(data: np.ndarray, rate: int, target: int) -> np.ndarray:
+    """``data`` (recorded at ``rate``) for playback at ``target``: otherwise its spectrum shifts."""
+    if rate == target or data.shape[0] == 0:
+        return data
+    from math import gcd
+
+    from scipy.signal import resample_poly
+    g = gcd(int(rate), int(target))
+    return resample_poly(data, int(target) // g, int(rate) // g).astype(np.float32)
+
+
+def _level_grey(data: np.ndarray, rate: int) -> np.ndarray:
+    """The bundled grey noise, level-matched to pink noise.
+
+    The recording follows a quiet equal-loudness contour: ~34 dB below pink
+    at 1–4 kHz and far above it in the deep bass, so at the same volume it
+    was nearly silent. A high-pass at ``GREY_HIGHPASS_HZ`` takes out the deep
+    bass (which only makes peaks), then ``GREY_LEVEL_DB`` brings 1–4 kHz level
+    with pink; its peaks end up about twice pink's.
+    """
+    from scipy.signal import butter, sosfilt
+    sos = butter(4, GREY_HIGHPASS_HZ, "highpass", fs=rate, output="sos")
+    return (sosfilt(sos, data) * 10 ** (GREY_LEVEL_DB / 20)).astype(np.float32)
 
 
 def _load_wav_mono(path: Path) -> Optional[np.ndarray]:
@@ -216,10 +251,14 @@ class AudioEngine:
         self._voice_cmds: list[tuple] = []
         self._voice_lock = threading.Lock()
 
-        # Grey noise (loaded from WAV, looped)
-        self._grey_buf: Optional[np.ndarray] = _load_wav_mono(
-            _assets_dir() / "grey_noise.wav"
-        )
+        # Grey noise (loaded from WAV, looped; resampled to the output rate when it starts)
+        grey_path = _assets_dir() / "grey_noise.wav"
+        self._grey_source: Optional[np.ndarray] = _load_wav_mono(grey_path)
+        self._grey_source_rate: int = _wav_rate(grey_path) or self.sample_rate
+        if self._grey_source is not None and self._grey_source.shape[0] > 0:
+            self._grey_source = _level_grey(self._grey_source, self._grey_source_rate)
+        self._grey_buf: Optional[np.ndarray] = self._grey_source
+        self._grey_buf_rate: int = self._grey_source_rate
         self._grey_pos: int = 0
         self._filter = BandPassFilter(self.sample_rate)
 
@@ -485,10 +524,18 @@ class AudioEngine:
             sweep_duration_s=duration_s,
         )
 
+    @property
+    def has_grey(self) -> bool:
+        """The grey-noise recording loaded (it's a bundled asset)."""
+        return self._grey_source is not None and self._grey_source.shape[0] > 0
+
     def start_grey(self) -> None:
         self._grey_pos = 0
+        self.start_stream()  # opening the stream can change the sample rate
+        if self._grey_source is not None and self._grey_buf_rate != self.sample_rate:
+            self._grey_buf = _resampled(self._grey_source, self._grey_source_rate, self.sample_rate)
+            self._grey_buf_rate = self.sample_rate
         self.state.update(mode=Mode.GREY)
-        self.start_stream()
 
     def switch_sine(self, freq: float, fade_s: float = TONE_SWITCH_FADE_S) -> None:
         """Play a sine at ``freq``, crossfading from whatever tone is playing (or

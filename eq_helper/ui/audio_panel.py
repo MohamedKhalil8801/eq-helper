@@ -405,7 +405,9 @@ class AudioPanel(QGroupBox):
         freq = float(settings.get("sine_freq_hz", 1000.0))
         self.freq_slider.set_value(math.log10(max(20.0, min(20000.0, freq))))
         regular_vol = float(settings.get("volume", 0.08))
-        grey_vol = float(settings.get("grey_volume", regular_vol))
+        # grey noise is level-matched to pink now: a volume saved for the old, ~34 dB quieter
+        # recording ("grey_volume") would be far too loud, so it starts at the regular volume
+        grey_vol = float(settings.get("grey_volume_matched", regular_vol))
         self._volume = VolumeMemory(regular=regular_vol, grey=grey_vol)
         self.vol_slider.set_value(regular_vol)  # idle shows the regular volume
         self.sweep_duration.set_value(float(settings.get("sweep_duration_s", 10.0)))
@@ -452,7 +454,8 @@ class AudioPanel(QGroupBox):
     def collect_settings(self, settings: dict) -> None:
         settings["sine_freq_hz"] = 10 ** self.freq_slider.value()
         settings["volume"] = self._volume.regular
-        settings["grey_volume"] = self._volume.grey
+        settings["grey_volume_matched"] = self._volume.grey
+        settings.pop("grey_volume", None)
         settings["sweep_duration_s"] = self.sweep_duration.value()
         settings["channel_mode"] = {0: "LEFT", 1: "BOTH", 2: "RIGHT"}[self.channel_switch.index()]
         settings["force_mono"] = self.mono_check.isChecked()
