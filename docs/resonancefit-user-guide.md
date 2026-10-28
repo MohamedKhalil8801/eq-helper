@@ -69,9 +69,11 @@ right (one ear only for a calibration made for both ears at once):
      answer it can already predict, so answers that don't follow the sounds are noticed. About seven
      rounds are usually enough, a few more if some answers disagree.
 2. **Smoothness check.** Three cards, **A**, **B** and **C**: three slightly different EQs around what
-   the louder test found. **Listen with Noise or Sweep** (switch any time, use both): with **Noise**, pick
-   the one whose treble sounds **smoothest**, with no harsh, hissy or dull spot; with **Sweep**, a slow
-   sweep through the treble, pick the one where it **stays even**, with no swell or dip as it passes.
+   the louder test found. **Listen with Pink noise, Grey noise or Sweep** (switch any time, use any;
+   keys N, G, W): with noise, pick the one whose treble sounds **smoothest**, with no harsh, hissy or
+   dull spot; with **Sweep**, a slow sweep through the treble, pick the one where it **stays even**, with
+   no swell or dip as it passes. Grey noise is pink noise with the treble (and bass) lifted the way
+   hearing needs it, so a harsh or dull spot high up stands out more.
    Answer **Smoothest: B** or **Can't tell them apart**. A few rounds.
 
 The cards are in a different order every round and never show frequencies, and the moving bars on the
@@ -99,7 +101,7 @@ at about twice that frequency). For each ear:
 2. **Smoothness check**, a few rounds: three EQs that differ only in the highest treble, around the
    prediction (never further than the EQ can move it). The **sweep** is selected first: your hearing's
    fall-off only makes it fade smoothly as it rises, while a misplaced peak leaves a swell or dip as it
-   passes. Pick the one that fades most evenly. Noise works too.
+   passes. Pick the one that fades most evenly. Pink or grey noise works too.
 
 A found upper treble turns on **Adjust the upper treble** (step ③) with that value.
 
@@ -140,7 +142,8 @@ you've found your resonance before):
 Each sound button starts its sound and stops it when you press it again (it reads **■ Stop tone** while
 playing). Space, or **Stop all sound** at the bottom, stops everything.
 
-To check by ear, press **≈ Pink noise + EQ**: pink noise plays through your EQ (the EQ switches on). Move
+To check by ear, press **≈ Pink noise + EQ** or **≈ Grey noise + EQ**: the noise plays through your EQ
+(the EQ switches on). Move
 the resonance slowly while it plays; where it's right, the treble sounds smooth and even, with no harsh,
 hissy or dull spot.
 
@@ -165,7 +168,7 @@ keeps the EQ as calibrated.
 ## ④ Listen & save
 
 - **EQ off / on:** switches the EQ in the app on and off so you can compare. It's level-matched, so you
-  compare tone, not loudness. Use a tone, a sweep or a song (see *Test songs*).
+  compare tone, not loudness. Use a tone, a sweep or something you know well (see *Test audio*).
 - **Save tuning:** keeps your current choices in **History** with an optional note.
 - **Export for my EQ app…:** makes the files for the app you listen with (below).
 - **Apply to Equalizer APO** (Windows, when Equalizer APO is installed): makes this tuning your
@@ -207,9 +210,12 @@ predicted curves (left and right, optionally with the EQ) for squig.link or PEQd
 
 ## Other tabs
 
-- **Test songs:** your tuner's suggested links plus your own songs and links. Songs play in the app
+- **Test audio:** your tuner's suggested links plus whatever you add: audio files from your computer
+  (any recording you know well) or web links. **+ Add audio files…** and **Add link…** sit in the middle
+  of the list while it's empty. Files play in the app
   through your EQ with the EQ on/off switch. Formats the app can't play open in your system's player.
-- **Sound tools:** tone, sweep, full sweep and pink noise, volume, and Left/Both/Right.
+- **Sound tools:** tone, sweep, full sweep, pink and grey noise, volume, and Left/Both/Right. As on the
+  Tune tab, each button starts its sound and stops it when pressed again.
 - **Settings:** output device, Equalizer APO, the calibrations and data folders, the walkthrough, and
   **Version and updates** (below).
 - **About:** your calibration sheet, contact and licences.
