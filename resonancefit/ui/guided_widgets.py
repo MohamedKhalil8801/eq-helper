@@ -14,7 +14,7 @@ from __future__ import annotations
 import math
 
 import numpy as np
-from PySide6.QtCore import QEasingCurve, QPointF, QRectF, QSize, Qt, QVariantAnimation, Signal
+from PySide6.QtCore import QEasingCurve, QPointF, QRectF, QSize, Qt, QVariantAnimation
 from PySide6.QtGui import QColor, QLinearGradient, QPainter, QPainterPath, QPalette, QPen
 from PySide6.QtWidgets import QAbstractButton, QSizePolicy, QWidget
 
@@ -432,107 +432,3 @@ def level_from_samples(samples, volume: float) -> float:
     reference = max(volume, 1e-6) / math.sqrt(2.0)
     return float(min(max(1.0 + 20.0 * math.log10(rms / reference) / 30.0, 0.0), 1.0))
 
-
-class CentreControl(QWidget):
-    """Moves the sound left or right (dB of level difference) until it sounds centred.
-
-    Positive values move the sound to the right. Drag or click; ← / → move
-    0.5 dB (Shift: 2 dB); Home puts it back in the middle.
-    """
-
-    valueChanged = Signal(float)
-
-    STEP_DB, BIG_STEP_DB = 0.5, 2.0
-
-    def __init__(self, range_db: float = 8.0, parent=None):
-        super().__init__(parent)
-        self.range_db = float(range_db)
-        self.value = 0.0
-        self.accent = QColor("#7c6cff")
-        self.setFixedHeight(64)
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.setFocusPolicy(Qt.StrongFocus)
-        self.setCursor(Qt.PointingHandCursor)
-        self._sync_accessible()
-
-    def set_value(self, db: float, emit: bool = True) -> None:
-        db = float(min(max(db, -self.range_db), self.range_db))
-        if abs(db - self.value) < 1e-9:
-            return
-        self.value = db
-        self._sync_accessible()
-        self.update()
-        if emit:
-            self.valueChanged.emit(db)
-
-    def set_accent(self, color: QColor) -> None:
-        self.accent = QColor(color)
-        self.update()
-
-    def _sync_accessible(self) -> None:
-        if abs(self.value) < 0.25:
-            where = "centre"
-        else:
-            where = f"{abs(self.value):.1f} dB {'right' if self.value > 0 else 'left'}"
-        self.setAccessibleDescription(where)
-
-    def _track(self) -> QRectF:
-        return QRectF(self.rect()).adjusted(36, 22, -36, -22)
-
-    def _value_at(self, x: float) -> float:
-        track = self._track()
-        t = (x - track.left()) / max(track.width(), 1.0)
-        return (min(max(t, 0.0), 1.0) * 2.0 - 1.0) * self.range_db
-
-    def mousePressEvent(self, event) -> None:
-        self.setFocus()
-        self.set_value(self._value_at(event.position().x()))
-
-    def mouseMoveEvent(self, event) -> None:
-        if event.buttons() & Qt.LeftButton:
-            self.set_value(self._value_at(event.position().x()))
-
-    def keyPressEvent(self, event) -> None:
-        step = self.BIG_STEP_DB if event.modifiers() & Qt.ShiftModifier else self.STEP_DB
-        if event.key() == Qt.Key_Left:
-            self.set_value(self.value - step)
-        elif event.key() == Qt.Key_Right:
-            self.set_value(self.value + step)
-        elif event.key() == Qt.Key_Home:
-            self.set_value(0.0)
-        else:
-            event.ignore()  # Space, Enter, letters: the view's shortcuts
-            return
-        event.accept()
-
-    def paintEvent(self, _event) -> None:
-        colors = stage_colors(self.palette())
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-        track = self._track()
-        cy = track.center().y()
-        bar = QRectF(track.left(), cy - 3, track.width(), 6)
-        painter.setPen(Qt.NoPen)
-        painter.setBrush(colors["track"])
-        painter.drawRoundedRect(bar, 3, 3)
-        cx = track.center().x()
-        x = track.left() + (self.value / self.range_db + 1.0) / 2.0 * track.width()
-        if abs(x - cx) > 0.5:
-            painter.setBrush(_with_alpha(self.accent, 0.8))
-            painter.drawRoundedRect(QRectF(min(x, cx), cy - 3, abs(x - cx), 6), 3, 3)
-        painter.setPen(QPen(colors["muted"], 1.5))
-        painter.drawLine(QPointF(cx, cy - 12), QPointF(cx, cy + 12))
-        painter.setPen(colors["muted"])
-        painter.setFont(self.font())
-        painter.drawText(QRectF(0, 0, 30, self.height()), Qt.AlignCenter, "L")
-        painter.drawText(QRectF(self.width() - 30, 0, 30, self.height()), Qt.AlignCenter, "R")
-        glow = 0.25 * colors["glow"]
-        painter.setPen(Qt.NoPen)
-        for r in (14, 11):
-            painter.setBrush(_with_alpha(self.accent, glow))
-            painter.drawEllipse(QPointF(x, cy), r, r)
-        painter.setBrush(colors["card_top"])
-        painter.setPen(QPen(self.accent, 2))
-        painter.drawEllipse(QPointF(x, cy), 9, 9)
-        if self.hasFocus():
-            _focus_ring(painter, QRectF(self.rect()).adjusted(4, 6, -4, -6), 10, colors["focus"])

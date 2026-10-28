@@ -17,11 +17,8 @@ thread. After both primary resonances the upper treble is offered: no
 louder test up there (hearing falls off too steeply to judge loudness), but
 one question per ear — is a band at the predicted peak heard clearly? — and
 then the smoothness check around the calibration's prediction (the sweep
-first; EQs that move only the upper resonance). Last,
-an optional balance check: the same noise bands in both ears through the
-EQ, each centred by the customer; a lean shaped like a misplaced resonance
-leads to a short re-check of that ear (the EQ never changes by itself). The
-EQ preview is put back as it was when the test closes.
+first; EQs that move only the upper resonance). The EQ preview is put
+back as it was when the test closes.
 """
 
 from __future__ import annotations
@@ -37,11 +34,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..balance_check import CENTRE_RANGE_DB, analyse
 from ..guided_test import AUDIBLE, LOUDER, PRIMARY, UPPER, GuidedTest
 from .common import Worker, side_name, tr
 from .guided_widgets import (
-    CARD_MARGIN, AnswerButton, CentreControl, OptionCard, ProgressLine, StageBackground, TransportBar, accent_colors,
+    CARD_MARGIN, AnswerButton, OptionCard, ProgressLine, StageBackground, TransportBar, accent_colors,
     is_dark, level_from_samples, stage_colors,
 )
 
@@ -85,11 +81,6 @@ class GuidedTestView(StageBackground):
     ``upper_prediction(side, primary_hz)`` (optional): where the calibration
     puts that ear's upper peak for its found primary resonance, or ``None``.
     Without it the upper treble isn't offered.
-
-    ``balance()`` (optional) is called on the GUI thread when the balance check
-    starts and returns ``(bands, work)``: the bands to centre and a function
-    that, on a worker thread, returns ``(channel_eq, designed_firs, model)`` for
-    the current tuning (``model``: a :class:`~resonancefit.balance_check.BalanceModel`).
     """
 
     resultFound = Signal(str, float)
@@ -97,21 +88,11 @@ class GuidedTestView(StageBackground):
     adjustByHand = Signal(object)
     finished = Signal()
 
-    def __init__(self, audio, option_eqs=None, balance=None, upper_prediction=None, parent=None):
+    def __init__(self, audio, option_eqs=None, upper_prediction=None, parent=None):
         super().__init__(parent)
         self.audio = audio
         self.option_eqs = option_eqs
-        self.balance = balance
         self.upper_prediction = upper_prediction
-        self._balance_bands: list = []
-        self._balance_leans: list[float] = []
-        self._balance_index = 0
-        self._balance_model = None
-        self._balance_generation = 0
-        self.balance_result = None
-        self._suggestion = None       # the re-check the last balance check offers
-        self._recheck_before = None   # (side, target, Hz) while a re-check runs
-        self._rechecks: list[tuple[str, str, float, float]] = []  # (side, target, before, after) since the last check
         self.test: GuidedTest | None = None
         self.rng = random.Random()
         self._clock = time.monotonic
@@ -157,11 +138,7 @@ class GuidedTestView(StageBackground):
         self.unsure_page = self._build_unsure()
         self.done_page = self._build_done()
         self.upper_page = self._build_upper_offer()
-        self.balance_offer_page = self._build_balance_offer()
-        self.balance_page = self._build_balance()
-        self.balance_result_page = self._build_balance_result()
-        for page in (self.intro_page, self.test_page, self.unsure_page, self.done_page, self.upper_page,
-                     self.balance_offer_page, self.balance_page, self.balance_result_page):
+        for page in (self.intro_page, self.test_page, self.unsure_page, self.done_page, self.upper_page):
             self.pages.addWidget(page)
         self._restyle()
         audio.on_change(self._audio_changed)
@@ -431,133 +408,6 @@ class GuidedTestView(StageBackground):
         layout.addStretch(1)
         return page
 
-    def _build_balance_offer(self) -> QWidget:
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(10)
-        self.balance_offer_title = self._label(tr("Check left and right"), "gtTitle")
-        self._header(layout, self.balance_offer_title, self._label(tr("Optional"), "gtMuted", wrap=False))
-        self.balance_summary = self._label("", "gtResult")
-        layout.addLayout(self._padded(self.balance_summary))
-        layout.addLayout(self._padded(self._label(tr(
-            "If both resonances are right, the same sound in both ears sounds centred at every pitch. You'll "
-            "hear a series of short sounds in both ears; if one sounds off to one side, move it back to the "
-            "middle. Where a sound leans the way a misplaced resonance would, the app offers to check that "
-            "ear again. Your EQ isn't changed by this check. Use your normal listening volume."))))
-        row = QHBoxLayout()
-        row.setContentsMargins(CARD_MARGIN, 8, CARD_MARGIN, 0)
-        self.balance_button = QPushButton(tr("Check the balance (about 2 minutes)"))
-        self.balance_button.setObjectName("primary")
-        self.balance_button.clicked.connect(self.start_balance)
-        row.addWidget(self.balance_button)
-        self.skip_balance_button = QPushButton(tr("Skip, I'm done"))
-        self.skip_balance_button.clicked.connect(self.finish)
-        row.addWidget(self.skip_balance_button)
-        self.balance_offer_back = QPushButton(tr("Back"))
-        self.balance_offer_back.clicked.connect(self.back)
-        row.addWidget(self.balance_offer_back)
-        row.addStretch(1)
-        layout.addLayout(row)
-        self._shortcut(page, (Qt.Key_Return, Qt.Key_Enter), lambda: self._enter(self.start_balance))
-        layout.addStretch(1)
-        return page
-
-    def _build_balance(self) -> QWidget:
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-        self.balance_title = self._label("", "gtTitle", wrap=False)
-        self._header(layout, self.balance_title, self._label(tr("Balance check"), "gtMuted", wrap=False))
-        self.balance_instructions = self._label(tr(
-            "The same sound plays in both ears. Does it sound in the middle? If it leans to one side, move it "
-            "back to the centre (drag, or ← →), then press Next. If it's already centred, just press Next."),
-            "gtMuted")
-        layout.addLayout(self._padded(self.balance_instructions))
-        layout.addSpacing(10)
-        self.balance_transport = TransportBar()
-        self.balance_transport.clicked.connect(self.toggle_balance_sound)
-        layout.addLayout(self._padded(self.balance_transport))
-        layout.addSpacing(16)
-        self.centre = CentreControl(CENTRE_RANGE_DB)
-        self.centre.setAccessibleName(tr("Move the sound left or right"))
-        self.centre.valueChanged.connect(self._centre_moved)
-        layout.addLayout(self._padded(self.centre))
-        hints = QHBoxLayout()
-        hints.setContentsMargins(CARD_MARGIN, 0, CARD_MARGIN, 0)
-        hints.addWidget(self._label(tr("◀ move left"), "gtMuted", wrap=False))
-        hints.addStretch(1)
-        self.centre_reset = QPushButton(tr("Centre"))
-        self.centre_reset.setToolTip(tr("Back to the middle (Home)"))
-        self.centre_reset.clicked.connect(lambda: self.centre.set_value(0.0))
-        hints.addWidget(self.centre_reset)
-        hints.addStretch(1)
-        hints.addWidget(self._label(tr("move right ▶"), "gtMuted", wrap=False))
-        layout.addLayout(hints)
-        layout.addSpacing(16)
-        row = QHBoxLayout()
-        row.setContentsMargins(CARD_MARGIN, 0, CARD_MARGIN, 0)
-        row.setSpacing(12)
-        self.balance_prev = AnswerButton(tr("Previous sound"))
-        self.balance_prev.clicked.connect(self.previous_balance_band)
-        row.addWidget(self.balance_prev, 1)
-        self.balance_next = AnswerButton(tr("Next"))
-        self.balance_next.clicked.connect(self.next_balance_band)
-        row.addWidget(self.balance_next, 3)
-        layout.addLayout(row)
-        layout.addSpacing(10)
-        self.balance_progress = ProgressLine()
-        self.balance_progress.setAccessibleName(tr("Progress"))
-        layout.addLayout(self._padded(self.balance_progress))
-        layout.addSpacing(14)
-        footer = QHBoxLayout()
-        footer.setContentsMargins(CARD_MARGIN, 0, CARD_MARGIN, 0)
-        footer.addStretch(1)
-        self.balance_stop = QPushButton(tr("Stop the check"))
-        self.balance_stop.clicked.connect(self._leave_balance)
-        footer.addWidget(self.balance_stop)
-        layout.addLayout(footer)
-        self._shortcut(page, (Qt.Key_P,), self.toggle_balance_sound)
-        self._shortcut(page, (Qt.Key_Return, Qt.Key_Enter), lambda: self._enter(self.next_balance_band))
-        self._shortcut(page, (Qt.Key_Backspace,), self.previous_balance_band)
-        layout.addStretch(1)
-        return page
-
-    def _build_balance_result(self) -> QWidget:
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(10)
-        self.balance_result_title = self._label(tr("Balance"), "gtTitle")
-        self._header(layout, self.balance_result_title)
-        self.balance_headline = self._label("", "gtResult")
-        font = self.balance_headline.font()
-        font.setPointSizeF(font.pointSizeF() * 1.4)
-        font.setBold(True)
-        self.balance_headline.setFont(font)
-        layout.addLayout(self._padded(self.balance_headline))
-        self.balance_notes = self._label("", "gtText")
-        layout.addLayout(self._padded(self.balance_notes))
-        row = QHBoxLayout()
-        row.setContentsMargins(CARD_MARGIN, 8, CARD_MARGIN, 0)
-        self.recheck_button = QPushButton()
-        self.recheck_button.setObjectName("primary")
-        self.recheck_button.clicked.connect(self.start_recheck)
-        row.addWidget(self.recheck_button)
-        self.balance_again = QPushButton(tr("Run the balance check again"))
-        self.balance_again.clicked.connect(self.start_balance)
-        row.addWidget(self.balance_again)
-        self.balance_done = QPushButton(tr("Done"))
-        self.balance_done.clicked.connect(self.finish)
-        row.addWidget(self.balance_done)
-        row.addStretch(1)
-        layout.addLayout(row)
-        self._shortcut(page, (Qt.Key_Return, Qt.Key_Enter),
-                       lambda: self._enter(self.start_recheck if self.recheck_button.isVisible() else self.finish))
-        layout.addStretch(1)
-        return page
-
     def _done_progress(self) -> ProgressLine:
         self.done_progress = ProgressLine()
         self.done_progress.setAccessibleName(tr("Progress"))
@@ -632,8 +482,6 @@ class GuidedTestView(StageBackground):
         if self._sound is not None:
             self._sound = None
             self.audio.stop_all()
-        self._balance_generation += 1
-        self.audio.engine.set_lr_gains(1.0, 1.0)
         if self._saved_eq_enabled is not None:
             self.audio.set_eq_enabled(self._saved_eq_enabled)
             self._saved_eq_enabled = None
@@ -967,8 +815,6 @@ class GuidedTestView(StageBackground):
             self._frame.stop()
             self._sync_cards()
             self._sync_transport()
-            if self.pages.currentWidget() is self.balance_page:
-                self._show_balance_band()
 
     def keyPressEvent(self, event) -> None:
         if event.key() == Qt.Key_Space:  # the window's shortcut usually gets there first
@@ -1017,11 +863,6 @@ class GuidedTestView(StageBackground):
         if finished is not None:
             side, target = finished
             self._pause_if_playing()
-            before = self._recheck_before
-            if before is not None and before[:2] == (side, target):
-                after = (test.upper_results if target == UPPER else test.results)[side]
-                self._rechecks.append((side, target, before[2], after))
-                self._recheck_before = None
             if target == UPPER:
                 hz = test.upper_results[side]
                 self.upperFound.emit(side, hz)
@@ -1072,7 +913,7 @@ class GuidedTestView(StageBackground):
         self.result_note.setText(note)
         self.done_progress.set_value(test.progress())
         if test.status == "finished":
-            self.next_button.setText(tr("Next") if self.can_balance else tr("Done"))
+            self.next_button.setText(tr("Done"))
         elif test.status == "upper_offer":
             self.next_button.setText(tr("Next"))
         else:
@@ -1084,7 +925,7 @@ class GuidedTestView(StageBackground):
         if self.test is None:
             return
         if self.test.status == "finished":
-            self._after_test()
+            self.finish()
             return
         if self.test.status == "upper_offer":
             self._show_upper_offer()
@@ -1106,7 +947,7 @@ class GuidedTestView(StageBackground):
         predict = self.upper_prediction or (lambda _side, _hz: None)
         self.test.start_upper({side: predict(side, hz) for side, hz in self.test.results.items()})
         if self.test.status == "finished":  # nothing predicted for any ear
-            self._after_test()
+            self.finish()
             return
         self.pages.setCurrentWidget(self.test_page)
         self._new_round(keep_playing=False)
@@ -1116,7 +957,7 @@ class GuidedTestView(StageBackground):
         if self.test is None or self.test.status != "upper_offer":
             return
         self.test.skip_upper()
-        self._after_test()
+        self.finish()
 
     def redo_ear(self) -> None:
         if self.test is None or self.test.status != "unsure":
@@ -1178,245 +1019,7 @@ class GuidedTestView(StageBackground):
         else:
             self.listen_hint.setText(tr("Play it first") if self.test.kind == AUDIBLE else tr("Listen to each one first"))
 
-    # ── the balance check ──────────────────────────────────────────────────
-    @property
-    def can_balance(self) -> bool:
-        return self.balance is not None and self.test is not None and set(self.test.sides) == {"L", "R"}
-
-    def _after_test(self) -> None:
-        """Both ears done (and the upper treble, if wanted): offer the balance check, else finish."""
-        if not self.can_balance:
-            self.finish()
-            return
-        self._pause_if_playing()
-        lines = [tr("{ear} resonance: {hz} Hz").format(ear=side_name(side), hz=f"{int(round(hz)):,}")
-                 for side, hz in self.test.results.items()]
-        lines += [tr("{ear} upper treble: {hz} Hz").format(ear=side_name(side), hz=f"{int(round(hz)):,}")
-                  for side, hz in self.test.upper_results.items() if hz is not None]
-        self.balance_summary.setText("\n".join(lines))
-        again = self.balance_result is not None
-        self.balance_offer_title.setText(tr("Check the balance again") if again else tr("Check left and right"))
-        self.pages.setCurrentWidget(self.balance_offer_page)
-        self.balance_button.setFocus()
-
     def finish(self) -> None:
         self.stop()
         self.finished.emit()
 
-    def start_balance(self) -> None:
-        """Get the current EQ and the bands ready (on a worker), then show the first sound."""
-        if not self.can_balance:
-            return
-        self._pause_if_playing()
-        bands, build = self.balance(self.rng)
-        self._balance_bands = list(bands)
-        self._balance_leans = [0.0] * len(bands)
-        self._balance_index = 0
-        self._balance_model = None
-        self._balance_generation += 1
-        generation = self._balance_generation
-
-        def work():
-            return generation, build()
-
-        job = Worker(work)
-        job.finished_ok.connect(self._balance_ready)
-        job.failed.connect(self._eqs_failed)
-        job.finished.connect(lambda: _JOBS.discard(job))
-        _JOBS.add(job)
-        job.start()
-        self.pages.setCurrentWidget(self.balance_page)
-        self._show_balance_band()
-        self.balance_transport.setFocus()
-
-    def _balance_ready(self, result) -> None:
-        generation, (eq, designed, model) = result
-        if generation != self._balance_generation:
-            return
-        self._balance_model = model
-        if self._saved_eq_enabled is None:
-            self._saved_eq_enabled = self.audio.eq_enabled
-        self.audio.offer_firs(eq, designed)
-        self.audio.set_eq(eq)              # the tuning as found, not a test option
-        if not self.audio.eq_enabled:
-            self.audio.set_eq_enabled(True)
-        self._show_balance_band()
-        if self._play_when_ready:
-            self.play_balance()
-
-    @property
-    def balance_band(self):
-        return self._balance_bands[self._balance_index] if self._balance_bands else None
-
-    def _show_balance_band(self) -> None:
-        n, i = len(self._balance_bands), self._balance_index
-        self.balance_title.setText(tr("Sound {i} of {n}").format(i=i + 1, n=n))
-        self.centre.set_value(self._balance_leans[i] if self._balance_leans else 0.0, emit=False)
-        self._apply_centre()
-        self.balance_progress.set_value(i / max(n, 1))
-        self.balance_prev.setEnabled(i > 0)
-        self.balance_next.setText(tr("Finish") if i == n - 1 else tr("Next"))
-        ready = self._balance_model is not None
-        playing = self._sound == "band" and self.pages.currentWidget() is self.balance_page
-        self.balance_transport.set_playing(playing, tr("Pause") if playing else tr("Play"))
-        self.balance_transport.setEnabled(ready)
-        self.balance_transport.setToolTip(tr("Play or pause (P)") if ready else tr("Getting the sounds ready…"))
-        if playing:
-            band = self.balance_band
-            self.audio.switch_band(band.hz, band.width, "both")
-
-    def toggle_balance_sound(self) -> None:
-        if self.pages.currentWidget() is not self.balance_page:
-            return
-        if self._sound is not None:
-            self._pause()
-            self._show_balance_band()
-        else:
-            self.play_balance()
-
-    def play_balance(self) -> None:
-        if self._balance_model is None:
-            self._play_when_ready = True
-            return
-        band = self.balance_band
-        self._starting = True
-        try:
-            self.audio.switch_band(band.hz, band.width, "both")
-        finally:
-            self._starting = False
-        if self.audio.playing == "band":
-            self._sound = "band"
-            self._play_when_ready = False
-        self._show_balance_band()
-
-    def _centre_moved(self, _db: float) -> None:
-        if self._balance_leans:
-            self._balance_leans[self._balance_index] = self.centre.value
-        self._apply_centre()
-        if self._sound is None and self._balance_model is not None:
-            self.play_balance()  # moving the control means listening
-
-    def _apply_centre(self) -> None:
-        """Positive moves the sound right: the right ear up, the left down, by half each."""
-        db = self.centre.value
-        self.audio.engine.set_lr_gains(10 ** (-db / 40), 10 ** (db / 40))
-
-    def next_balance_band(self) -> None:
-        if self.pages.currentWidget() is not self.balance_page or self._balance_model is None:
-            return
-        self._balance_leans[self._balance_index] = self.centre.value
-        if self._balance_index + 1 < len(self._balance_bands):
-            self._balance_index += 1
-            self._show_balance_band()
-            return
-        self._pause_if_playing()
-        self.audio.engine.set_lr_gains(1.0, 1.0)
-        self._analyse_balance()
-
-    def previous_balance_band(self) -> None:
-        if self.pages.currentWidget() is not self.balance_page or self._balance_index == 0:
-            return
-        self._balance_leans[self._balance_index] = self.centre.value
-        self._balance_index -= 1
-        self._show_balance_band()
-
-    def _leave_balance(self) -> None:
-        self._pause_if_playing()
-        self._balance_generation += 1
-        self.audio.engine.set_lr_gains(1.0, 1.0)
-        self._after_test()
-
-    def _analyse_balance(self) -> None:
-        bands, leans, model = list(self._balance_bands), list(self._balance_leans), self._balance_model
-        uncertainty = self.test.uncertainty()
-        self._balance_generation += 1
-        generation = self._balance_generation
-
-        def work():
-            return generation, analyse(bands, leans, model, uncertainty)
-
-        job = Worker(work)
-        job.finished_ok.connect(self._balance_analysed)
-        job.failed.connect(self._eqs_failed)
-        job.finished.connect(lambda: _JOBS.discard(job))
-        _JOBS.add(job)
-        job.start()
-        self.balance_title.setText(tr("Reading your answers…"))
-        self.balance_next.setEnabled(False)
-
-    def _balance_analysed(self, result) -> None:
-        generation, found = result
-        if generation != self._balance_generation:
-            return
-        self.balance_next.setEnabled(True)
-        self.balance_result = found
-        self._suggestion = self._resolve(found.suggestion)
-        self._show_balance_result(found)
-
-    def _resolve(self, suggestion):
-        """Balance only sees the difference between the ears. If the suggested ear was just re-checked
-        and hardly moved, the other ear is the likelier one: suggest it, the opposite way."""
-        if suggestion is None:
-            return None
-        for side, target, before, after in self._rechecks:
-            if side == suggestion.side and target == suggestion.target and abs(after / before - 1) < 0.015:
-                other = "R" if side == "L" else "L"
-                found = self.test.upper_results if target == UPPER else self.test.results
-                if found.get(other) is None:
-                    return suggestion
-                hz = found[other] * suggestion.current_hz / suggestion.hz
-                return type(suggestion)(other, target, found[other], hz, suggestion.evidence)
-        return suggestion
-
-    @staticmethod
-    def _khz(hz: float) -> str:
-        return tr("{khz} kHz").format(khz=f"{hz / 1000:.1f}")
-
-    def _show_balance_result(self, found) -> None:
-        notes = []
-        suggestion = self._suggestion
-        self.recheck_button.setVisible(suggestion is not None)
-        if suggestion is not None:
-            which = tr("upper treble") if suggestion.target == UPPER else tr("resonance")
-            way = tr("higher") if suggestion.hz > suggestion.current_hz else tr("lower")
-            self.balance_headline.setText(tr("Your {ear}'s {which} may be a little {way}").format(
-                ear=_ear(suggestion.side).lower(), which=which, way=way))
-            notes.append(tr("Some sounds leaned the way a misplaced {which} would. A short smoothness check of "
-                            "that ear (about 30 seconds) can settle it; nothing changes unless you choose it "
-                            "there.").format(which=which))
-            self.recheck_button.setText(tr("Check the {ear} again").format(ear=_ear(suggestion.side).lower()))
-        elif found.status == "balanced":
-            self.balance_headline.setText(tr("Left and right are balanced ✓"))
-            notes.append(tr("Every sound was centred within about 2 dB: your resonances agree with each other."))
-        else:
-            self.balance_headline.setText(tr("Mostly balanced"))
-            if found.uneven_hz is not None:
-                side = tr("left") if found.leans.get(found.uneven_hz, 0) > 0 else tr("right")
-                notes.append(tr("Around {where} the sound leaned to the {side}. That doesn't look like a misplaced "
-                                "resonance (more likely the calibration or your hearing there), so your EQ stays "
-                                "as it is.").format(where=self._khz(found.uneven_hz), side=side))
-        if abs(found.broad_lean_db) > 1.5:
-            side = tr("left") if found.broad_lean_db > 0 else tr("right")
-            notes.append(tr("Across the treble the sound leans a little to the {side}: most likely your hearing or "
-                            "the fit, so it isn't changed.").format(side=side))
-        if found.reseat is not None:
-            weaker = side_name(found.reseat).lower()
-            louder = tr("right") if found.reseat == "L" else tr("left")
-            notes.append(tr("The bass leans to the {side}: the {ear} IEM may not be sealed as well. Push it in a "
-                            "little and twist, then run the balance check again.").format(side=louder, ear=weaker))
-        if found.unsteady:
-            notes.append(tr("Your answers to the repeated sounds were rather different, so this check is less "
-                            "certain."))
-        self.balance_notes.setText("\n\n".join(notes))
-        self.pages.setCurrentWidget(self.balance_result_page)
-        (self.recheck_button if suggestion is not None else self.balance_done).setFocus()
-
-    def start_recheck(self) -> None:
-        suggestion = self._suggestion
-        if suggestion is None or self.test is None or self.test.status != "finished":
-            return
-        self._recheck_before = (suggestion.side, suggestion.target, suggestion.current_hz)
-        self.test.recheck(suggestion.side, suggestion.target, suggestion.hz)
-        self.pages.setCurrentWidget(self.test_page)
-        self._new_round(keep_playing=False)
-        self.transport.setFocus()

@@ -395,9 +395,7 @@ def test_full_flow_finds_both_ears(qtbot, panel, view, clock):
     assert view.progress.value == 1.0 or view.done_progress.value == 1.0
     assert panel.peak_slider.value() == round(results[-1][1])  # the right ear is selected now
     assert panel.graph.marker_hz() == pytest.approx(round(results[-1][1]), rel=1e-6)
-    view.skip_upper_button.click()
-    assert view.pages.currentWidget() is view.balance_offer_page  # the balance check is offered last
-    view.skip_balance_button.click()
+    view.skip_upper_button.click()  # no balance check: the test closes
     assert not panel.guided_active
     assert not panel.session.upper_enabled
     with qtbot.waitSignal(panel.eqChanged, timeout=10000):
@@ -478,8 +476,8 @@ def test_optional_upper_treble_after_both_ears(qtbot, panel, view, clock):
         assert abs(hz / (predicted[side] * UPPER_OFF) - 1) < 0.03
         assert panel.session.upper[side] == pytest.approx(round(hz))
     assert panel.session.upper_enabled and panel.upper_enabled.isChecked()
-    view.next_button.click()  # Next: the balance offer
-    view.skip_balance_button.click()
+    assert view.next_button.text() == "Done"
+    view.next_button.click()
     assert not panel.guided_active
     with qtbot.waitSignal(panel.eqChanged, timeout=10000):
         pass
@@ -522,7 +520,7 @@ def test_no_predicted_upper_peak_goes_straight_on(qtbot, panel, view, clock):
     finish_primary(qtbot, view, clock, predict=False)
     view.upper_button.click()
     assert view.test.status == "finished" and view.test.upper_results == {"L": None, "R": None}
-    assert view.pages.currentWidget() is view.balance_offer_page
+    assert not panel.guided_active
 
 
 def reach_smoothness(qtbot, view, clock):
@@ -620,104 +618,3 @@ def test_sweep_animation_is_blind_too(qtbot, view, clock):
             engine.process_block(480)
         levels.append(view.measure_level(engine.pop_recent_samples(1024)))
     assert max(levels) - min(levels) < 0.02  # the level fed to the cards ignores the EQ
-
-
-def reach_balance(qtbot, panel, view, clock):
-    finish_primary(qtbot, view, clock)
-    view.skip_upper_button.click()
-    assert view.pages.currentWidget() is view.balance_offer_page
-    assert "Left resonance" in view.balance_summary.text()
-    view.balance_button.click()
-    assert view.pages.currentWidget() is view.balance_page
-    qtbot.waitUntil(lambda: view._balance_model is not None, timeout=15000)
-
-
-def centre_all(view, leans):
-    for i, lean in enumerate(leans):
-        assert view._balance_index == i
-        view.centre.set_value(lean)
-        view.next_balance_band()
-
-
-def test_balance_plays_the_same_band_in_both_ears_through_the_found_eq(qtbot, panel, view, clock):
-    reach_balance(qtbot, panel, view, clock)
-    assert view.balance_title.text().startswith("Sound 1 of ")
-    view.balance_transport.click()
-    assert view.audio.playing == "band"
-    snap = view.audio.engine.state.snapshot()
-    assert snap.channel_mode == ChannelMode.BOTH and view.audio.eq_enabled
-    for side in "LR":
-        assert view.audio._eq.channels[side].peak_hz == pytest.approx(panel.session.primary[side])
-    view.centre.set_value(3.0)  # moves the sound right: right ear up, left ear down
-    left, right = view.audio.engine._lr_target
-    assert 20 * math.log10(right / left) == pytest.approx(3.0)
-    view.next_balance_band()
-    assert view.centre.value == 0.0 and view.audio.engine._lr_target == (1.0, 1.0)
-    view.previous_balance_band()
-    assert view.centre.value == 3.0
-
-
-def test_centring_keys(qtbot, view, panel, clock):
-    reach_balance(qtbot, panel, view, clock)
-    view.centre.setFocus()
-    qtbot.keyClick(view.centre, Qt.Key_Right)
-    qtbot.keyClick(view.centre, Qt.Key_Right, Qt.ShiftModifier)
-    assert view.centre.value == pytest.approx(2.5)
-    qtbot.keyClick(view.centre, Qt.Key_Home)
-    assert view.centre.value == 0.0
-    assert view.playing  # moving the control starts the sound
-
-
-def test_centred_answers_say_balanced(qtbot, panel, view, clock):
-    reach_balance(qtbot, panel, view, clock)
-    with qtbot.waitSignal(view.pages.currentChanged, timeout=20000):
-        centre_all(view, [0.0] * len(view._balance_bands))
-    assert view.pages.currentWidget() is view.balance_result_page
-    assert "balanced" in view.balance_headline.text()
-    assert not view.recheck_button.isVisibleTo(view)
-    assert view.audio.engine._lr_target == (1.0, 1.0)
-    primary = dict(panel.session.primary)
-    view.balance_done.click()
-    assert not panel.guided_active and panel.session.primary == primary  # the EQ isn't changed by the check
-
-
-def test_a_lean_like_a_misplaced_resonance_offers_a_recheck_of_that_ear(qtbot, panel, view, clock):
-    reach_balance(qtbot, panel, view, clock)
-    bands, model = view._balance_bands, view._balance_model
-    true_right = panel.session.primary["R"] * 1.07
-    treble = [b for b in bands if b.kind == "treble"]
-    error = dict(zip(treble, model.lean_change("R", "primary", true_right, treble)))
-    with qtbot.waitSignal(view.pages.currentChanged, timeout=20000):
-        centre_all(view, [error.get(b, 0.0) for b in bands])
-    assert view.recheck_button.isVisibleTo(view)
-    assert "right ear's resonance may be a little higher" in view.balance_headline.text()
-    before = panel.session.primary["R"]
-    view.recheck_button.click()
-    assert view.pages.currentWidget() is view.test_page
-    assert (view.test.side, view.test.kind) == ("R", SMOOTHNESS)
-    assert view.test.stage.search.center > before
-    for _ in range(10):
-        if view.pages.currentWidget() is not view.test_page:
-            break
-        answer_like_a_listener(qtbot, view, clock)
-    assert view.pages.currentWidget() is view.done_page
-    view.next_button.click()
-    assert view.pages.currentWidget() is view.balance_offer_page
-    assert view.balance_offer_title.text() == "Check the balance again"
-
-
-def test_bass_lean_suggests_reseating(qtbot, panel, view, clock):
-    reach_balance(qtbot, panel, view, clock)
-    bands = view._balance_bands
-    with qtbot.waitSignal(view.pages.currentChanged, timeout=20000):
-        centre_all(view, [4.0 if b.kind == "bass" else 0.0 for b in bands])
-    assert "right IEM may not be sealed" in view.balance_notes.text()
-
-
-def test_stopping_the_balance_check_resets_the_sound(qtbot, panel, view, clock):
-    reach_balance(qtbot, panel, view, clock)
-    view.centre.set_value(-2.0)
-    assert view.playing
-    view.balance_stop.click()
-    assert view.pages.currentWidget() is view.balance_offer_page
-    assert not view.playing and view.audio.engine._lr_target == (1.0, 1.0)
