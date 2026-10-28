@@ -1,4 +1,4 @@
-"""Sound tools: sine, focus sweep, full sweep, pink noise, volume and L/R routing."""
+"""Sound tools: sine, focus sweep, full sweep, pink and grey noise, volume and L/R routing."""
 
 from __future__ import annotations
 
@@ -13,6 +13,13 @@ from ..audio import amp_to_db
 from .common import Card, hint, tr
 
 VOLUME_RANGE_DB = (-60, 0)
+
+# (kind, idle label, playing label)
+SOUNDS = (("tone", "▶ Tone", "■ Stop tone"),
+          ("focus", "〰 Sweep around it", "■ Stop sweep"),
+          ("sweep", "〰 Full sweep 20 Hz–20 kHz", "■ Stop sweep"),
+          ("pink", "≈ Pink noise", "■ Stop noise"),
+          ("grey", "≈ Grey noise", "■ Stop noise"))
 
 
 class VolumeSlider(QWidget):
@@ -96,29 +103,55 @@ class SoundToolsPage(QWidget):
         self.freq_spin.valueChanged.connect(self._spin_changed)
         grid.addWidget(self.freq_spin, 0, 2)
         tones.body.addLayout(grid)
+        # each button starts its sound and stops it when pressed again (as on the Tune tab)
         buttons = QHBoxLayout()
-        self.sine_button = QPushButton(tr("▶ Tone"))
-        self.sine_button.clicked.connect(lambda: self.audio.play_tone(self.freq_spin.value()))
-        buttons.addWidget(self.sine_button)
-        self.focus_button = QPushButton(tr("〰 Sweep around it"))
-        self.focus_button.clicked.connect(lambda: self.audio.play_focus_sweep(self.freq_spin.value()))
-        buttons.addWidget(self.focus_button)
-        self.sweep_button = QPushButton(tr("〰 Full sweep 20 Hz–20 kHz"))
-        self.sweep_button.clicked.connect(lambda: self.audio.play_full_sweep())
-        buttons.addWidget(self.sweep_button)
-        self.pink_button = QPushButton(tr("Pink noise"))
-        self.pink_button.clicked.connect(lambda: self.audio.play_pink())
-        buttons.addWidget(self.pink_button)
-        self.stop_button = QPushButton(tr("■ Stop (Space)"))
-        self.stop_button.clicked.connect(self.audio.stop_all)
-        buttons.addWidget(self.stop_button)
+        self.sound_buttons: dict[str, QPushButton] = {}
+        for kind, idle, _playing in SOUNDS:
+            button = QPushButton(tr(idle))
+            button.setCheckable(True)
+            button.clicked.connect(lambda _=False, k=kind: self._toggle(k))
+            buttons.addWidget(button)
+            self.sound_buttons[kind] = button
+        for kind, *texts in SOUNDS:  # wide enough for either of its labels: no jumping
+            button = self.sound_buttons[kind]
+            button.setMinimumWidth(max(button.fontMetrics().horizontalAdvance(tr(t)) for t in texts) + 28)
+        self.sine_button = self.sound_buttons["tone"]
+        self.focus_button = self.sound_buttons["focus"]
+        self.sweep_button = self.sound_buttons["sweep"]
+        self.pink_button = self.sound_buttons["pink"]
+        self.grey_button = self.sound_buttons["grey"]
+        self.grey_button.setToolTip(tr("Like pink noise, with the treble and bass lifted the way your hearing "
+                                       "needs for every part to sound about equally loud."))
         buttons.addStretch(1)
         tones.body.addLayout(buttons)
+        tones.body.addWidget(hint(tr("Press a playing sound's button again to stop it (or press Space).")))
         layout.addWidget(tones)
         layout.addStretch(1)
         self._spin_changed(self.freq_spin.value())
         audio.on_change(self._sync_route)
+        audio.on_change(self._sync_buttons)
         self._sync_route()
+        self._sync_buttons()
+
+    def _toggle(self, kind: str) -> None:
+        if self.audio.playing == kind:
+            self.audio.stop_all()
+        elif kind == "tone":
+            self.audio.play_tone(self.freq_spin.value())
+        elif kind == "focus":
+            self.audio.play_focus_sweep(self.freq_spin.value())
+        elif kind == "sweep":
+            self.audio.play_full_sweep()
+        else:
+            self.audio.play_noise(kind)
+        self._sync_buttons()  # the quiet-start warning may have said no
+
+    def _sync_buttons(self) -> None:
+        for kind, idle, active in SOUNDS:
+            button = self.sound_buttons[kind]
+            on = self.audio.playing == kind
+            button.setChecked(on)
+            button.setText(tr(active) if on else tr(idle))
 
     def _slider_moved(self, pos: int) -> None:
         hz = int(round(20 * 1000 ** (pos / 1000)))

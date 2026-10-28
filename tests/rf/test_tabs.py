@@ -45,7 +45,25 @@ def _song(path, rate=44100):
 
 def test_tabs_present(win):
     names = [win.tabs.tabText(i) for i in range(win.tabs.count())]
-    assert names == ["Tune", "Test songs", "Sound tools", "Where can I use my EQ?", "Settings", "About"]
+    assert names == ["Tune", "Test audio", "Sound tools", "Where can I use my EQ?", "Settings", "About"]
+
+
+def test_empty_test_audio_shows_large_centred_buttons(qtbot, tmp_path, opened):
+    folder = tmp_path / "app" / "Calibrations"
+    folder.mkdir(parents=True)
+    write_rescal(folder / "a.rescal", make_calibration(customer="Ada"))  # no suggested links
+    w = MainWindow(AppContext.create(AppPaths("linux", tmp_path / "data", tmp_path / "app")), start_audio=False)
+    qtbot.addWidget(w)
+    qtbot.waitUntil(lambda: w.current is not None, timeout=20000)
+    page = w.songs_page
+    assert page.list.count() == 0 and not page.list.isVisibleTo(page)
+    assert page.empty_title.isVisibleTo(page) and not page.remove_button.isVisibleTo(page)
+    for button in (page.add_files_button, page.add_link_button):
+        assert button.isVisibleTo(page) and button.property("large") is True and button.minimumHeight() >= 46
+    assert page.add_files_button.text() == "+ Add audio files…"
+    page.add_link("Reference", "https://example.com/r")
+    assert page.list.isVisibleTo(page) and not page.empty_title.isVisibleTo(page)
+    assert page.remove_button.isVisibleTo(page)
 
 
 def test_operator_links_listed_and_open_in_browser(win, opened):
@@ -107,10 +125,19 @@ def test_sound_tools(win):
     assert engine.state.snapshot().mode == Mode.SWEEP
     tools.pink_button.click()
     assert engine.state.snapshot().mode == Mode.PINK
+    assert tools.pink_button.isChecked() and tools.pink_button.text() == "■ Stop noise"
+    assert not tools.sweep_button.isChecked() and tools.sweep_button.text().startswith("〰 Full sweep")
     tools.volume.setValue(-20)
     assert engine.state.snapshot().amp == pytest.approx(0.1, rel=1e-3)
-    tools.stop_button.click()
-    assert engine.state.snapshot().mode == Mode.IDLE
+    tools.grey_button.click()  # another sound replaces it
+    assert engine.state.snapshot().mode == Mode.GREY and win.audio.playing == "grey"
+    assert tools.grey_button.isChecked() and not tools.pink_button.isChecked()
+    tools.grey_button.click()  # pressing again stops: there's no separate Stop button
+    assert engine.state.snapshot().mode == Mode.IDLE and not tools.grey_button.isChecked()
+    assert not hasattr(tools, "stop_button")
+    tools.sine_button.click()
+    win.audio.stop_all()  # Space / Stop all sound elsewhere: the button follows
+    assert not tools.sine_button.isChecked() and tools.sine_button.text() == "▶ Tone"
 
 
 def test_settings_page(win, opened):
