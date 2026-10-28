@@ -39,8 +39,10 @@ def clock():
 
 @pytest.fixture
 def view(panel, clock):
+    """The test without the calibration model's loudness match: the louder test (its fallback)."""
     v = panel.guided
     v._clock = lambda: clock[0]
+    v.shape_models = None
     panel.start_guided_test(random.Random(5))
     return v
 

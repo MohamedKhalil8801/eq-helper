@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 from eq_helper.calibration.tuning import TuningSession, target_hash
 from eq_helper.dsp.resonance import CONTROL_RANGE, PERSONAL_TREBLE_RANGE, detect_high_treble_peak
 
+from ..shape_match import ShapeModel
 from .common import Card, Worker, chip, hint, side_name, tr
 from .guided_test_view import GuidedTestView
 from .response_graph import ResponseGraph
@@ -159,7 +160,9 @@ class TuningPanel(QWidget):
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(8)
         self.step1_stack.addWidget(self.manual_page)
-        self.guided = GuidedTestView(self.audio, self._option_eqs, self._balance_job, self._upper_prediction)
+        self._shape_cache: dict = {}  # id(model) → (model, ShapeModel)
+        self.guided = GuidedTestView(self.audio, self._option_eqs, self._balance_job, self._upper_prediction,
+                                     self._shape_models)
         self.guided.resultFound.connect(self._guided_result)
         self.guided.upperFound.connect(self._guided_upper)
         self.guided.adjustByHand.connect(self._guided_to_manual)
@@ -167,7 +170,7 @@ class TuningPanel(QWidget):
         self.step1_stack.addWidget(self.guided)
 
         start = QHBoxLayout()
-        self.find_button = QPushButton(tr("Find it for me (about 2 minutes)"))
+        self.find_button = QPushButton(tr("Find it for me (a few minutes)"))
         self.find_button.setObjectName("primary")
         self.find_button.setToolTip(tr("A short listening test: which sound is louder, then which is smoothest, "
                                        "for each ear."))
@@ -810,6 +813,22 @@ class TuningPanel(QWidget):
         self.session.clear_upper(self.side)
         self._sync_upper_controls()
         self.regenerate()
+
+    def _shape_models(self):
+        """For the guided test's loudness match: a function that, on a worker, returns {side: ShapeModel}
+        (built once per calibration model)."""
+        models = {side: self.session.measurements.models[side] for side in self.session.sides}
+        cache = self._shape_cache
+
+        def work():
+            out = {}
+            for side, model in models.items():
+                cached = cache.get(id(model))
+                if cached is None or cached[0] is not model:
+                    cached = cache[id(model)] = (model, ShapeModel.for_model(model))
+                out[side] = cached[1]
+            return out
+        return work
 
     def _upper_prediction(self, side: str, primary_hz: float) -> float | None:
         """Where the calibration puts ``side``'s upper peak for this primary resonance (None: no peak)."""

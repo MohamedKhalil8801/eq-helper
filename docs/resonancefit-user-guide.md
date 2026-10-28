@@ -3,7 +3,7 @@
 ResonanceFit turns the calibration of **your** IEMs into an EQ for **your** ears. Your IEMs were measured
 on a coupler at several insertion depths; that is your *calibration*. Because everyone's ears are
 different, the app asks you one thing: where the strongest treble peak, your *resonance*, sits in each
-ear. You find it by ear with a short guided listening test (about 2 minutes), choose the sound you want
+ear. You find it by ear with a short guided listening test (a few minutes), choose the sound you want
 (a *target*), and the app builds a separate EQ for your left and right ear.
 
 ## What you received
@@ -52,11 +52,30 @@ own EQ is still on in Equalizer APO it offers to turn it off while you tune (app
 
 ### Find it for me (the guided test)
 
-Press **Find it for me (about 2 minutes)**. A short screen reminds you to wear both IEMs as usual, keep
+Press **Find it for me (a few minutes)**. A short screen reminds you to wear both IEMs as usual, keep
 the volume low and turn other EQs off; press **Start the test**. Then, for the left ear and then the
 right (one ear only for a calibration made for both ears at once):
 
-1. **Louder test.** Two cards, **Play A** and **Play B**, each a narrow band of noise in that ear at
+1. **Loudness match.** Two narrow bands of noise take turns in that ear, **A** then **B** (the two
+   squares light up as each one plays). Move the slider until **B sounds exactly as loud as A**, then
+   press **They sound equally loud** (Enter). The two sound a little different in pitch: ignore that and
+   listen only to loudness. **Hear: A and B in turn / A only / B only** (keys 3, 1, 2) lets you compare
+   them however suits you; ← → move the slider (↑ ↓ in finer steps).
+   - The slider starts somewhere random and never shows numbers, and sometimes B is the lower band,
+     sometimes the higher one, so nothing nudges your answer.
+   - Each match measures how much louder one part of the treble sounds than another. A handful of them
+     trace the shape of what your ear hears, and the app looks up where your calibration's model
+     produces that shape: that is where your resonance is. Your own hearing (which changes across the
+     treble for everyone) and the way a higher sound can seem more prominent are allowed for: they are
+     smooth across the treble, a resonance isn't.
+   - One band is often the same: a band near 4.7 kHz that hardly changes with how deep the IEM sits.
+   - The left ear starts from your calibration's measurements, the right ear from the left ear's
+     result, so the right ear usually needs fewer matches. About 6–10 matches per ear; if one answer
+     doesn't fit the others, the app asks that pair once more.
+
+   Without a model to compare with (rare), the test uses the older **louder test** instead:
+
+   **Louder test.** Two cards, **Play A** and **Play B**, each a narrow band of noise in that ear at
    the same level. Click a card to hear it (the bar on top pauses and plays again); click the other card
    to switch, as often as you like: the sound switches at once. When you've heard both, answer
    **Louder: A** (or B; the wide button follows the card you selected) or **About the same**.
@@ -69,7 +88,7 @@ right (one ear only for a calibration made for both ears at once):
      answer it can already predict, so answers that don't follow the sounds are noticed. About seven
      rounds are usually enough, a few more if some answers disagree.
 2. **Smoothness check.** Three cards, **A**, **B** and **C**: three slightly different EQs around what
-   the louder test found. **Listen with Pink noise, Grey noise or Sweep** (switch any time, use any;
+   the loudness match found. The steps get finer as you go, down to EQs about 50 Hz apart. **Listen with Pink noise, Grey noise or Sweep** (switch any time, use any;
    keys N, G, W): with noise, pick the one whose treble sounds **smoothest**, with no harsh, hissy or
    dull spot; with **Sweep**, a slow sweep through the treble, pick the one where it **stays even**, with
    no swell or dip as it passes. Grey noise is pink noise with the treble (and bass) lifted the way
@@ -83,8 +102,8 @@ answer buttons wake up once you've listened to each card for a moment (**Listen 
 When an ear is done the app shows its result, e.g. **Left resonance: 7,640 Hz**, and sets it in the
 graph and the EQ exactly as the slider would. **Back** takes back your last answer; **Adjust by hand**
 leaves the test and keeps what's been found so far (including the louder test's best guess once it's
-narrowed down). If your answers point to more than one place, the app says so and offers **Do this ear
-again**, **Use it anyway** (the smoothness check then starts from the best guess, with wider steps) or
+narrowed down). With the louder test, if your answers point to more than one place, the app says so and
+offers **Do this ear again**, **Use it anyway** (the smoothness check then starts from the best guess, with wider steps) or
 **Adjust by hand**. If the tones all sound alike, the test goes on to the smoothness check with wider
 steps.
 

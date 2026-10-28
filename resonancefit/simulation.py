@@ -26,9 +26,10 @@ import numpy as np
 
 from eq_helper.dsp.resonance import CONTROL_RANGE, Measurements, ResonanceModel
 from resonancefit.guided_test import (
-    SMOOTH_DELTA, SMOOTH_WIDE_DELTA, LouderSearch, SmoothnessSearch,
+    FINE_MIN_DELTA, SHAPE_SMOOTH_DELTA, SMOOTH_DELTA, SMOOTH_MAX_ROUNDS, SMOOTH_WIDE_DELTA, LouderSearch,
+    SmoothnessSearch,
 )
-from resonancefit.shape_match import ShapeMatch, band_level, stable_anchor
+from resonancefit.shape_match import ShapeMatch, ShapeModel, band_level, stable_anchor
 
 GRID = np.geomspace(1000, 20000, 900)   # where responses are kept (log spaced)
 CACHE_OCTAVES = 1 / 384
@@ -155,8 +156,8 @@ class Outcome:
     stages: str
 
 
-def run_smoothness(ear: Ear, predict, centre: float, delta: float, rng) -> tuple[float, int]:
-    search = SmoothnessSearch(centre, delta=delta, rng=rng)
+def run_smoothness(ear: Ear, predict, centre: float, delta: float, rng, **options) -> tuple[float, int]:
+    search = SmoothnessSearch(centre, delta=delta, rng=rng, **options)
     while not search.done:
         search.answer(ear.smoothest(search.options(), predict))
     return search.result(), len(search.answers)
@@ -176,19 +177,21 @@ def today(ear: Ear, predict, default_hz: float, rng) -> Outcome:
     return Outcome(hz, found.rounds + n, "louder+smooth")
 
 
-def shape_then_smooth(ear: Ear, predict, anchor: float, start: float | None, rng,
-                      from_other_ear=False, smooth_delta=0.03) -> Outcome:
-    """The new primary search: shape match from a starting point, then the smoothness check."""
-    search = ShapeMatch(predict, anchor, start=start, from_other_ear=from_other_ear)
+def shape_then_smooth(ear: Ear, predict, shape: ShapeModel, start: float | None, rng,
+                      from_other_ear=False) -> Outcome:
+    """The new primary search, as the guided test runs it: the shape match from a starting point,
+    then the fine smoothness check."""
+    search = ShapeMatch(shape, start=start, from_other_ear=from_other_ear)
     while not search.done:
         search.answer(ear.match(search.question()))
     found = search.result()
-    hz, n = run_smoothness(ear, predict, found.hz, smooth_delta if found.confident else SMOOTH_DELTA, rng)
+    hz, n = run_smoothness(ear, predict, found.hz, SHAPE_SMOOTH_DELTA if found.confident else SMOOTH_DELTA, rng,
+                           max_rounds=SMOOTH_MAX_ROUNDS + 2, min_delta=FINE_MIN_DELTA)
     return Outcome(hz, len(search.answers) + n, "shape+smooth")
 
 
-def shape_only(ear: Ear, predict, anchor: float, start: float | None, rng, from_other_ear=False) -> Outcome:
-    search = ShapeMatch(predict, anchor, start=start, from_other_ear=from_other_ear)
+def shape_only(ear: Ear, predict, shape: ShapeModel, start: float | None, rng, from_other_ear=False) -> Outcome:
+    search = ShapeMatch(shape, start=start, from_other_ear=from_other_ear)
     while not search.done:
         search.answer(ear.match(search.question()))
     return Outcome(search.result().hz, len(search.answers), "shape")
@@ -238,14 +241,14 @@ def summarise(name: str, outcomes: list[tuple[float, Outcome]]) -> str:
             f"questions {np.mean(questions):4.1f}")
 
 
-def designs(ear, predict, anchor, default, other, rng_seed):
+def designs(ear, predict, shape, default, other, rng_seed):
     """Every design for one ear: name → Outcome."""
     return {
         "today": today(ear(), predict, default, random.Random(rng_seed)),
-        "shape": shape_only(ear(), predict, anchor, default, random.Random(rng_seed)),
-        "shape+smooth": shape_then_smooth(ear(), predict, anchor, default, random.Random(rng_seed)),
-        "shape, other ear": shape_only(ear(), predict, anchor, other, random.Random(rng_seed), from_other_ear=True),
-        "shape+smooth, other ear": shape_then_smooth(ear(), predict, anchor, other, random.Random(rng_seed),
+        "shape": shape_only(ear(), predict, shape, default, random.Random(rng_seed)),
+        "shape+smooth": shape_then_smooth(ear(), predict, shape, default, random.Random(rng_seed)),
+        "shape, other ear": shape_only(ear(), predict, shape, other, random.Random(rng_seed), from_other_ear=True),
+        "shape+smooth, other ear": shape_then_smooth(ear(), predict, shape, other, random.Random(rng_seed),
                                                      from_other_ear=True),
     }
 
@@ -261,8 +264,9 @@ def main(argv=None) -> None:
         results: dict[str, list] = {}
         for _side, truth, true_hz, model in cases:
             if id(model) not in cache:
-                cache[id(model)] = (Predictions(model), stable_anchor(model.freqs, model.curves))
-            predict, anchor = cache[id(model)]
+                predictions = Predictions(model)
+                cache[id(model)] = (predictions, ShapeModel(predictions, stable_anchor(model.freqs, model.curves)))
+            predict, shape = cache[id(model)]
             default = float(np.exp(np.median(np.log(model.peaks))))
             for _ in range(repeats):
                 seed = rng.random()
@@ -272,7 +276,7 @@ def main(argv=None) -> None:
                     return Ear(truth, true_hz, listener, random.Random(seed + 1), person)
                 best = best_eq_hz(ear(), predict)
                 other = best * 2 ** random.Random(seed + 2).gauss(0, 0.05)  # the other ear's result
-                for name, outcome in designs(ear, predict, anchor, default, other, seed).items():
+                for name, outcome in designs(ear, predict, shape, default, other, seed).items():
                     results.setdefault(name, []).append((best, outcome))
         print(f"\n{listener.name} listener: {len(cases)} ears × {repeats}, error from the smoothest EQ")
         for name, outcomes in results.items():

@@ -96,34 +96,51 @@ class ShapeResult:
     spread: float             # ratio covering 80 % of the belief
 
 
-class ShapeMatch:
-    """The belief over one ear's resonance, from loudness matches.
+class ShapeModel:
+    """What one ear's calibration model says every band sounds like, for every candidate resonance.
 
-    ``predict(hz)`` returns ``(freqs, db)``: the calibration model's
-    response for a resonance at ``hz``. ``anchor``: the steadiest band
-    (see :func:`stable_anchor`). ``start``: where the search starts
-    (``None``: anywhere in the range); ``from_other_ear`` lowers the
-    number of matches asked before stopping.
+    ``predict(hz)`` returns ``(freqs, db)``: the model's response for a
+    resonance at ``hz``. ``anchor``: the steadiest band (see
+    :func:`stable_anchor`). Building it takes about a second (a hundred
+    predictions): do it on a worker thread, once per ear.
     """
 
     def __init__(self, predict: Callable[[float], tuple[np.ndarray, np.ndarray]], anchor: float,
-                 start: float | None = None, hz_range=CONTROL_RANGE, from_other_ear: bool = False,
-                 max_matches: int = MAX_MATCHES, stop_ratio: float = STOP_RATIO):
+                 hz_range=CONTROL_RANGE):
         self.lo, self.hi = (float(v) for v in hz_range)
         self.anchor = float(anchor)
-        self.max_matches = max_matches
-        self.min_matches = MIN_MATCHES_FROM_OTHER_EAR if from_other_ear else MIN_MATCHES
-        self.stop_ratio = stop_ratio
         lo2, hi2 = math.log2(self.lo), math.log2(self.hi)
         self.grid = 2.0 ** np.linspace(lo2, hi2, max(2, round((hi2 - lo2) / GRID_OCTAVES) + 1))
         first = math.log2(self.anchor) + STEP
         self.bands = np.r_[self.anchor, 2.0 ** np.arange(first, math.log2(TOP_HZ) + 1e-9, STEP)]
-        # the model's level for every band, for every candidate resonance: (grid, bands)
         rows = []
         for hz in self.grid:
             freqs, db = predict(float(hz))
             rows.append([band_level(freqs, db, b) for b in self.bands])
-        self.levels = np.array(rows)
+        self.levels = np.array(rows)  # (grid, bands): the model's level of each band, per candidate
+
+    @classmethod
+    def for_model(cls, model, hz_range=CONTROL_RANGE) -> "ShapeModel":
+        """From a calibration's :class:`~eq_helper.dsp.resonance.ResonanceModel`."""
+        return cls(lambda hz: (model.freqs, model.predict(hz)), stable_anchor(model.freqs, model.curves), hz_range)
+
+
+class ShapeMatch:
+    """The belief over one ear's resonance, from loudness matches.
+
+    ``model``: the ear's :class:`ShapeModel`. ``start``: where the search
+    starts (``None``: anywhere in the range); ``from_other_ear`` lowers
+    the number of matches asked before stopping.
+    """
+
+    def __init__(self, model: ShapeModel, start: float | None = None, from_other_ear: bool = False,
+                 max_matches: int = MAX_MATCHES, stop_ratio: float = STOP_RATIO):
+        self.lo, self.hi = model.lo, model.hi
+        self.anchor = model.anchor
+        self.max_matches = max_matches
+        self.min_matches = MIN_MATCHES_FROM_OTHER_EAR if from_other_ear else MIN_MATCHES
+        self.stop_ratio = stop_ratio
+        self.grid, self.bands, self.levels = model.grid, model.bands, model.levels
         x = np.log2(self.bands / 7000.0)
         self._smooth = np.stack([x, x * x], axis=1)                       # (bands, 2): tilt, bend
         self._prior_cov = np.diag([TILT_SD ** 2, BEND_SD ** 2, HEIGHT_SD ** 2])
