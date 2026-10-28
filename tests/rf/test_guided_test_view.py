@@ -535,6 +535,15 @@ def test_smoothness_check_plays_noise_or_a_sweep_through_the_same_eq(qtbot, view
     assert view.audio._eq is view._eqs[2][0]
     view.noise_button.click()
     assert view.audio.playing == "pink" and view.audio._eq is view._eqs[2][0]
+    view.grey_button.click()  # grey noise: same EQ, same ear
+    assert view.audio.playing == "grey" and view.audio._eq is view._eqs[2][0]
+    snap = view.audio.engine.state.snapshot()
+    assert snap.mode == Mode.GREY and snap.channel_mode == ChannelMode.LEFT
+    assert view.grey_button.isChecked() and not view.noise_button.isChecked()
+    view.cards[0].click()
+    assert view.audio.playing == "grey" and view.audio._eq is view._eqs[0][0]
+    view.set_stage2_sound("pink")  # the N key
+    assert view.audio.playing == "pink"
 
 
 def test_listening_with_either_sound_counts_as_heard(qtbot, view, clock):

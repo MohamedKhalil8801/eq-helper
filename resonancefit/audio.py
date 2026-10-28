@@ -68,7 +68,7 @@ class AudioService:
         self.engine = engine or AudioEngine()
         self.ready = False
         self.error: Optional[str] = None
-        self.playing: Optional[str] = None  # "tone" | "band" | "focus" | "sweep" | "pink" | None
+        self.playing: Optional[str] = None  # "tone" | "band" | "focus" | "sweep" | "pink" | "grey" | None
         self.side: Optional[str] = "both"
         self._eq = None
         self._eq_enabled = False
@@ -198,6 +198,19 @@ class AudioService:
             self.route(side)
         self.engine.start_pink()
         self._started("pink")
+
+    def play_grey(self, side=None) -> None:
+        """Grey noise: pink-like, with the treble and bass lifted the way hearing needs to sound even."""
+        if not self.may_play():
+            return
+        if side is not None:
+            self.route(side)
+        self.engine.start_grey()
+        self._started("grey")
+
+    def play_noise(self, kind: str, side=None) -> None:
+        """``kind``: "pink" or "grey"."""
+        (self.play_grey if kind == "grey" else self.play_pink)(side)
 
     def playing_frequency(self) -> Optional[float]:
         """The frequency being played right now (tone or sweep), else ``None``."""

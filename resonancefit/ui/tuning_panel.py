@@ -91,7 +91,9 @@ class ResonanceRow(QWidget):
 # (kind, idle label, playing label)
 SOUNDS = (("tone", "▶ Play tone", "■ Stop tone"),
           ("focus", "〰 Sweep around it", "■ Stop sweep"),
-          ("pink", "≈ Pink noise + EQ", "■ Stop noise"))
+          ("pink", "≈ Pink noise + EQ", "■ Stop noise"),
+          ("grey", "≈ Grey noise + EQ", "■ Stop noise"))
+NOISES = ("pink", "grey")
 
 
 class _TargetItem:
@@ -265,14 +267,17 @@ class TuningPanel(QWidget):
         self.tone_button = self.sound_buttons["tone"]
         self.sweep_button = self.sound_buttons["focus"]
         self.pink_button = self.sound_buttons["pink"]
+        self.grey_button = self.sound_buttons["grey"]
         self.tone_button.setObjectName("primary")
         self.sweep_button.setToolTip(tr("A slow sweep around the selected frequency: the resonance is where "
                                         "it sounds loudest."))
         self.pink_button.setToolTip(tr("Pink noise through your EQ. Move the slider while it plays until the "
                                        "treble sounds smooth, with no harsh or hissy spot."))
-        for button in self.sound_buttons.values():  # wide enough for either label: no jumping
-            width = max(button.fontMetrics().horizontalAdvance(tr(t)) for _k, *texts in SOUNDS for t in texts)
-            button.setMinimumWidth(width + 28)
+        self.grey_button.setToolTip(tr("Grey noise through your EQ: like pink noise, with the treble lifted the way "
+                                       "your hearing needs it, so the high treble is easier to judge."))
+        for kind, *texts in SOUNDS:  # wide enough for either of its labels: no jumping
+            button = self.sound_buttons[kind]
+            button.setMinimumWidth(max(button.fontMetrics().horizontalAdvance(tr(t)) for t in texts) + 28)
         listen.addSpacing(8)
         self.focus_label = QLabel(tr("at"))
         self.focus_label.setObjectName("hint")
@@ -296,7 +301,7 @@ class TuningPanel(QWidget):
         self.focus = "primary"
         self._sync_focus_widgets()
         self.pink_hint = hint(tr(
-            "Pink noise is playing through your EQ. Move the slider slowly: where it's right, the treble "
+            "Noise is playing through your EQ. Move the slider slowly: where it's right, the treble "
             "sounds smooth and even, with no harsh, hissy or dull spot. Switch the EQ off and on to compare."))
         self.pink_hint.hide()
         body.addWidget(self.pink_hint)
@@ -670,7 +675,7 @@ class TuningPanel(QWidget):
             self._show_playing()
 
     def _schedule_regen(self) -> None:
-        self._regen.setInterval(LIVE_REGENERATE_DELAY_MS if self.audio.playing == "pink" else REGENERATE_DELAY_MS)
+        self._regen.setInterval(LIVE_REGENERATE_DELAY_MS if self.audio.playing in NOISES else REGENERATE_DELAY_MS)
         self._regen.start()
 
     def _focus_hz(self) -> float:
@@ -685,7 +690,7 @@ class TuningPanel(QWidget):
             self.audio.play_focus_sweep(self._focus_hz(), self.side)
         else:
             self.audio.set_eq_enabled(True)  # the point is to hear the EQ while moving the resonance
-            self.audio.play_pink(self.side)
+            self.audio.play_noise(kind, self.side)
         self._graph_tone = False
 
     def _toggle(self, kind: str) -> None:
@@ -702,7 +707,7 @@ class TuningPanel(QWidget):
         self._sync_controls()
         self._show_eq_curves()
         playing = self.audio.playing
-        if playing in ("tone", "focus", "pink") and not self._graph_tone:
+        if playing in ("tone", "focus", *NOISES) and not self._graph_tone:
             self._start(playing)
         elif playing == "tone":
             self.audio.route(self.side)
@@ -716,7 +721,7 @@ class TuningPanel(QWidget):
             on = playing == kind
             button.setChecked(on)
             button.setText(tr(active) if on else tr(idle))
-        self.pink_hint.setVisible(playing == "pink")
+        self.pink_hint.setVisible(playing in NOISES)
         if playing in ("tone", "focus", "sweep"):
             self._playing_poll.start()
         else:

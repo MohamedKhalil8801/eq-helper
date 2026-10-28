@@ -117,6 +117,19 @@ def test_pink_noise_through_the_eq_follows_the_resonance(qtbot, panel):
     assert audio.playing is None and not panel.pink_hint.isVisibleTo(panel)
 
 
+def test_grey_noise_through_the_eq_works_like_pink(qtbot, panel):
+    audio = panel.audio
+    panel.grey_button.click()
+    assert audio.playing == "grey" and audio.eq_enabled
+    assert audio.engine.state.snapshot().mode == Mode.GREY
+    assert panel.grey_button.isChecked() and panel.grey_button.text() == "■ Stop noise"
+    assert not panel.pink_button.isChecked() and panel.pink_hint.isVisibleTo(panel)
+    panel.peak_slider.setValue(7400)
+    assert panel._regen.interval() == LIVE_REGENERATE_DELAY_MS
+    panel.grey_button.click()
+    assert audio.playing is None and not panel.grey_button.isChecked()
+
+
 def test_other_eq_warning(qtbot, panel):
     panel.set_other_eqs([], False)
     assert "other EQ" in panel.other_eq.text() and not panel.other_eq_off.isVisibleTo(panel)

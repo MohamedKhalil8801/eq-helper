@@ -9,8 +9,8 @@ animation follows the overall level only, so nothing gives the answer away.
 
 Stage 1 (Louder test) plays narrow noise bands (the search picks their
 width) with the EQ preview off; Stage 2
-(Smoothness check) plays pink noise or a slow focused sweep (the customer
-switches between them at will) through three EQs designed on a worker
+(Smoothness check) plays pink noise, grey noise or a slow focused sweep
+(the customer switches between them at will) through three EQs designed on a worker
 thread. After both primary resonances the upper treble is offered: no
 louder test up there (hearing falls off too steeply to judge loudness), but
 one question per ear — is a band at the predicted peak heard clearly? — and
@@ -47,6 +47,7 @@ HEARD_SECONDS = 0.5   # an option counts as heard after this long selected while
 FRAME_MS = 33         # ~30 fps while sound plays
 LEVEL_SAMPLES = 1024
 LEVEL_SMOOTHING = 0.35
+STAGE2_SOUNDS = ("pink", "grey", "focus")  # the smoothness check: pink noise, grey noise, or the sweep
 
 _JOBS: set = set()
 
@@ -121,8 +122,8 @@ class GuidedTestView(StageBackground):
         self._heard_for: dict[int, float] = {}
         self._since: float | None = None
         self._level = 0.0
-        self._sound = None            # "band" / "pink" / "focus" (sweep) while this view's sound plays
-        self.stage2_sound = "pink"    # what the smoothness check plays: "pink" or "focus"
+        self._sound = None            # "band" / "pink" / "grey" / "focus" (sweep) while this view's sound plays
+        self.stage2_sound = "pink"    # what the smoothness check plays: one of STAGE2_SOUNDS
         self._stage2_target = None    # the part (primary / upper) stage2_sound was last defaulted for
         self._starting = False        # starting our own sound: its change notices aren't a stop
         self._eqs: dict[int, tuple] = {}
@@ -247,19 +248,23 @@ class GuidedTestView(StageBackground):
         sound = QHBoxLayout(self.sound_row)
         sound.setContentsMargins(CARD_MARGIN, 0, CARD_MARGIN, 0)
         sound.addWidget(self._label(tr("Listen with"), "gtMuted", wrap=False))
-        self.noise_button = QPushButton(tr("Noise"))
+        self.noise_button = QPushButton(tr("Pink noise"))
         self.noise_button.setToolTip(tr("Pink noise through each EQ (N)"))
+        self.grey_button = QPushButton(tr("Grey noise"))
+        self.grey_button.setToolTip(tr("Grey noise through each EQ: like pink, with the treble lifted the way your "
+                                       "hearing needs it, so a harsh or dull spot up high stands out more (G)"))
         self.sweep_button = QPushButton(tr("Sweep"))
         self.sweep_button.setToolTip(tr("A slow sweep through each EQ: the right one stays even, with no "
                                         "swell or dip as it passes (W)"))
-        for button, kind in ((self.noise_button, "pink"), (self.sweep_button, "focus")):
+        self.stage2_buttons = {"pink": self.noise_button, "grey": self.grey_button, "focus": self.sweep_button}
+        for kind, button in self.stage2_buttons.items():
             button.setObjectName("segment")
             button.setCheckable(True)
             button.setAccessibleName(tr("Listen with {sound}").format(sound=button.text().lower()))
             button.clicked.connect(lambda _=False, k=kind: self.set_stage2_sound(k))
             sound.addWidget(button)
         sound.addStretch(1)
-        self.sound_hint = self._label(tr("Use either, or both: switch any time"), "gtMuted", wrap=False)
+        self.sound_hint = self._label(tr("Use any of them: switch any time"), "gtMuted", wrap=False)
         sound.addWidget(self.sound_hint)
         layout.addWidget(self.sound_row)
         self.sound_row.hide()
@@ -309,7 +314,7 @@ class GuidedTestView(StageBackground):
         layout.addLayout(footer)
         layout.addSpacing(10)
         self.keys_hint = self._label(tr("Keys: 1 2 3 choose · P play/pause · Enter answer · S same · "
-                                        "N noise · W sweep · Space stop"),
+                                        "N pink · G grey · W sweep · Space stop"),
                                      "gtMuted")
         self.keys_hint.setAlignment(Qt.AlignCenter)
         layout.addLayout(self._padded(self.keys_hint))
@@ -320,6 +325,7 @@ class GuidedTestView(StageBackground):
         self._shortcut(page, (Qt.Key_Return, Qt.Key_Enter), lambda: self._enter(self.answer_selected))
         self._shortcut(page, (Qt.Key_S,), self.answer_same)
         self._shortcut(page, (Qt.Key_N,), lambda: self.set_stage2_sound("pink"))
+        self._shortcut(page, (Qt.Key_G,), lambda: self.set_stage2_sound("grey"))
         self._shortcut(page, (Qt.Key_W,), lambda: self.set_stage2_sound("focus"))
         self._shortcut(page, (Qt.Key_Backspace,), self.back)
         layout.addStretch(1)
@@ -752,7 +758,7 @@ class GuidedTestView(StageBackground):
             self._saved_eq_enabled = self.audio.eq_enabled
         if self.audio.eq_enabled:
             self.audio.set_eq_enabled(False)  # the louder test is judged without the EQ
-        if self._sound in ("pink", "focus"):  # Stage 2 → (back to) Stage 1: switch the sound type
+        if self._sound in STAGE2_SOUNDS:  # Stage 2 → (back to) Stage 1: switch the sound type
             self._sound = None
             self.audio.stop_all()
 
@@ -777,7 +783,7 @@ class GuidedTestView(StageBackground):
             if sound == "focus":
                 self.audio.play_focus_sweep(self._sweep_center(), self.test.side)
             else:
-                self.audio.play_pink(self.test.side)
+                self.audio.play_noise(sound, self.test.side)
         finally:
             self._starting = False
         if self.audio.playing != sound:  # the quiet-start warning said no
@@ -787,7 +793,7 @@ class GuidedTestView(StageBackground):
 
     def set_stage2_sound(self, kind: str) -> None:
         """Noise or sweep for the smoothness check; a playing sound switches at once (same EQ)."""
-        if kind not in ("pink", "focus") or self.pages.currentWidget() is not self.test_page:
+        if kind not in STAGE2_SOUNDS or self.pages.currentWidget() is not self.test_page:
             return
         self.stage2_sound = kind
         self._sync_sound_buttons()
@@ -801,8 +807,8 @@ class GuidedTestView(StageBackground):
             self._sync_transport()
 
     def _sync_sound_buttons(self) -> None:
-        self.noise_button.setChecked(self.stage2_sound == "pink")
-        self.sweep_button.setChecked(self.stage2_sound == "focus")
+        for kind, button in self.stage2_buttons.items():
+            button.setChecked(self.stage2_sound == kind)
 
     def _design_eqs(self) -> None:
         """Stage 2: the three EQs and their preview filters, on a worker."""
@@ -905,7 +911,7 @@ class GuidedTestView(StageBackground):
             return
         if self._sound == "band":
             self.audio.switch_band(self._round.options[index], self._round.band, self.test.side)
-        elif self._sound in ("pink", "focus"):
+        elif self._sound in STAGE2_SOUNDS:
             self._apply_option(index)  # the noise or sweep keeps going; only the EQ changes
         self._since = self._clock() if self._sound is not None else None
         self._sync_cards()
