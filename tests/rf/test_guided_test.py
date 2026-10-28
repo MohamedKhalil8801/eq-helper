@@ -8,7 +8,7 @@ import pytest
 
 from eq_helper.dsp.resonance import CONTROL_RANGE, PERSONAL_TREBLE_RANGE
 from resonancefit.guided_test import (
-    AUDIBLE, AUDIBLE_BAND, BANDS, LOUDER, LOUDER_MAX_ROUNDS, PRIMARY, SMOOTH_DELTA, SMOOTH_WIDE_DELTA, SMOOTHNESS,
+    AUDIBLE, AUDIBLE_BAND, BANDS, FIRST_SMOOTH_DELTA, LOUDER, LOUDER_MAX_ROUNDS, PRIMARY, SMOOTH_DELTA, SMOOTH_WIDE_DELTA, SMOOTHNESS,
     UPPER, UPPER_SMOOTH_DELTA, UPPER_WINDOW, GuidedTest, LouderSearch, SmoothnessSearch,
 )
 
@@ -271,7 +271,7 @@ def test_full_flow_left_then_right_then_the_upper_offer():
     assert (test.side, test.kind, test.target) == ("L", LOUDER, PRIMARY)
     progress = [test.progress()]
     run_ear(test, random.Random(1))
-    assert "L" in test.results and (test.side, test.kind) == ("R", LOUDER)
+    assert "L" in test.results and (test.side, test.kind) == ("R", SMOOTHNESS)  # from the left ear
     progress.append(test.progress())
     run_ear(test, random.Random(2))
     assert test.status == "upper_offer" and test.progress() == 1.0
@@ -395,12 +395,17 @@ def test_leaving_during_the_louder_test_keeps_its_estimate():
     assert abs(test.best_guess("L") / 7400 - 1) < 0.05
 
 
-def test_flow_fallback_starts_smoothness_wide_from_the_default():
+def test_a_starting_point_skips_the_louder_test():
     test = GuidedTest(("R",), default_hz={"R": 7700}, rng=random.Random(12))
+    assert test.kind == SMOOTHNESS
+    assert test.stage.search.center == 7700 and test.stage.search.delta == FIRST_SMOOTH_DELTA
+
+
+def test_louder_test_hearing_nothing_starts_smoothness_wide_from_its_estimate():
+    test = GuidedTest(("R",), rng=random.Random(12))
     for _ in range(4):
         test.answer(None)
-    assert test.kind == SMOOTHNESS
-    assert test.stage.search.center == 7700 and test.stage.search.delta == SMOOTH_WIDE_DELTA
+    assert test.kind == SMOOTHNESS and test.stage.search.delta == SMOOTH_WIDE_DELTA
 
 
 def test_always_same_means_no_clear_peak_not_a_confident_middle():
@@ -447,7 +452,7 @@ def test_recheck_after_the_balance_check():
     run_ear(test, random.Random(2))
     assert test.status == "finished"
     spread = test.uncertainty()
-    assert set(spread) == {("L", PRIMARY), ("R", PRIMARY)} and all(0.0 < v < 0.05 for v in spread.values())
+    assert set(spread) == {("L", PRIMARY)} and 0.0 < spread[("L", PRIMARY)] < 0.05  # R: no louder test
     test.recheck("R", PRIMARY, 8000.0)
     assert (test.status, test.side, test.kind) == ("testing", "R", SMOOTHNESS)
     assert test.stage.search.center == 8000.0 and test.stage.search.delta == SMOOTH_DELTA

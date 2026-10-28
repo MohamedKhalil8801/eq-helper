@@ -103,56 +103,40 @@ def test_a_match_far_off_the_others_is_asked_again_once_and_undo_restores(shape,
     assert not search.undo()
 
 
-def test_simulated_today_vs_shape_then_smooth(shape, predict):
-    """The simulator runs both designs end to end (numbers: python -m resonancefit.simulation)."""
+def test_simulated_designs_run_end_to_end(shape, predict):
+    """The simulator runs the designs end to end (numbers: python -m resonancefit.simulation)."""
     ear = _ear(predict, 7300, seed=2)
     best = sim.best_eq_hz(ear, predict)
     assert abs(best - 7300) < 60
-    new = sim.shape_then_smooth(_ear(predict, 7300, seed=2), predict, shape, 7500, random.Random(1))
-    old = sim.today(_ear(predict, 7300, seed=2), predict, 7500, random.Random(1))
-    assert abs(new.hz - best) < 150 and new.questions > MIN_MATCHES and old.questions > 0
+    shaped = sim.shape_then_smooth(_ear(predict, 7300, seed=2), predict, shape, 7500, random.Random(1))
+    smooth = sim.smooth_only(_ear(predict, 7300, seed=2), predict, 7500, 0.3, random.Random(1))
+    old = sim.louder_then_smooth(_ear(predict, 7300, seed=2), predict, 7500, random.Random(1))
+    assert abs(shaped.hz - best) < 150 and shaped.questions > MIN_MATCHES
+    assert abs(smooth.hz - best) < 150 and old.questions > 0
 
 
-def test_guided_test_uses_the_shape_match_then_a_fine_smoothness_check(shape, predict):
-    from resonancefit.guided_test import FINE_MIN_DELTA, PRIMARY, SHAPE, SMOOTHNESS, GuidedTest
+def test_guided_test_finds_each_ear_with_the_smoothness_check_alone(predict):
+    from resonancefit.guided_test import (
+        FINE_MIN_DELTA, FIRST_SMOOTH_DELTA, LOUDER, SMOOTH_DELTA, SMOOTHNESS, GuidedTest,
+    )
 
-    test = GuidedTest(("L", "R"), {"L": 7000, "R": 7000}, random.Random(1), offer_upper=False,
-                      shape_models={"L": shape, "R": shape})
+    test = GuidedTest(("L", "R"), {"L": 7000, "R": 7000}, random.Random(1), offer_upper=False)
     ears = {"L": _ear(predict, 7400, seed=1), "R": _ear(predict, 7700, seed=2)}
-    assert test.kind == SHAPE and test.stage.search.min_matches == MIN_MATCHES
+    assert test.kind == SMOOTHNESS and test.stage.search.delta == FIRST_SMOOTH_DELTA
+    assert test.progress() == 0
     kinds = []
     while test.status == "testing":
-        if test.side == "R" and test.kind == SHAPE and not test.stage.search.answers:
-            assert test.stage.search.min_matches == MIN_MATCHES_FROM_OTHER_EAR  # starts from the left ear
+        if test.side == "R" and not test.stage.search.answers:
+            search = test.stage.search
+            assert search.delta == SMOOTH_DELTA and search.center == pytest.approx(test.results["L"])
+            assert test.progress() == pytest.approx(0.5)
         kinds.append((test.side, test.kind))
-        ear = ears[test.side]
-        if test.kind == SHAPE:
-            test.answer(ear.match(test.options()))
-        else:
-            test.answer(ear.smoothest(test.options(), predict))
+        test.answer(ears[test.side].smoothest(test.options(), predict))
     assert test.status == "finished"
-    assert list(dict.fromkeys(kinds)) == [("L", SHAPE), ("L", SMOOTHNESS), ("R", SHAPE), ("R", SMOOTHNESS)]
-    assert all(s.search.min_delta == FINE_MIN_DELTA for s in test.stages if s.kind == SMOOTHNESS)
+    assert list(dict.fromkeys(kinds)) == [("L", SMOOTHNESS), ("R", SMOOTHNESS)]
+    assert all(s.search.min_delta == FINE_MIN_DELTA for s in test.stages)
     assert abs(test.results["L"] - 7400) < 200 and abs(test.results["R"] - 7700) < 200
-    assert test.uncertainty()[("L", PRIMARY)] > 0
     while test.undo():
         pass
-    assert test.kind == SHAPE and test.side == "L" and not test.stage.search.answers
-
-
-def test_pair_generator_takes_turns_and_moves_band_b_with_the_slider():
-    from eq_helper.audio.generators import AlternatingBandsGenerator
-
-    pair = AlternatingBandsGenerator(48000, 4800, 7000, 1 / 6, period_s=0.1, fade_s=0.01, seed=1)
-    first = pair.next_block(4800)          # A's turn
-    assert pair.current == "b"
-    second = pair.next_block(4800)         # B's turn
-    rms = lambda x: float(np.sqrt(np.mean(x[960:-960] ** 2)))  # noqa: E731
-    assert rms(first) == pytest.approx(rms(second), rel=0.25)
-    pair.next_block(4800)
-    pair.gain_db = 6.0
-    louder = pair.next_block(4800)         # B again, 6 dB up (after the smoothing fade)
-    assert 20 * np.log10(rms(louder) / rms(second)) == pytest.approx(6.0, abs=1.0)
-    pair.mode = "a"
-    pair.next_block(4800)
-    assert pair.current == "a"
+    assert test.kind == SMOOTHNESS and test.side == "L" and not test.stage.search.answers
+    assert GuidedTest(("L",), {}, random.Random(1)).kind == LOUDER  # no starting point: the louder test

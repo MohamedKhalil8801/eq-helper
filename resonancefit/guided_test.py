@@ -16,14 +16,15 @@ Two listening stages per ear find a resonance (see GLOSSARY):
   noise through three EQs whose resonance sits just below, at and just
   above the current guess; the smoothest one wins.
 
-With the calibration's model at hand, the louder test gives way to the
-shape match (:mod:`resonancefit.shape_match`): loudness matches fitted to
-the model, which a listener's own hearing curve and pitch bias don't move.
-The first ear starts from the calibration's measurements, the second from
-the first ear's result. A finer smoothness check follows, down to options
-about 50 Hz apart.
+With a starting point the louder test is skipped: the smoothness check
+alone finds the resonance, the first ear starting wide around the
+calibration's measurements, the second at the usual spacing around the
+first ear's result, both going on down to options about 50 Hz apart.
+Judging smoothness is easier than judging loudness, and in simulation
+(:mod:`resonancefit.simulation`) it's as accurate in fewer rounds. The
+louder test is the fallback when there's no starting point.
 
-:class:`GuidedTest` runs both stages for each ear, first for the primary
+:class:`GuidedTest` runs the stages for each ear, first for the primary
 resonance and then, if the customer wants, for the upper resonance. It keeps
 one undo history across stages and ears. Option order is shuffled every
 round; options are plain frequencies, the UI only ever shows letters.
@@ -48,7 +49,6 @@ import numpy as np
 from scipy.special import ndtr
 
 from eq_helper.dsp.resonance import CONTROL_RANGE, PERSONAL_TREBLE_RANGE
-from resonancefit.shape_match import ShapeMatch, ShapeModel
 
 # ── the listener model behind the louder test ───────────────────────────────
 PEAK_HEIGHTS = (4.0, 8.0)    # dB: how much louder a sound right on the peak may be than the flat part
@@ -85,15 +85,16 @@ SMOOTH_DELTA = 0.06          # octaves between the options
 SMOOTH_WIDE_DELTA = 0.12     # when the louder test wasn't sure: start wider
 UPPER_SMOOTH_DELTA = 0.1     # the upper smoothness check starts from the calibration's prediction
 SMOOTH_MIN_DELTA = 0.015
-SHAPE_SMOOTH_DELTA = 0.03    # after a confident shape match: start closer
-FINE_MIN_DELTA = 0.007       # … and go on to options about 50 Hz apart (≈ 0.7 % at 7 kHz)
+FIRST_SMOOTH_DELTA = 0.3     # no louder test: the first ear starts this wide around the calibration's guess
+FINE_MIN_DELTA = 0.007       # … and goes on to options about 50 Hz apart (≈ 0.7 % at 7 kHz)
+FIRST_SMOOTH_MAX_ROUNDS = 10
 UPPER_SMOOTH_MIN_DELTA = 0.025
 SMOOTH_MAX_ROUNDS = 6
 SMOOTH_MAX_MOVES = 2         # edge picks in a row at one spacing before it halves
 UPPER_WINDOW = 1.25          # the upper search stays within ÷/× this of the prediction (the EQ moves it ≤ 1.4×)
 AUDIBLE_BAND = 1 / 3         # octaves: the band played to ask whether the upper treble is heard clearly
 
-LOUDER, SMOOTHNESS, AUDIBLE, SHAPE = "louder", "smoothness", "audible", "shape"
+LOUDER, SMOOTHNESS, AUDIBLE = "louder", "smoothness", "audible"
 PRIMARY, UPPER = "primary", "upper"
 
 
@@ -471,9 +472,9 @@ class AudibilityCheck:
 @dataclass
 class _Stage:
     side: str
-    kind: str        # LOUDER / SHAPE / SMOOTHNESS / AUDIBLE
+    kind: str        # LOUDER / SMOOTHNESS / AUDIBLE
     target: str      # PRIMARY / UPPER
-    search: LouderSearch | ShapeMatch | SmoothnessSearch | AudibilityCheck
+    search: LouderSearch | SmoothnessSearch | AudibilityCheck
     recheck: bool = False  # a re-check the balance check asked for: done → back to "finished"
 
 
@@ -482,11 +483,9 @@ class GuidedTest:
     """Both stages for each ear in turn — the primary resonance, then optionally the upper one.
 
     ``default_hz``: per side, where the primary search starts from (the
-    calibration's measurements), and where the smoothness check starts when
-    the louder test heard no clear peak. ``shape_models``: per side, a
-    :class:`~resonancefit.shape_match.ShapeModel`; with one, that ear's
-    primary resonance is found by the shape match instead of the louder test
-    (the second ear starting from the first one's result). ``status``:
+    calibration's measurements): with one, that ear gets the smoothness
+    check alone, starting wide (the second ear starts from the first one's
+    result instead); without, the louder test comes first. ``status``:
 
     - "testing": a round is waiting for an answer;
     - "unsure": a louder test ended with answers pointing to more than one
@@ -507,7 +506,6 @@ class GuidedTest:
     hz_range: tuple[float, float] = CONTROL_RANGE
     upper_range: tuple[float, float] = PERSONAL_TREBLE_RANGE
     offer_upper: bool = True
-    shape_models: dict[str, ShapeModel] = field(default_factory=dict)
     stages: list[_Stage] = field(default_factory=list)
     results: dict[str, float] = field(default_factory=dict)
     upper_results: dict[str, float | None] = field(default_factory=dict)
@@ -521,13 +519,17 @@ class GuidedTest:
         self.stages = [self._first(self.sides[0])]
 
     def _first(self, side: str) -> _Stage:
-        """An ear's first stage: the shape match when its model is here, else the louder test."""
-        model = self.shape_models.get(side)
-        if model is None:
-            return _Stage(side, LOUDER, PRIMARY, LouderSearch(self.hz_range, self.rng))
+        """An ear's first stage: the smoothness check from the other ear's result (usual spacing) or
+        the calibration's guess (wide), down to options about 50 Hz apart; the louder test without
+        either."""
         other = next((self.results[s] for s in self.sides if s != side and s in self.results), None)
         start = other if other is not None else self.default_hz.get(side)
-        return _Stage(side, SHAPE, PRIMARY, ShapeMatch(model, start=start, from_other_ear=other is not None))
+        if start is None:
+            return _Stage(side, LOUDER, PRIMARY, LouderSearch(self.hz_range, self.rng))
+        delta = SMOOTH_DELTA if other is not None else FIRST_SMOOTH_DELTA
+        search = SmoothnessSearch(start, delta, self.hz_range, self.rng, max_rounds=FIRST_SMOOTH_MAX_ROUNDS,
+                                  min_delta=FINE_MIN_DELTA)
+        return _Stage(side, SMOOTHNESS, PRIMARY, search)
 
     def upper_window(self, side: str) -> tuple[float, float]:
         """Where ``side``'s upper resonance is looked for: around the prediction, inside the range."""
@@ -544,13 +546,6 @@ class GuidedTest:
             return _Stage(side, SMOOTHNESS, UPPER, search)
         delta = SMOOTH_WIDE_DELTA if wide else SMOOTH_DELTA
         return _Stage(side, SMOOTHNESS, PRIMARY, SmoothnessSearch(center, delta, self.hz_range, self.rng))
-
-    def _fine_smoothness(self, side: str, center: float, confident: bool) -> _Stage:
-        """After the shape match: the smoothness check down to options about 50 Hz apart."""
-        delta = SHAPE_SMOOTH_DELTA if confident else SMOOTH_DELTA
-        search = SmoothnessSearch(center, delta, self.hz_range, self.rng, max_rounds=SMOOTH_MAX_ROUNDS + 2,
-                                  min_delta=FINE_MIN_DELTA)
-        return _Stage(side, SMOOTHNESS, PRIMARY, search)
 
     def _upper_start(self, index: int) -> None:
         """The upper treble from ``sides[index]`` on: its audibility question, or (nothing
@@ -588,16 +583,11 @@ class GuidedTest:
     def _results_for(self, target: str) -> dict:
         return self.upper_results if target == UPPER else self.results
 
-    def options(self):
-        """The current question: a :class:`Round`, or in the shape match a
-        :class:`~resonancefit.shape_match.Match`."""
-        if self.kind == SHAPE:
-            return self.stage.search.question()
+    def options(self) -> Round:
         return self.stage.search.options()
 
-    def answer(self, choice) -> None:
-        """``choice``: the option's index (``None``: same / can't tell); in the shape match, how much
-        louder (dB) the adjusted band was heard than the reference."""
+    def answer(self, choice: int | None) -> None:
+        """``choice``: the option's index; ``None`` = "About the same" / "Can't tell them apart"."""
         if self.status != "testing":
             raise RuntimeError(f"Can't answer while {self.status}.")
         self.stage.search.answer(choice)
@@ -613,10 +603,6 @@ class GuidedTest:
             else:  # not heard clearly: the upper treble stays as calibrated
                 self.upper_results[stage.side] = None
                 self._next_ear()
-            return
-        if stage.kind == SHAPE:
-            found = stage.search.result()
-            self.stages.append(self._fine_smoothness(stage.side, found.hz, found.confident))
             return
         if stage.kind == LOUDER:
             found = stage.search.result()
@@ -671,10 +657,10 @@ class GuidedTest:
         self.status = "testing"
 
     def uncertainty(self) -> dict[tuple[str, str], float]:
-        """(side, target) → how unsure the louder test or shape match still was (octaves, ≈ σ)."""
+        """(side, target) → how unsure the louder test still was (octaves, ≈ σ)."""
         out = {}
         for stage in self.stages:
-            if stage.kind in (LOUDER, SHAPE) and stage.search.answers:
+            if stage.kind == LOUDER and stage.search.answers:
                 out[(stage.side, stage.target)] = max(math.log2(stage.search.spread) / 2.56, 0.01)
         return out
 
@@ -728,5 +714,9 @@ class GuidedTest:
         if self.status in ("finished", "upper_offer"):
             return 1.0
         total = 2 * len(self.sides)
-        done = 2 * self.sides.index(self.side) + (1 if self.kind == SMOOTHNESS else 0)
-        return (done + self.stage.search.progress()) / total
+        done = 2 * self.sides.index(self.side)
+        if any(s.side == self.side and s.target == self.target for s in self.stages[:-1]):
+            return (done + 1 + self.stage.search.progress()) / total  # the second of two stages
+        # the louder test or audibility question, or an ear's only stage (the smoothness check alone)
+        share = 2 if self.kind == SMOOTHNESS else 1
+        return (done + share * self.stage.search.progress()) / total

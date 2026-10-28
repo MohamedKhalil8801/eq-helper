@@ -26,11 +26,12 @@ import numpy as np
 
 from eq_helper.dsp.resonance import CONTROL_RANGE, Measurements, ResonanceModel
 from resonancefit.guided_test import (
-    FINE_MIN_DELTA, SHAPE_SMOOTH_DELTA, SMOOTH_DELTA, SMOOTH_MAX_ROUNDS, SMOOTH_WIDE_DELTA, LouderSearch,
-    SmoothnessSearch,
+    FINE_MIN_DELTA, FIRST_SMOOTH_DELTA, FIRST_SMOOTH_MAX_ROUNDS, SMOOTH_DELTA, SMOOTH_MAX_ROUNDS, SMOOTH_WIDE_DELTA,
+    LouderSearch, SmoothnessSearch,
 )
 from resonancefit.shape_match import ShapeMatch, ShapeModel, band_level, stable_anchor
 
+SHAPE_SMOOTH_DELTA = 0.03  # after a confident shape match the smoothness check starts this close
 GRID = np.geomspace(1000, 20000, 900)   # where responses are kept (log spaced)
 CACHE_OCTAVES = 1 / 384
 
@@ -163,8 +164,8 @@ def run_smoothness(ear: Ear, predict, centre: float, delta: float, rng, **option
     return search.result(), len(search.answers)
 
 
-def today(ear: Ear, predict, default_hz: float, rng) -> Outcome:
-    """Today's test: the louder test, then the smoothness check."""
+def louder_then_smooth(ear: Ear, predict, default_hz: float, rng) -> Outcome:
+    """The earlier test (still the one without a starting point): the louder test, then the smoothness check."""
     louder = LouderSearch(rng=rng)
     while not louder.done:
         louder.answer(ear.louder(louder.options()))
@@ -188,6 +189,13 @@ def shape_then_smooth(ear: Ear, predict, shape: ShapeModel, start: float | None,
     hz, n = run_smoothness(ear, predict, found.hz, SHAPE_SMOOTH_DELTA if found.confident else SMOOTH_DELTA, rng,
                            max_rounds=SMOOTH_MAX_ROUNDS + 2, min_delta=FINE_MIN_DELTA)
     return Outcome(hz, len(search.answers) + n, "shape+smooth")
+
+
+def smooth_only(ear: Ear, predict, start: float, delta: float, rng) -> Outcome:
+    """Today's test: the smoothness check alone, from a starting point, down to options ~50 Hz apart."""
+    hz, n = run_smoothness(ear, predict, start, delta, rng, max_rounds=FIRST_SMOOTH_MAX_ROUNDS,
+                           min_delta=FINE_MIN_DELTA)
+    return Outcome(hz, n, "smooth")
 
 
 def shape_only(ear: Ear, predict, shape: ShapeModel, start: float | None, rng, from_other_ear=False) -> Outcome:
@@ -244,12 +252,15 @@ def summarise(name: str, outcomes: list[tuple[float, Outcome]]) -> str:
 def designs(ear, predict, shape, default, other, rng_seed):
     """Every design for one ear: name → Outcome."""
     return {
-        "today": today(ear(), predict, default, random.Random(rng_seed)),
+        "louder+smooth": louder_then_smooth(ear(), predict, default, random.Random(rng_seed)),
         "shape": shape_only(ear(), predict, shape, default, random.Random(rng_seed)),
         "shape+smooth": shape_then_smooth(ear(), predict, shape, default, random.Random(rng_seed)),
         "shape, other ear": shape_only(ear(), predict, shape, other, random.Random(rng_seed), from_other_ear=True),
         "shape+smooth, other ear": shape_then_smooth(ear(), predict, shape, other, random.Random(rng_seed),
                                                      from_other_ear=True),
+        "smooth from calibration": smooth_only(ear(), predict, default, FIRST_SMOOTH_DELTA,
+                                               random.Random(rng_seed)),
+        "smooth, other ear": smooth_only(ear(), predict, other, SMOOTH_DELTA, random.Random(rng_seed)),
     }
 
 

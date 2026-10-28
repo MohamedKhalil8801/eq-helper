@@ -12,7 +12,7 @@ from PySide6.QtGui import QColor, QPalette
 from eq_helper.audio.shared_state import ChannelMode, Mode
 from eq_helper.audio.generators import BandNoiseGenerator
 from resonancefit.audio import AudioService
-from resonancefit.guided_test import AUDIBLE, LOUDER, SMOOTHNESS, UPPER
+from resonancefit.guided_test import AUDIBLE, FIRST_SMOOTH_DELTA, LOUDER, SMOOTH_DELTA, SMOOTHNESS, UPPER
 from resonancefit.ui import guided_test_view
 from resonancefit.ui.guided_widgets import OptionCard, stage_colors, visualizer_shape
 from resonancefit.ui.tuning_panel import TuningPanel
@@ -39,11 +39,10 @@ def clock():
 
 @pytest.fixture
 def view(panel, clock):
-    """The test without the calibration model's loudness match: the louder test (its fallback)."""
     v = panel.guided
     v._clock = lambda: clock[0]
-    v.shape_models = None
     panel.start_guided_test(random.Random(5))
+    v.start(panel.session.sides, {}, random.Random(5))  # no starting point: the louder test comes first
     return v
 
 
@@ -99,6 +98,20 @@ def test_find_it_for_me_replaces_step_one(panel, view):
     view.leave_for_manual()
     assert not panel.guided_active and panel.step2.isEnabled()
     assert panel.manual_box.isVisibleTo(panel)
+
+
+def test_with_the_calibration_each_ear_is_the_smoothness_check_alone(qtbot, panel, view, clock):
+    panel.start_guided_test(random.Random(5))
+    started(view)
+    assert view.test.kind == SMOOTHNESS and view.stage_label.text() == "Smoothness check"
+    assert view.test.stage.search.delta == FIRST_SMOOTH_DELTA
+    while view.test.side == "L":
+        answer_like_a_listener(qtbot, view, clock)
+    assert view.pages.currentWidget() is view.done_page
+    assert "smoothness check" in view.result_note.text() and "louder" not in view.result_note.text()
+    view.next_button.click()
+    assert view.test.kind == SMOOTHNESS and view.test.stage.search.delta == SMOOTH_DELTA
+    assert view.test.stage.search.center == pytest.approx(view.test.results["L"])
 
 
 def test_first_play_selects_a_and_switching_keeps_the_tone_going(view):
@@ -314,7 +327,7 @@ def test_back_undoes_the_last_answer(view, clock):
 def reach_unsure(panel, view, clock):
     """Answer like an ear whose peak jumps between two places until the louder test is unsure."""
     for seed in range(100):
-        panel.start_guided_test(random.Random(seed))
+        view.start(panel.session.sides, {}, random.Random(seed))
         started(view)
         rng = random.Random(seed)
         while view.pages.currentWidget() is view.test_page and view.test.kind == LOUDER:

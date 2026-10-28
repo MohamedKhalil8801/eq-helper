@@ -7,12 +7,10 @@ An answer unlocks once every option has been heard for a moment. Option
 order is shuffled each round and only letters are shown; the cards'
 animation follows the overall level only, so nothing gives the answer away.
 
-Stage 1 is the loudness match when the calibration's model is ready (see
-:mod:`resonancefit.shape_match`): two noise bands take turns and a slider
-sets band B until it sounds as loud as A (which band is the one being
-adjusted, and where the slider starts, are random). Without the model it is
-the louder test: narrow noise bands (the search picks their width). Both
-play with the EQ preview off. Stage 2
+With the calibration's starting point each ear gets Stage 2 alone (see
+:mod:`resonancefit.guided_test`); without one, Stage 1 comes first.
+Stage 1 (Louder test) plays narrow noise bands (the search picks their
+width) with the EQ preview off; Stage 2
 (Smoothness check) plays pink noise, grey noise or a slow focused sweep
 (the customer switches between them at will) through three EQs designed on a worker
 thread. After both primary resonances the upper treble is offered: no
@@ -35,14 +33,12 @@ import time
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
-    QApplication, QFrame, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QSlider, QStackedWidget, QVBoxLayout,
+    QApplication, QFrame, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QStackedWidget, QVBoxLayout,
     QWidget,
 )
 
 from ..balance_check import CENTRE_RANGE_DB, analyse
-from ..guided_test import AUDIBLE, LOUDER, PRIMARY, SHAPE, UPPER, GuidedTest
-from ..shape_match import BAND as MATCH_BAND
-from ..shape_match import MATCH_RANGE_DB
+from ..guided_test import AUDIBLE, LOUDER, PRIMARY, UPPER, GuidedTest
 from .common import Worker, side_name, tr
 from .guided_widgets import (
     CARD_MARGIN, AnswerButton, CentreControl, OptionCard, ProgressLine, StageBackground, TransportBar, accent_colors,
@@ -54,10 +50,6 @@ FRAME_MS = 33         # ~30 fps while sound plays
 LEVEL_SAMPLES = 1024
 LEVEL_SMOOTHING = 0.35
 STAGE2_SOUNDS = ("pink", "grey", "focus")  # the smoothness check: pink noise, grey noise, or the sweep
-MATCH_HEARD_SECONDS = 2.0  # a match can be answered once the pair has played this long
-MATCH_START_DB = 6.0       # the slider starts up to this far off (randomly), so it never starts matched
-MATCH_STEPS_PER_DB = 4     # slider resolution: 0.25 dB
-MATCH_MODES = ("alternate", "a", "b")
 
 _JOBS: set = set()
 
@@ -94,10 +86,6 @@ class GuidedTestView(StageBackground):
     puts that ear's upper peak for its found primary resonance, or ``None``.
     Without it the upper treble isn't offered.
 
-    ``shape_models()`` (optional) is called on the GUI thread when a test
-    starts and returns a function that, on a worker thread, returns
-    ``{side: ShapeModel}``; with it, each ear starts with the loudness match.
-
     ``balance()`` (optional) is called on the GUI thread when the balance check
     starts and returns ``(bands, work)``: the bands to centre and a function
     that, on a worker thread, returns ``(channel_eq, designed_firs, model)`` for
@@ -109,22 +97,10 @@ class GuidedTestView(StageBackground):
     adjustByHand = Signal(object)
     finished = Signal()
 
-    def __init__(self, audio, option_eqs=None, balance=None, upper_prediction=None, shape_models=None,
-                 parent=None):
+    def __init__(self, audio, option_eqs=None, balance=None, upper_prediction=None, parent=None):
         super().__init__(parent)
         self.audio = audio
         self.option_eqs = option_eqs
-        self.shape_models = shape_models
-        self._shape_generation = 0
-        self._preparing = False        # the shape models are being built
-        self._begin_when_ready = False
-        self._sides: tuple = ()
-        self._defaults: dict = {}
-        self._match = None             # the shape match's current question
-        self._match_swap = False       # band B (the slider's) is the reference, not the one to adjust
-        self._match_heard = 0.0        # seconds this match has played
-        self._pair = None              # the playing pair generator
-        self.match_mode = "alternate"
         self.balance = balance
         self.upper_prediction = upper_prediction
         self._balance_bands: list = []
@@ -178,15 +154,13 @@ class GuidedTestView(StageBackground):
         column.addStretch(1)
         self.intro_page = self._build_intro()
         self.test_page = self._build_test()
-        self.match_page = self._build_match()
         self.unsure_page = self._build_unsure()
         self.done_page = self._build_done()
         self.upper_page = self._build_upper_offer()
         self.balance_offer_page = self._build_balance_offer()
         self.balance_page = self._build_balance()
         self.balance_result_page = self._build_balance_result()
-        for page in (self.intro_page, self.test_page, self.match_page, self.unsure_page, self.done_page,
-                     self.upper_page,
+        for page in (self.intro_page, self.test_page, self.unsure_page, self.done_page, self.upper_page,
                      self.balance_offer_page, self.balance_page, self.balance_result_page):
             self.pages.addWidget(page)
         self._restyle()
@@ -233,11 +207,11 @@ class GuidedTestView(StageBackground):
         tips = [
             tr("Put both IEMs in as you normally wear them, with the ear tips you were measured with."),
             tr("Turn your volume low: some sounds can be piercing. Press Space at any time to stop the sound."),
+            tr("For each ear you'll hear three versions of the same noise, through slightly different EQs. "
+               "Pick the smoothest each time; they get closer as you go. It takes about 2 minutes in all."),
         ]
         for text in tips:
             layout.addLayout(self._padded(self._label("•  " + text)))
-        self.intro_steps = self._label()
-        layout.addLayout(self._padded(self.intro_steps))
         self.intro_other_eq = self._label()
         layout.addLayout(self._padded(self.intro_other_eq))
         row = QHBoxLayout()
@@ -355,119 +329,6 @@ class GuidedTestView(StageBackground):
         self._shortcut(page, (Qt.Key_N,), lambda: self.set_stage2_sound("pink"))
         self._shortcut(page, (Qt.Key_G,), lambda: self.set_stage2_sound("grey"))
         self._shortcut(page, (Qt.Key_W,), lambda: self.set_stage2_sound("focus"))
-        self._shortcut(page, (Qt.Key_Backspace,), self.back)
-        layout.addStretch(1)
-        return page
-
-    def _build_match(self) -> QWidget:
-        """Stage 1 with the model: two bands take turns, a slider sets B as loud as A."""
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-        self.match_title = self._label("", "gtTitle", wrap=False)
-        self.match_stage = self._label(tr("Loudness match"), "gtMuted", wrap=False)
-        self._header(layout, self.match_title, self.match_stage)
-        self.match_instructions = self._label("", "gtMuted")
-        layout.addLayout(self._padded(self.match_instructions))
-        layout.addSpacing(10)
-        self.match_transport = TransportBar()
-        self.match_transport.clicked.connect(self.toggle_match_play)
-        layout.addLayout(self._padded(self.match_transport))
-        layout.addSpacing(10)
-
-        lights = QHBoxLayout()
-        lights.setContentsMargins(CARD_MARGIN, 0, CARD_MARGIN, 0)
-        lights.setSpacing(12)
-        self.match_lights = {}
-        for key in ("a", "b"):
-            light = QLabel(key.upper())
-            light.setObjectName("matchLight")
-            light.setAlignment(Qt.AlignCenter)
-            light.setMinimumHeight(64)
-            light.setProperty("lit", False)
-            self.match_lights[key] = light
-            lights.addWidget(light, 1)
-        layout.addLayout(lights)
-        layout.addSpacing(8)
-
-        modes = QHBoxLayout()
-        modes.setContentsMargins(CARD_MARGIN, 0, CARD_MARGIN, 0)
-        modes.addWidget(self._label(tr("Hear"), "gtMuted", wrap=False))
-        self.match_mode_buttons = {}
-        for mode, text, tip in (("alternate", tr("A and B in turn"), tr("A and B take turns (3)")),
-                                ("a", tr("A only"), tr("Only A (1)")), ("b", tr("B only"), tr("Only B (2)"))):
-            button = QPushButton(text)
-            button.setObjectName("segment")
-            button.setCheckable(True)
-            button.setToolTip(tip)
-            button.clicked.connect(lambda _=False, m=mode: self.set_match_mode(m))
-            self.match_mode_buttons[mode] = button
-            modes.addWidget(button)
-        modes.addStretch(1)
-        layout.addLayout(modes)
-        layout.addSpacing(12)
-
-        slider_row = QHBoxLayout()
-        slider_row.setContentsMargins(CARD_MARGIN, 0, CARD_MARGIN, 0)
-        slider_row.addWidget(self._label(tr("B quieter"), "gtMuted", wrap=False))
-        self.match_slider = QSlider(Qt.Horizontal)
-        span = int(MATCH_RANGE_DB * MATCH_STEPS_PER_DB)
-        self.match_slider.setRange(-span, span)
-        self.match_slider.setSingleStep(1)
-        self.match_slider.setPageStep(MATCH_STEPS_PER_DB)
-        self.match_slider.setAccessibleName(tr("Loudness of B"))
-        self.match_slider.valueChanged.connect(self._match_gain_changed)
-        slider_row.addWidget(self.match_slider, 1)
-        slider_row.addWidget(self._label(tr("B louder"), "gtMuted", wrap=False))
-        layout.addLayout(slider_row)
-        layout.addSpacing(14)
-
-        answers = QHBoxLayout()
-        answers.setContentsMargins(CARD_MARGIN, 0, CARD_MARGIN, 0)
-        self.match_button = QPushButton(tr("They sound equally loud"))
-        self.match_button.setObjectName("primary")
-        self.match_button.setMinimumHeight(40)
-        self.match_button.clicked.connect(self.answer_match)
-        answers.addWidget(self.match_button, 1)
-        layout.addLayout(answers)
-        layout.addSpacing(6)
-        self.match_hint = self._label("", "gtMuted", wrap=False)
-        self.match_hint.setAlignment(Qt.AlignCenter)
-        layout.addWidget(self.match_hint)
-        layout.addSpacing(8)
-        self.match_progress = ProgressLine()
-        self.match_progress.setAccessibleName(tr("Progress"))
-        layout.addLayout(self._padded(self.match_progress))
-        layout.addSpacing(14)
-
-        footer = QHBoxLayout()
-        footer.setContentsMargins(CARD_MARGIN, 0, CARD_MARGIN, 0)
-        self.match_back = QPushButton(tr("Back"))
-        self.match_back.setToolTip(tr("Take back the last answer"))
-        self.match_back.clicked.connect(self.back)
-        footer.addWidget(self.match_back)
-        footer.addStretch(1)
-        manual = QPushButton(tr("Adjust by hand"))
-        manual.setToolTip(tr("Leave the test and keep what's been found so far"))
-        manual.clicked.connect(self.leave_for_manual)
-        footer.addWidget(manual)
-        layout.addLayout(footer)
-        layout.addSpacing(10)
-        keys = self._label(tr("Keys: ← → move the slider (↑ ↓ finer) · 1 A only · 2 B only · 3 in turn · "
-                              "P play/pause · Enter they match · Space stop"), "gtMuted")
-        keys.setAlignment(Qt.AlignCenter)
-        layout.addLayout(self._padded(keys))
-
-        self._shortcut(page, (Qt.Key_Left,), lambda: self.nudge_match(-MATCH_STEPS_PER_DB // 2))
-        self._shortcut(page, (Qt.Key_Right,), lambda: self.nudge_match(MATCH_STEPS_PER_DB // 2))
-        self._shortcut(page, (Qt.Key_Down,), lambda: self.nudge_match(-1))
-        self._shortcut(page, (Qt.Key_Up,), lambda: self.nudge_match(1))
-        self._shortcut(page, (Qt.Key_1,), lambda: self.set_match_mode("a"))
-        self._shortcut(page, (Qt.Key_2,), lambda: self.set_match_mode("b"))
-        self._shortcut(page, (Qt.Key_3,), lambda: self.set_match_mode("alternate"))
-        self._shortcut(page, (Qt.Key_P,), self.toggle_match_play)
-        self._shortcut(page, (Qt.Key_Return, Qt.Key_Enter), lambda: self._enter(self.answer_match))
         self._shortcut(page, (Qt.Key_Backspace,), self.back)
         layout.addStretch(1)
         return page
@@ -732,11 +593,7 @@ class GuidedTestView(StageBackground):
             f"QLabel#gtMuted {{ color: {c['muted']}; }}"
             f"QLabel#gtWarning {{ color: {'#FFB366' if is_dark(self.palette()) else '#8A3E00'}; }}"
             f"QFrame#gtDivider {{ background: rgba({border.red()},{border.green()},{border.blue()},"
-            f"{border.alpha()}); border: none; }}"
-            f"QLabel#matchLight {{ color: {c['muted']}; background: {c['card_top']}; font-size: 22px;"
-            f" font-weight: 600; border: 1px solid rgba({border.red()},{border.green()},{border.blue()},"
-            f"{border.alpha()}); border-radius: 10px; }}"
-            f"QLabel#matchLight[lit=\"true\"] {{ color: {c['card_top']}; background: {c['text']}; }}")
+            f"{border.alpha()}); border: none; }}")
 
     def set_other_eq_text(self, text: str, warning: bool) -> None:
         """The same "turn off other EQs" warning step ① shows."""
@@ -750,9 +607,8 @@ class GuidedTestView(StageBackground):
     def start(self, sides, default_hz=None, rng: random.Random | None = None) -> None:
         """Show the intro for a new test over ``sides``."""
         self.rng = rng or random.Random()
-        self._sides, self._defaults = tuple(sides), dict(default_hz or {})
-        self.test = self._new_test({})
-        self._prepare_shape_models()
+        self.test = GuidedTest(tuple(sides), dict(default_hz or {}), self.rng,
+                               offer_upper=self.upper_prediction is not None)
         self._stage2_target = None
         self._hue = self.rng.uniform(0.0, 360.0)
         self._round_index = 0
@@ -760,75 +616,14 @@ class GuidedTestView(StageBackground):
         self.pages.setCurrentWidget(self.intro_page)
         self.start_button.setFocus()
 
-    def _new_test(self, shape_models: dict) -> GuidedTest:
-        return GuidedTest(self._sides, dict(self._defaults), self.rng, offer_upper=self.upper_prediction is not None,
-                          shape_models=shape_models)
-
-    def _prepare_shape_models(self) -> None:
-        """Build the loudness match's models on a worker; until then (or without them) the louder test."""
-        self._shape_generation += 1
-        self._begin_when_ready = False
-        self._preparing = self.shape_models is not None
-        self._sync_intro()
-        if not self._preparing:
-            return
-        generation = self._shape_generation
-        build = self.shape_models()
-
-        def work():
-            return generation, build()
-
-        job = Worker(work)
-        job.finished_ok.connect(self._shape_models_ready)
-        job.failed.connect(self._shape_models_failed)
-        job.finished.connect(lambda: _JOBS.discard(job))
-        _JOBS.add(job)
-        job.start()
-
-    def _shape_models_ready(self, result) -> None:
-        generation, models = result
-        if generation != self._shape_generation or self.test is None:
-            return
-        self._preparing = False
-        if self.pages.currentWidget() is self.intro_page or self._begin_when_ready:
-            self.test = self._new_test(dict(models))
-        self._sync_intro()
-        if self._begin_when_ready:
-            self.begin()
-
-    def _shape_models_failed(self, _message: str) -> None:
-        self._preparing = False  # the louder test it is
-        self._sync_intro()
-        if self._begin_when_ready:
-            self.begin()
-
-    def _sync_intro(self) -> None:
-        if self.shape_models is not None:
-            self.intro_steps.setText("•  " + tr(
-                "For each ear: first match how loud two sounds are, a few times; then pick the smoothest of "
-                "three EQs. Listen for loudness only, not for which sound is higher. About 3 minutes per ear."))
-        else:
-            self.intro_steps.setText("•  " + tr(
-                "For each ear you'll hear two or three sounds at a time. First pick the louder sound, then "
-                "the smoothest noise. It takes about 2 minutes in all."))
-        waiting = self._preparing and self._begin_when_ready
-        self.start_button.setText(tr("Getting ready…") if waiting else tr("Start the test"))
-        self.start_button.setEnabled(not waiting)
-
     def begin(self) -> None:
         """Leave the intro: the first round."""
         if self.test is None:
             return
-        if self._preparing:
-            self._begin_when_ready = True
-            self._sync_intro()
-            return
-        self._begin_when_ready = False
-        self._sync_intro()
         self._saved_eq_enabled = self.audio.eq_enabled
+        self._new_round(keep_playing=False)
         self.pages.setCurrentWidget(self.test_page)
-        self._new_round(keep_playing=False)  # the match page, when the test starts with a loudness match
-        self._focus_round()
+        self.transport.setFocus()
 
     def stop(self) -> None:
         """Silence this view's sound and put the EQ preview back as it was."""
@@ -842,7 +637,6 @@ class GuidedTestView(StageBackground):
         if self._saved_eq_enabled is not None:
             self.audio.set_eq_enabled(self._saved_eq_enabled)
             self._saved_eq_enabled = None
-        self._pair = None
         self._sync_cards()
 
     def found(self) -> dict[str, dict[str, float]]:
@@ -868,10 +662,6 @@ class GuidedTestView(StageBackground):
 
     def _new_round(self, keep_playing: bool) -> None:
         test = self.test
-        if test.kind == SHAPE:
-            self._new_match(keep_playing)
-            return
-        self._match = None
         self._round = test.options()
         count = len(self._round.options)
         self.heard, self._heard_for = set(), {}
@@ -929,121 +719,6 @@ class GuidedTestView(StageBackground):
         self._sync_answers()
         self._sync_transport()
 
-    def _focus_round(self) -> None:
-        """Keyboard focus on the page now showing: the slider in a match, else the play bar."""
-        if self.pages.currentWidget() is self.match_page:
-            self.match_slider.setFocus()
-        else:
-            self.transport.setFocus()
-
-    def _new_match(self, keep_playing: bool) -> None:
-        """A loudness match: which band the slider moves, and where it starts, are random."""
-        test = self.test
-        self._round = None
-        self._match = test.options()
-        self._match_swap = self.rng.random() < 0.5
-        self._match_heard = 0.0
-        self._enter_louder_stage()
-        self.pages.setCurrentWidget(self.match_page)
-        self.match_title.setText(tr("{ear} · Match {n}").format(ear=_ear(test.side), n=test.round_number))
-        again = tr(" (once more: the last answer didn't fit the others)") if self._match.repeat else ""
-        self.match_instructions.setText(tr(
-            "Two sounds take turns in your {ear}: A, then B. Move the slider until B sounds exactly as loud as A. "
-            "One sounds higher than the other: ignore that, and listen only to how loud they are.{again}").format(
-            ear=_ear(test.side).lower(), again=again))
-        span = MATCH_START_DB * MATCH_STEPS_PER_DB
-        self.match_slider.blockSignals(True)
-        self.match_slider.setValue(int(round(self.rng.uniform(-span, span))))
-        self.match_slider.blockSignals(False)
-        self.match_progress.set_value(test.progress())
-        self.match_back.setEnabled(self._can_undo())
-        if self._sound == "pair" and keep_playing:
-            self.play_match()
-        elif self._sound is not None:
-            self._pause()
-        self._sync_match()
-        self.match_slider.setFocus()
-
-    @property
-    def match_bands(self) -> tuple[float, float]:
-        """(A, B) in Hz: B is the slider's band."""
-        q = self._match
-        return (q.adjust, q.reference) if self._match_swap else (q.reference, q.adjust)
-
-    @property
-    def match_gain_db(self) -> float:
-        """How much the slider raises (or lowers) B, in dB."""
-        return self.match_slider.value() / MATCH_STEPS_PER_DB
-
-    def play_match(self) -> None:
-        if self._match is None or self.test is None:
-            return
-        a, b = self.match_bands
-        pair = self.audio.play_pair(a, b, MATCH_BAND, self.match_gain_db, self.match_mode, self.test.side)
-        if pair is None or self.audio.playing != "pair":  # the quiet-start warning said no
-            self._sync_match()
-            return
-        self._pair = pair
-        self._sound = "pair"
-        self._since = self._clock()
-        self._frame.start()
-        self._sync_match()
-
-    def toggle_match_play(self) -> None:
-        if self.pages.currentWidget() is not self.match_page:
-            return
-        if self._sound is not None:
-            self._pause()
-        else:
-            self.play_match()
-
-    def set_match_mode(self, mode: str) -> None:
-        if mode not in MATCH_MODES or self.pages.currentWidget() is not self.match_page:
-            return
-        self.match_mode = mode
-        if self._pair is not None and self._sound == "pair":
-            self._pair.mode = mode
-        elif self._sound is None:
-            self.play_match()
-        self._sync_match()
-
-    def nudge_match(self, steps: int) -> None:
-        if self.pages.currentWidget() is self.match_page:
-            self.match_slider.setValue(self.match_slider.value() + steps)
-
-    def _match_gain_changed(self, _value: int) -> None:
-        if self._pair is not None and self._sound == "pair":
-            self._pair.gain_db = self.match_gain_db
-
-    @property
-    def can_match(self) -> bool:
-        return self._match is not None and self._match_heard >= MATCH_HEARD_SECONDS
-
-    def answer_match(self) -> None:
-        """B now sounds as loud as A: tell the search how much louder the band to adjust was heard."""
-        if not self.can_match or self.pages.currentWidget() is not self.match_page:
-            return
-        gain = self.match_gain_db  # heard(B) + gain = heard(A)
-        louder_db = gain if self._match_swap else -gain  # (adjust − reference)
-        self._answer(louder_db)
-
-    def _sync_match(self) -> None:
-        playing = self._sound == "pair"
-        self.match_transport.set_playing(playing, tr("Pause") if playing else tr("Play"))
-        self.match_transport.setToolTip(tr("Play or pause (P)"))
-        for mode, button in self.match_mode_buttons.items():
-            button.setChecked(mode == self.match_mode)
-        current = self._pair.current if (playing and self._pair is not None) else None
-        for key, light in self.match_lights.items():
-            lit = current == key
-            if light.property("lit") != lit:
-                light.setProperty("lit", lit)
-                light.style().unpolish(light)
-                light.style().polish(light)
-        ok = self.can_match
-        self.match_button.setEnabled(ok)
-        self.match_hint.setText(" " if ok else tr("Play them first, then move the slider"))
-
     def _new_audible_round(self) -> None:
         """Before an ear's upper treble: one band at the predicted peak — heard clearly or not?"""
         test = self.test
@@ -1080,7 +755,7 @@ class GuidedTestView(StageBackground):
             card.set_accent(color)
         self._sync_answers()
 
-    def _enter_louder_stage(self) -> None:  # also the loudness match
+    def _enter_louder_stage(self) -> None:
         if self._saved_eq_enabled is None:
             self._saved_eq_enabled = self.audio.eq_enabled
         if self.audio.eq_enabled:
@@ -1090,7 +765,7 @@ class GuidedTestView(StageBackground):
             self.audio.stop_all()
 
     def _enter_noise_stage(self) -> None:
-        if self._sound in ("band", "pair"):
+        if self._sound == "band":
             self._sound = None
             self.audio.stop_all()
         elif self._sound == "focus":
@@ -1215,10 +890,7 @@ class GuidedTestView(StageBackground):
         self._sync_transport()
 
     def _pause(self) -> None:
-        if self._sound == "pair" and self._since is not None:
-            self._match_heard += self._clock() - self._since
         self._account()
-        self._pair = None
         self._sound = None
         self._play_when_ready = False
         self._frame.stop()
@@ -1276,13 +948,6 @@ class GuidedTestView(StageBackground):
         self._since = now if self._sound is not None else None
 
     def _tick(self) -> None:
-        if self._sound == "pair":
-            now = self._clock()
-            if self._since is not None:
-                self._match_heard += now - self._since
-            self._since = now
-            self._sync_match()
-            return
         self._account()
         samples = self.audio.engine.pop_recent_samples(LEVEL_SAMPLES)
         self._level += LEVEL_SMOOTHING * (self.measure_level(samples) - self._level)
@@ -1299,12 +964,9 @@ class GuidedTestView(StageBackground):
         if self._sound is not None and self.audio.playing != self._sound:
             self._account()
             self._sound = None
-            self._pair = None
             self._frame.stop()
             self._sync_cards()
             self._sync_transport()
-            if self._match is not None:
-                self._sync_match()
             if self.pages.currentWidget() is self.balance_page:
                 self._show_balance_band()
 
@@ -1379,8 +1041,7 @@ class GuidedTestView(StageBackground):
         test = self.test
         stages = [s for s in test.stages if s.side == side and s.target == target]
         louder = next((s.search for s in reversed(stages) if s.kind == LOUDER), None)
-        shape = next((s.search for s in reversed(stages) if s.kind == SHAPE), None)
-        smooth = next((s.search for s in reversed(stages) if s.kind not in (LOUDER, SHAPE)), None)
+        smooth = next((s.search for s in reversed(stages) if s.kind != LOUDER), None)
         louder_rounds = len(louder.answers) if louder else 0
         smooth_rounds = len(smooth.answers) if smooth else 0
         self.done_title.setText(tr("{ear} done").format(ear=_ear(side)))
@@ -1396,11 +1057,12 @@ class GuidedTestView(StageBackground):
         else:
             self.result_label.setText(tr("{ear} resonance: {hz} Hz").format(ear=side_name(side),
                                                                              hz=f"{int(round(hz)):,}"))
-            if shape is not None:
-                note = tr("Found with {matches} loudness matches, then {smooth} rounds of the smoothness check. "
-                          "You can fine-tune it by hand later.").format(matches=len(shape.answers),
-                                                                         smooth=smooth_rounds)
-            elif louder is not None and louder.done and louder.result().fell_back:
+            if louder is None:
+                start = (tr("the other ear's result") if len(stages) == 1 and test.sides.index(side) > 0
+                         else tr("your calibration's measurements"))
+                note = tr("Found with {n} rounds of the smoothness check, starting from {start}. You can "
+                          "fine-tune it by hand later.").format(n=smooth_rounds, start=start)
+            elif louder.done and louder.result().fell_back:
                 note = tr("The sounds were alike, so this comes from the smoothness check alone "
                           "({n} rounds of noise through your EQ).").format(n=smooth_rounds)
             else:
@@ -1429,7 +1091,7 @@ class GuidedTestView(StageBackground):
             return
         self.pages.setCurrentWidget(self.test_page)
         self._new_round(keep_playing=False)
-        self._focus_round()
+        self.transport.setFocus()
 
     def _show_upper_offer(self) -> None:
         lines = [tr("{ear} resonance: {hz} Hz").format(ear=side_name(side), hz=f"{int(round(hz)):,}")
@@ -1448,7 +1110,7 @@ class GuidedTestView(StageBackground):
             return
         self.pages.setCurrentWidget(self.test_page)
         self._new_round(keep_playing=False)
-        self._focus_round()
+        self.transport.setFocus()
 
     def skip_upper(self) -> None:
         if self.test is None or self.test.status != "upper_offer":
@@ -1462,7 +1124,7 @@ class GuidedTestView(StageBackground):
         self.test.redo_ear()
         self.pages.setCurrentWidget(self.test_page)
         self._new_round(keep_playing=False)
-        self._focus_round()
+        self.transport.setFocus()
 
     def use_estimate(self) -> None:
         """After an unsure louder test: carry on to the smoothness check from the best guess."""
@@ -1471,7 +1133,7 @@ class GuidedTestView(StageBackground):
         self.test.use_estimate()
         self.pages.setCurrentWidget(self.test_page)
         self._new_round(keep_playing=False)
-        self._focus_round()
+        self.transport.setFocus()
 
     # ── keeping widgets in step ────────────────────────────────────────────
     def _sync_cards(self) -> None:
@@ -1757,4 +1419,4 @@ class GuidedTestView(StageBackground):
         self.test.recheck(suggestion.side, suggestion.target, suggestion.hz)
         self.pages.setCurrentWidget(self.test_page)
         self._new_round(keep_playing=False)
-        self._focus_round()
+        self.transport.setFocus()

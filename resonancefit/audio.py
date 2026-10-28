@@ -174,19 +174,6 @@ class AudioService:
         if self.playing != "band":
             self._started("band")
 
-    def play_pair(self, a_hz: float, b_hz: float, width_oct: float, gain_db: float = 0.0,
-                  mode: str = "alternate", side=None):
-        """Two noise bands taking turns (loudness matching); crossfades from a playing tone, band or
-        pair. Returns the pair (set ``gain_db`` / ``mode`` on it while it plays), or ``None`` if silent."""
-        if self.playing != "pair" and not self.may_play():
-            return None
-        if side is not None and side != self.side:
-            self.route(side)
-        pair = self.engine.switch_pair(float(a_hz), float(b_hz), float(width_oct), gain_db, mode)
-        if self.playing != "pair":
-            self._started("pair")
-        return pair
-
     def play_focus_sweep(self, hz: float, side=None) -> None:
         if not self.may_play():
             return
