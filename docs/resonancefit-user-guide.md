@@ -169,13 +169,15 @@ keeps the EQ as calibrated.
 
 - **EQ off / on:** switches the EQ in the app on and off so you can compare. It's level-matched, so you
   compare tone, not loudness. Use a tone, a sweep or something you know well (see *Test audio*).
-- **Save tuning:** keeps your current choices in **History** with an optional note.
+- **Save tuning:** keeps your current choices in **History**, with an optional name (for example
+  “Bright tips”). Saving a tuning that's already there just renames it (if you typed a name).
 - **Export for my EQ app…:** makes the files for the app you listen with (below).
 - **Apply to Equalizer APO** (Windows, when Equalizer APO is installed): makes this tuning your
   computer's EQ for everything you play. Choose your headphone output once. The app keeps one entry,
   “Resonance EQ – your IEM”, in Equalizer APO and replaces it each time you apply. It's a convolution
   filter with a file for each sample rate, so it keeps working if your device's rate changes (any
-  unusual rate gets the same EQ as GraphicEQ). **Switch to:** applies any saved tuning. To turn it off,
+  unusual rate gets the same EQ as GraphicEQ). **Switch to:** applies any saved tuning, listed by name; the one applied now is marked
+  **✓ in use**. Switching never adds entries. To turn it off,
   use **Settings → Turn the EQ off in Equalizer APO**. If Peace is installed, turn its EQ off: it's a
   front-end for Equalizer APO and you'd hear both.
 - **Apply to EasyEffects** (Linux, when EasyEffects is installed): the same for EasyEffects. The app
@@ -185,8 +187,12 @@ keeps the EQ as calibrated.
 
 ### History
 
-Every tuning you save, export or apply is listed with its date, target, resonances, upper resonance,
-note and files. **Reapply** puts every control back exactly as it was, even if the target file is gone.
+Every tuning you save, export or apply is listed once, most recently used first: its name, when you
+last saved, exported or applied it, and (for a named one) its target and resonances, plus the app and
+files. Using a tuning again doesn't add a copy; it moves to the top. A tuning you didn't name is
+named from its settings, like “PEQdB Diamond · 7400 / 8300 Hz” (left / right). **Rename** gives it a
+name of your own. **Reapply** puts every control back exactly as it was, even if the target file is
+gone. Older versions listed every export and apply separately; those copies are merged once.
 
 ## Using your EQ elsewhere
 

@@ -41,7 +41,7 @@ from .app_catalog_page import AppCatalogPage
 from .common import Worker, build_style, side_name, tr
 from .export_flow import PREDICTED_APP_ID, ExportFlow, ExportJob
 from .header_card import HeaderCard
-from .history_panel import HistoryPanel, friendly_date
+from .history_panel import HistoryPanel, describe_entry, entry_name
 from .import_screen import ImportScreen
 from .listen_save import ListenSaveCard
 from .settings_page import SettingsPage
@@ -370,11 +370,9 @@ class MainWindow(QMainWindow):
     # ── Equalizer APO ──────────────────────────────────────────────────────
     def _sync_saved_tunings(self) -> None:
         entries = self.history.entries() if self.history is not None else []
-        items = []
-        for e in entries:
-            sides = " ".join(f"{s} {hz:.0f}" for s, hz in sorted(e.tuning.primary.items()))
-            label = f"{friendly_date(e.date)}: {e.target_name}, {sides}"
-            items.append((e.id, label + (f" ({e.note})" if e.note else "")))
+        in_use = self.history.in_use if self.history is not None else None
+        items = [(e.id, entry_name(e) + ("  ✓ " + tr("in use") if e.id == in_use else ""),
+                  describe_entry(e, self.history_panel.app_names, e.id == in_use)) for e in entries]
         self.listen.set_saved_tunings(items)
 
     def choose_apo_device(self, devices: list[str]) -> str | None:
@@ -476,10 +474,17 @@ class MainWindow(QMainWindow):
         session = self.tuning.session
         if session is None or session.target is None or self.history is None:
             return None
-        entry = self.history.save(session.snapshot(), session.target, reason, note, files, app)
+        snapshot = session.snapshot()
+        known = self.history.find(snapshot, session.target) is not None
+        entry = self.history.save(snapshot, session.target, reason, note, files, app)
         self.history_panel.refresh()
         if reason == "manual":
-            self.listen.show_status(tr("Saved. You can come back to it from History."))
+            if known:
+                self.listen.show_status(tr("Already saved as “{name}”: it's at the top of History.").format(
+                    name=entry_name(entry)))
+            else:
+                self.listen.show_status(tr("Saved as “{name}”. You can come back to it from History.").format(
+                    name=entry_name(entry)))
         return entry
 
     def reapply(self, entry_id: str) -> None:

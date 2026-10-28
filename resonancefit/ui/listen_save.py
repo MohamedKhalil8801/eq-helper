@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QLineEdit, QPushButton, QWidget
 
 from .common import Card, hint, tr
@@ -27,8 +27,8 @@ class ListenSaveCard(Card):
 
         row = QHBoxLayout()
         self.note = QLineEdit()
-        self.note.setPlaceholderText(tr("Note (optional)"))
-        self.note.setAccessibleName(tr("Note for this tuning"))
+        self.note.setPlaceholderText(tr("Name (optional), e.g. “Bright tips”"))
+        self.note.setAccessibleName(tr("Name for this tuning"))
         self.note.returnPressed.connect(self._save)
         row.addWidget(self.note, 1)
         self.save_button = QPushButton(tr("Save tuning"))
@@ -73,11 +73,12 @@ class ListenSaveCard(Card):
         self.switch_row.setVisible(available and self.switch_combo.count() > 0)
 
     def set_saved_tunings(self, items) -> None:
-        """``items``: [(entry id, label)], newest first."""
+        """``items``: [(entry id, label, tooltip)], most recently used first."""
         self.switch_combo.blockSignals(True)
         self.switch_combo.clear()
-        for entry_id, label in items:
+        for entry_id, label, tooltip in items:
             self.switch_combo.addItem(label, entry_id)
+            self.switch_combo.setItemData(self.switch_combo.count() - 1, tooltip, Qt.ToolTipRole)
         self.switch_combo.setCurrentIndex(-1)
         self.switch_combo.setPlaceholderText(tr("a saved tuning…"))
         self.switch_combo.blockSignals(False)

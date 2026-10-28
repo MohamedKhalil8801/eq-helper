@@ -37,8 +37,28 @@ def test_save_tuning_with_note_shows_entry(win):
     entries = win.history.entries()
     assert len(entries) == 1 and entries[0].reason == "manual" and entries[0].note == "bright tips"
     text = win.history_panel.list.item(0).text()
-    assert "PEQdB Diamond" in text and "7400" in text and "bright tips" in text
+    assert text.splitlines()[0] == "bright tips"  # the name first
+    assert "PEQdB Diamond" in text and "7400" in text
     assert win.listen.note.text() == ""
+    assert "Saved as “bright tips”" in win.listen.status.text()
+    win.listen.save_button.click()  # the same tuning again: no second entry
+    assert len(win.history.entries()) == 1 and "Already saved" in win.listen.status.text()
+
+
+def test_unnamed_tunings_are_named_from_their_settings_and_can_be_renamed(win, monkeypatch):
+    t = win.tuning
+    t.ears.setCurrentIndex(0)
+    t.set_primary_hz(7400)
+    t.regenerate()
+    win.listen.save_button.click()
+    entry = win.history.entries()[0]
+    first_line = win.history_panel.list.item(0).text().splitlines()[0]
+    assert first_line.startswith(t.session.target_name) and "7400" in first_line and len(first_line) < 45
+    monkeypatch.setattr(win.history_panel, "ask_name", lambda current: ("Night", True))
+    win.history_panel.list.setCurrentRow(0)
+    win.history_panel.rename_button.click()
+    assert win.history.get(entry.id).note == "Night"
+    assert win.history_panel.list.item(0).text().splitlines()[0] == "Night"
 
 
 def test_reapply_restores_all_controls(win, qtbot):

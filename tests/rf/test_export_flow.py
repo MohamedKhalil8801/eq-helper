@@ -51,9 +51,9 @@ def test_every_catalog_app_exports_files_and_records_history(qtbot, win, tmp_pat
             assert all(p.exists() and p.stat().st_size > 0 for p in result.files)
             count += 1
     entries = win.history.entries()
-    assert len(entries) == count
-    assert {e.app for e in entries} >= {"equalizer-apo", "roon", "wavelet", "qudelix-5k"}
-    assert all(e.reason == "export" and e.files for e in entries)
+    assert count > 10 and len(entries) == 1  # one tuning, exported for every app: kept once
+    entry = entries[0]
+    assert entry.reason == "export" and len(entry.files) >= count  # every export's files are listed
 
 
 def test_listening_choices_filter_and_installed_first(qtbot, win, tmp_path):

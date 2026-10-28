@@ -150,11 +150,20 @@ def test_switch_between_saved_tunings_applies_them(win, qtbot):
     combo = win.listen.switch_combo
     assert combo.isVisibleTo(win) and combo.count() >= 2
     older = next(i for i in range(combo.count()) if "7200" in combo.itemText(i))
+    assert len(combo.itemText(older)) < 50 and not combo.itemText(older)[0].isdigit()  # name, not a date
     combo.setCurrentIndex(older)
     combo.activated.emit(older)
     assert t.session.primary[t.side] == 7200
     eq_file = Path(win.apo.eq_path)
     assert "7200" in eq_file.read_text(encoding="utf-8")
+    for _ in range(3):  # switching back and forth adds no entries
+        for hz in ("8300", "7200"):
+            index = next(i for i in range(combo.count()) if hz in combo.itemText(i))
+            combo.activated.emit(index)
+    assert len(win.history.entries()) == 2 and combo.count() == 2
+    in_use = [combo.itemText(i) for i in range(combo.count()) if "in use" in combo.itemText(i)]
+    assert len(in_use) == 1 and "7200" in in_use[0]
+    assert "in use" in win.history_panel.list.item(0).text().splitlines()[0]
 
 
 def test_unwritable_apo_shows_explanation(win, monkeypatch):
