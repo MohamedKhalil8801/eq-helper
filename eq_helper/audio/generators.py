@@ -332,3 +332,66 @@ class BandNoiseGenerator:
         from scipy.signal import sosfilt
         y, self._zi = sosfilt(self._sos, self._rng.standard_normal(int(frames)), zi=self._zi)
         return (y * self._scale).astype(np.float32)
+
+
+PAIR_HEADROOM_DB = -8.0  # the pair plays this far below a single band, so the louder one has room up to +8 dB
+
+
+class AlternatingBandsGenerator:
+    """Two noise bands taking turns (A, B, A, B …), for matching their loudness.
+
+    Each band plays ``period_s`` with short raised-cosine fades between
+    them. ``gain_db`` raises or lowers band B; ``mode`` is "alternate", "a"
+    (only A) or "b" (only B). Changes to either are smoothed over a fade, so
+    a slider can move them while the sound plays. ``current`` says which band
+    is sounding now ("a" or "b").
+    """
+
+    def __init__(self, sample_rate: int, a_hz: float, b_hz: float, width_oct: float,
+                 period_s: float = 0.4, fade_s: float = 0.03, rms: float = BAND_NOISE_RMS,
+                 seed: Optional[int] = None) -> None:
+        level = float(rms) * 10 ** (PAIR_HEADROOM_DB / 20)
+        self.a = BandNoiseGenerator(sample_rate, a_hz, width_oct, level, seed)
+        self.b = BandNoiseGenerator(sample_rate, b_hz, width_oct, level, None if seed is None else seed + 1)
+        self.a_hz, self.b_hz = float(a_hz), float(b_hz)
+        self.gain_db = 0.0
+        self.mode = "alternate"
+        self._period = max(1, int(period_s * sample_rate))
+        self._fade = max(1, int(fade_s * sample_rate))
+        self._n = 0
+        self._last = (1.0, 0.0, 1.0)  # A weight, B weight, B gain at the end of the last block
+
+    def _weights(self, frames: int) -> tuple[np.ndarray, np.ndarray]:
+        if self.mode == "a":
+            return np.ones(frames), np.zeros(frames)
+        if self.mode == "b":
+            return np.zeros(frames), np.ones(frames)
+        idx = self._n + np.arange(frames)
+        pos = idx % (2 * self._period)
+        local = pos % self._period
+        edge = np.clip(np.minimum(local, self._period - local) / self._fade, 0.0, 1.0)
+        env = np.sin(0.5 * np.pi * edge) ** 2
+        first = pos < self._period
+        return np.where(first, env, 0.0), np.where(first, 0.0, env)
+
+    @property
+    def current(self) -> str:
+        if self.mode in ("a", "b"):
+            return self.mode
+        return "a" if self._n % (2 * self._period) < self._period else "b"
+
+    def next_block(self, frames: int, freq: float = 0.0) -> np.ndarray:
+        frames = int(frames)
+        wa, wb = self._weights(frames)
+        gain = 10 ** (float(self.gain_db) / 20)
+        k = min(self._fade, frames)
+        ramp = np.linspace(0.0, 1.0, k, endpoint=False) if k else np.zeros(0)
+        last_a, last_b, last_gain = self._last
+        wa[:k] = last_a + (wa[:k] - last_a) * ramp
+        wb[:k] = last_b + (wb[:k] - last_b) * ramp
+        gains = np.full(frames, gain)
+        gains[:k] = last_gain + (gain - last_gain) * ramp
+        out = self.a.next_block(frames) * wa + self.b.next_block(frames) * wb * gains
+        self._n += frames
+        self._last = (float(wa[-1]), float(wb[-1]), gain)
+        return out.astype(np.float32)

@@ -62,6 +62,7 @@ def audio_init_error() -> Optional[str]:
 
 from eq_helper.audio.filters import BandPassFilter
 from eq_helper.audio.generators import (
+    AlternatingBandsGenerator,
     BandNoiseGenerator,
     LogSweepGenerator,
     PingPongSweepGenerator,
@@ -546,6 +547,15 @@ class AudioEngine:
         """Like :meth:`switch_sine`, for noise in a band ``width_oct`` octaves wide around
         ``center_hz`` (equal RMS for every band); bands and tones crossfade into each other."""
         self._switch_voice(BandNoiseGenerator(self.sample_rate, center_hz, width_oct), float(center_hz), fade_s)
+
+    def switch_pair(self, a_hz: float, b_hz: float, width_oct: float, gain_db: float = 0.0,
+                    mode: str = "alternate", fade_s: float = TONE_SWITCH_FADE_S) -> AlternatingBandsGenerator:
+        """Two noise bands taking turns, for loudness matching (see :class:`AlternatingBandsGenerator`).
+        Returns the generator: set its ``gain_db`` and ``mode`` while it plays."""
+        pair = AlternatingBandsGenerator(self.sample_rate, a_hz, b_hz, width_oct)
+        pair.gain_db, pair.mode = float(gain_db), mode
+        self._switch_voice(pair, float(a_hz), fade_s)
+        return pair
 
     def _switch_voice(self, generator, freq: float, fade_s: float) -> None:
         with self._voice_lock:
