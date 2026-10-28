@@ -82,6 +82,7 @@ DEFAULT_BLOCK_SIZE = 480  # 10 ms @ 48 kHz
 TONE_SWITCH_FADE_S = 0.02  # crossfade length of switch_sine() / switch_band()
 GREY_HIGHPASS_HZ = 80.0    # grey noise: deep bass removed (see _level_grey)
 GREY_LEVEL_DB = 33.0       # … then raised so 1–4 kHz matches pink noise at the same volume
+REGION_EDGE_OCTAVES = 0.5  # focused grey noise: the band fades out over this much on each side
 
 
 # ----------------------------------------------------------------- helpers
@@ -125,6 +126,24 @@ def _level_grey(data: np.ndarray, rate: int) -> np.ndarray:
     from scipy.signal import butter, sosfilt
     sos = butter(4, GREY_HIGHPASS_HZ, "highpass", fs=rate, output="sos")
     return (sosfilt(sos, data) * 10 ** (GREY_LEVEL_DB / 20)).astype(np.float32)
+
+
+def region_gain(freqs: np.ndarray, center_hz: float, width_oct: float,
+                edge_oct: float = REGION_EDGE_OCTAVES) -> np.ndarray:
+    """1 within ``width_oct`` octaves around ``center_hz``, fading to 0 (raised cosine) over
+    ``edge_oct`` on each side: gentle enough that the band's edges don't sound like a spot."""
+    f = np.maximum(np.asarray(freqs, dtype=float), 1e-9)
+    outside = np.abs(np.log2(f / float(center_hz))) - width_oct / 2
+    x = np.clip(outside / edge_oct, 0.0, 1.0)
+    return np.cos(0.5 * np.pi * x) ** 2
+
+
+def _region_filtered(data: np.ndarray, rate: int, center_hz: float, width_oct: float) -> np.ndarray:
+    """``data`` kept only around ``center_hz`` (zero phase). Filtered as one loop, so it still loops
+    without a seam."""
+    spectrum = np.fft.rfft(data.astype(np.float64))
+    spectrum *= region_gain(np.fft.rfftfreq(data.shape[0], 1.0 / rate), center_hz, width_oct)
+    return np.fft.irfft(spectrum, n=data.shape[0]).astype(np.float32)
 
 
 def _load_wav_mono(path: Path) -> Optional[np.ndarray]:
@@ -257,7 +276,8 @@ class AudioEngine:
         self._grey_source_rate: int = _wav_rate(grey_path) or self.sample_rate
         if self._grey_source is not None and self._grey_source.shape[0] > 0:
             self._grey_source = _level_grey(self._grey_source, self._grey_source_rate)
-        self._grey_buf: Optional[np.ndarray] = self._grey_source
+        self._grey_buf: Optional[np.ndarray] = self._grey_source   # what plays (maybe focused)
+        self._grey_full: Optional[np.ndarray] = self._grey_source  # at _grey_buf_rate, never focused
         self._grey_buf_rate: int = self._grey_source_rate
         self._grey_pos: int = 0
         self._filter = BandPassFilter(self.sample_rate)
@@ -529,12 +549,19 @@ class AudioEngine:
         """The grey-noise recording loaded (it's a bundled asset)."""
         return self._grey_source is not None and self._grey_source.shape[0] > 0
 
-    def start_grey(self) -> None:
+    def start_grey(self, region: Optional[tuple[float, float]] = None) -> None:
+        """Grey noise; with ``region`` = (centre Hz, width in octaves), only that part of it
+        (see :func:`region_gain`), at the same level there as the full noise."""
         self._grey_pos = 0
         self.start_stream()  # opening the stream can change the sample rate
         if self._grey_source is not None and self._grey_buf_rate != self.sample_rate:
-            self._grey_buf = _resampled(self._grey_source, self._grey_source_rate, self.sample_rate)
+            self._grey_full = _resampled(self._grey_source, self._grey_source_rate, self.sample_rate)
             self._grey_buf_rate = self.sample_rate
+        full = self._grey_full
+        if region is not None and full is not None and full.shape[0] > 0:
+            self._grey_buf = _region_filtered(full, self._grey_buf_rate, *region)
+        else:
+            self._grey_buf = full
         self.state.update(mode=Mode.GREY)
 
     def switch_sine(self, freq: float, fade_s: float = TONE_SWITCH_FADE_S) -> None:

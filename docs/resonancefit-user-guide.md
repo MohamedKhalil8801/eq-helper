@@ -57,11 +57,13 @@ the volume low and turn other EQs off; press **Start the test**. Then, for the l
 right (one ear only for a calibration made for both ears at once), a **smoothness check**:
 
 - Three cards, **A**, **B** and **C**: the same sound through three slightly different EQs, each
-  placing your resonance a little differently. **Listen with Pink noise, Grey noise or Sweep** (switch
-  any time, use any; keys N, G, W): with noise, pick the one whose treble sounds **smoothest**, with no
-  harsh, hissy or dull spot; with **Sweep**, a slow sweep through the treble, pick the one where it
-  **stays even**, with no swell or dip as it passes. Grey noise is pink noise with the treble (and bass)
-  lifted the way hearing needs it, so a harsh or dull spot high up stands out more.
+  placing your resonance a little differently. **Listen with Pink noise, Grey noise, Focused noise or
+  Sweep** (switch any time, use any; keys N, G, F, W): with noise, pick the one whose treble sounds
+  **smoothest**, with no harsh, hissy or dull spot; with **Sweep**, a slow sweep through the treble, pick
+  the one where it **stays even**, with no swell or dip as it passes. Grey noise is pink noise with the
+  treble (and bass) lifted the way hearing needs it, so a harsh or dull spot high up stands out more.
+  **Focused noise** is grey noise kept to about an octave and a half around the three EQs (fading out
+  gently beyond), so everything you hear is where they differ; it follows them from round to round.
 - Answer **Smoothest: B** or **Can't tell them apart**.
 - The left ear starts from where your calibration's measurements put the resonance, with the three EQs
   far apart; each time you pick the middle one they move closer, down to about 50 Hz apart. Pick an
@@ -99,8 +101,8 @@ at about twice that frequency). For each ear:
 A found upper treble turns on **Adjust the upper treble** (step ③) with that value.
 
 Keys: **1 2 3** pick and play a card, **P** play/pause, **Enter** answers for the selected card, **S**
-is *About the same* / *Can't tell them apart*, **N** / **G** / **W** pink noise, grey noise or sweep in the smoothness check,
-**Backspace** goes back, **Space** stops all sound.
+is *About the same* / *Can't tell them apart*, **N** / **G** / **F** / **W** pink, grey or focused noise,
+or the sweep in the smoothness check, **Backspace** goes back, **Space** stops all sound.
 
 ### Adjust by hand
 

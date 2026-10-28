@@ -11,7 +11,8 @@ With the calibration's starting point each ear gets Stage 2 alone (see
 :mod:`resonancefit.guided_test`); without one, Stage 1 comes first.
 Stage 1 (Louder test) plays narrow noise bands (the search picks their
 width) with the EQ preview off; Stage 2
-(Smoothness check) plays pink noise, grey noise or a slow focused sweep
+(Smoothness check) plays pink noise, grey noise, focused noise (grey noise
+only around the guess) or a slow focused sweep
 (the customer switches between them at will) through three EQs designed on a worker
 thread. After both primary resonances the upper treble is offered: no
 louder test up there (hearing falls off too steeply to judge loudness), but
@@ -45,7 +46,8 @@ HEARD_SECONDS = 0.5   # an option counts as heard after this long selected while
 FRAME_MS = 33         # ~30 fps while sound plays
 LEVEL_SAMPLES = 1024
 LEVEL_SMOOTHING = 0.35
-STAGE2_SOUNDS = ("pink", "grey", "focus")  # the smoothness check: pink noise, grey noise, or the sweep
+STAGE2_SOUNDS = ("pink", "grey", "region", "focus")  # the smoothness check: pink, grey or focused noise, or the sweep
+CENTRED_SOUNDS = ("region", "focus")  # follow each round's options
 
 _JOBS: set = set()
 
@@ -105,7 +107,7 @@ class GuidedTestView(StageBackground):
         self._heard_for: dict[int, float] = {}
         self._since: float | None = None
         self._level = 0.0
-        self._sound = None            # "band" / "pink" / "grey" / "focus" (sweep) while this view's sound plays
+        self._sound = None            # "band" or one of STAGE2_SOUNDS while this view's sound plays
         self.stage2_sound = "pink"    # what the smoothness check plays: one of STAGE2_SOUNDS
         self._stage2_target = None    # the part (primary / upper) stage2_sound was last defaulted for
         self._starting = False        # starting our own sound: its change notices aren't a stop
@@ -232,10 +234,14 @@ class GuidedTestView(StageBackground):
         self.grey_button = QPushButton(tr("Grey noise"))
         self.grey_button.setToolTip(tr("Grey noise through each EQ: like pink, with the treble lifted the way your "
                                        "hearing needs it, so a harsh or dull spot up high stands out more (G)"))
+        self.region_button = QPushButton(tr("Focused noise"))
+        self.region_button.setToolTip(tr("Grey noise only around where the EQs differ, so nothing else draws your "
+                                         "ear (F)"))
         self.sweep_button = QPushButton(tr("Sweep"))
         self.sweep_button.setToolTip(tr("A slow sweep through each EQ: the right one stays even, with no "
                                         "swell or dip as it passes (W)"))
-        self.stage2_buttons = {"pink": self.noise_button, "grey": self.grey_button, "focus": self.sweep_button}
+        self.stage2_buttons = {"pink": self.noise_button, "grey": self.grey_button, "region": self.region_button,
+                               "focus": self.sweep_button}
         for kind, button in self.stage2_buttons.items():
             button.setObjectName("segment")
             button.setCheckable(True)
@@ -293,7 +299,7 @@ class GuidedTestView(StageBackground):
         layout.addLayout(footer)
         layout.addSpacing(10)
         self.keys_hint = self._label(tr("Keys: 1 2 3 choose · P play/pause · Enter answer · S same · "
-                                        "N pink · G grey · W sweep · Space stop"),
+                                        "N pink · G grey · F focused · W sweep · Space stop"),
                                      "gtMuted")
         self.keys_hint.setAlignment(Qt.AlignCenter)
         layout.addLayout(self._padded(self.keys_hint))
@@ -305,6 +311,7 @@ class GuidedTestView(StageBackground):
         self._shortcut(page, (Qt.Key_S,), self.answer_same)
         self._shortcut(page, (Qt.Key_N,), lambda: self.set_stage2_sound("pink"))
         self._shortcut(page, (Qt.Key_G,), lambda: self.set_stage2_sound("grey"))
+        self._shortcut(page, (Qt.Key_F,), lambda: self.set_stage2_sound("region"))
         self._shortcut(page, (Qt.Key_W,), lambda: self.set_stage2_sound("focus"))
         self._shortcut(page, (Qt.Key_Backspace,), self.back)
         layout.addStretch(1)
@@ -616,12 +623,12 @@ class GuidedTestView(StageBackground):
         if self._sound == "band":
             self._sound = None
             self.audio.stop_all()
-        elif self._sound == "focus":
-            self._start_stage2_sound()  # the sweep moves to this round's options
+        elif self._sound in CENTRED_SOUNDS:
+            self._start_stage2_sound()  # the sweep or focused noise moves to this round's options
         self._design_eqs()
 
     def _sweep_center(self) -> float:
-        """The sweep is centred on the round's middle option and spans all three."""
+        """The sweep and focused noise are centred on the round's middle option and span all three."""
         return sorted(self._round.options)[len(self._round.options) // 2]
 
     def _start_stage2_sound(self) -> bool:
@@ -632,6 +639,8 @@ class GuidedTestView(StageBackground):
         try:
             if sound == "focus":
                 self.audio.play_focus_sweep(self._sweep_center(), self.test.side)
+            elif sound == "region":
+                self.audio.play_region(self._sweep_center(), self.test.side)
             else:
                 self.audio.play_noise(sound, self.test.side)
         finally:

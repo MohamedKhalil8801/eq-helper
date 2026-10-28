@@ -21,6 +21,7 @@ from eq_helper.audio.stereo_fir import channel_firs
 SAFE_START_VOLUME = 0.05          # about −26 dBFS; every launch starts here
 FOCUS_WIDTH_OCTAVES = 1.0
 FOCUS_SECONDS_PER_OCTAVE = 3.0
+REGION_OCTAVES = 1.5  # focused noise: this wide around the guess (plus fading edges)
 FULL_SWEEP = (20.0, 20000.0, 20.0)  # start Hz, end Hz, seconds
 
 _ROUTES = {"L": ChannelMode.LEFT, "R": ChannelMode.RIGHT, "M": ChannelMode.BOTH,
@@ -68,7 +69,7 @@ class AudioService:
         self.engine = engine or AudioEngine()
         self.ready = False
         self.error: Optional[str] = None
-        self.playing: Optional[str] = None  # "tone" | "band" | "focus" | "sweep" | "pink" | "grey" | None
+        self.playing: Optional[str] = None  # "tone" | "band" | "focus" | "sweep" | "pink" | "grey" | "region" | None
         self.side: Optional[str] = "both"
         self._eq = None
         self._eq_enabled = False
@@ -207,6 +208,16 @@ class AudioService:
             self.route(side)
         self.engine.start_grey()
         self._started("grey")
+
+    def play_region(self, hz: float, side=None) -> None:
+        """Focused noise: grey noise only within ``REGION_OCTAVES`` around ``hz`` (fading out beyond),
+        so all of what's heard is where the EQs being compared differ."""
+        if not self.may_play():
+            return
+        if side is not None:
+            self.route(side)
+        self.engine.start_grey(region=(float(hz), REGION_OCTAVES))
+        self._started("region")
 
     def play_noise(self, kind: str, side=None) -> None:
         """``kind``: "pink" or "grey"."""

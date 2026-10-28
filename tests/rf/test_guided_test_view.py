@@ -559,6 +559,26 @@ def test_smoothness_check_plays_noise_or_a_sweep_through_the_same_eq(qtbot, view
     assert view.audio.playing == "pink"
 
 
+def test_focused_noise_is_grey_noise_around_the_round_and_follows_it(qtbot, view, clock):
+    reach_smoothness(qtbot, view, clock)
+    view.cards[1].click()
+    view.region_button.click()
+    assert view.audio.playing == "region" and view.region_button.isChecked()
+    assert view.audio._eq is view._eqs[1][0]
+    snap = view.audio.engine.state.snapshot()
+    assert snap.mode == Mode.GREY and snap.channel_mode == ChannelMode.LEFT
+    focused = view.audio.engine._grey_buf
+    assert focused is not view.audio.engine._grey_full
+    view.cards[2].click()  # another EQ: the same noise keeps going
+    assert view.audio.engine._grey_buf is focused
+    hear_all(view, clock)
+    view.select(0)
+    view.answer_selected()  # the next round: centred on its options
+    if view.test.kind == SMOOTHNESS and view.test.side == "L":
+        qtbot.waitUntil(lambda: view.ready, timeout=15000)
+        assert view.audio.playing == "region" and view.audio.engine._grey_buf is not focused
+
+
 def test_listening_with_either_sound_counts_as_heard(qtbot, view, clock):
     reach_smoothness(qtbot, view, clock)
     view.select(0)
