@@ -8,7 +8,7 @@ import pytest
 
 from eq_helper.dsp.resonance import CONTROL_RANGE, PERSONAL_TREBLE_RANGE
 from resonancefit.guided_test import (
-    AUDIBLE, AUDIBLE_BAND, BANDS, FIRST_SMOOTH_DELTA, LOUDER, LOUDER_MAX_ROUNDS, PRIMARY, SMOOTH_DELTA, SMOOTH_WIDE_DELTA, SMOOTHNESS,
+    BANDS, FIRST_SMOOTH_DELTA, LOUDER, LOUDER_MAX_ROUNDS, OVERVIEW, PRIMARY, SMOOTH_DELTA, SMOOTH_WIDE_DELTA, SMOOTHNESS,
     UPPER, UPPER_SMOOTH_DELTA, UPPER_WINDOW, GuidedTest, LouderSearch, SmoothnessSearch,
 )
 
@@ -256,8 +256,6 @@ def run_ear(test, rng, listen=None):
     while test.side == side and test.target == target and test.status == "testing":
         if test.kind == LOUDER:
             test.answer(listener(test.options()))
-        elif test.kind == AUDIBLE:
-            test.answer(0)  # heard clearly
         else:
             options = test.options().options
             test.answer(int(np.argmin([abs(math.log(hz / f0)) for hz in options])))
@@ -293,15 +291,17 @@ def primary_done(sides=("L", "R"), seed=10):
 def test_upper_treble_starts_from_the_prediction_with_no_louder_test():
     test = primary_done()
     test.start_upper(PREDICTED)
-    assert (test.side, test.kind, test.target) == ("L", AUDIBLE, UPPER)
-    question = test.options()
-    assert question.options == (14000.0,) and question.band == AUDIBLE_BAND
-    test.answer(0)
-    assert (test.side, test.kind) == ("L", SMOOTHNESS)
-    assert sorted(test.options().options) == pytest.approx(
-        [14000 * 2 ** -UPPER_SMOOTH_DELTA, 14000, 14000 * 2 ** UPPER_SMOOTH_DELTA])
+    assert (test.side, test.kind, test.target) == ("L", OVERVIEW, UPPER) and test.overview  # straight to it
+    overview = test.options().options
+    lo, hi = test.upper_window("L")
+    assert len(overview) == 8 and list(overview) == sorted(overview) and lo < overview[0] and overview[-1] < hi
+    best = int(np.argmin([abs(math.log(hz / F0[UPPER]["L"])) for hz in overview]))
+    test.answer(best, [0, 7] if best not in (0, 7) else [])
+    assert (test.side, test.kind) == ("L", SMOOTHNESS)  # the three-card check from the pick
+    assert test.stage.search.center == pytest.approx(overview[best])
+    assert test.stage.search.delta == pytest.approx(math.log2(hi / lo) / 16)
     run_ear(test, random.Random(3))
-    assert (test.side, test.kind) == ("R", AUDIBLE)
+    assert (test.side, test.kind) == ("R", OVERVIEW)
     run_ear(test, random.Random(4))
     assert test.status == "finished"
     assert all(stage.kind != LOUDER for stage in test.stages if stage.target == UPPER)
@@ -316,30 +316,29 @@ def test_upper_search_stays_where_the_eq_can_move_it():
     lo, hi = test.upper_window("L")
     assert lo == pytest.approx(max(PERSONAL_TREBLE_RANGE[0], 12000 / UPPER_WINDOW))
     assert hi == pytest.approx(12000 * UPPER_WINDOW)
-    test.answer(0)
     while test.status == "testing":  # always the highest: the true peak is far above
         options = test.options().options
         test.answer(options.index(max(options)))
     assert lo <= test.upper_results["L"] <= hi
 
 
-def test_not_heard_clearly_leaves_that_ears_upper_treble_alone():
+def test_cant_tell_the_overview_apart_leaves_that_ears_upper_treble_alone():
     test = primary_done()
     test.start_upper(PREDICTED)
-    test.answer(None)  # left: barely or not at all
+    test.answer(None)  # left: can't tell the eight apart
     assert test.upper_results == {"L": None}
-    assert (test.side, test.kind) == ("R", AUDIBLE)
+    assert (test.side, test.kind) == ("R", OVERVIEW)
     assert test.best_guess("L", UPPER) is None and test.best_guess("R", UPPER) is None
     test.answer(None)
     assert test.status == "finished" and test.upper_results == {"L": None, "R": None}
-    assert test.undo() and test.status == "testing" and (test.side, test.kind) == ("R", AUDIBLE)
-    assert test.undo() and (test.side, test.kind) == ("L", AUDIBLE)
+    assert test.undo() and test.status == "testing" and (test.side, test.kind) == ("R", OVERVIEW)
+    assert test.undo() and (test.side, test.kind) == ("L", OVERVIEW)
 
 
 def test_an_ear_without_a_predicted_upper_peak_is_skipped():
     test = primary_done()
     test.start_upper({"L": None, "R": 15000.0})
-    assert test.upper_results == {"L": None} and (test.side, test.kind) == ("R", AUDIBLE)
+    assert test.upper_results == {"L": None} and (test.side, test.kind) == ("R", OVERVIEW)
     test = primary_done()
     test.start_upper({})
     assert test.status == "finished" and test.upper_results == {"L": None, "R": None}

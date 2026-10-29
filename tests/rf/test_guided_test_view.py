@@ -12,7 +12,7 @@ from PySide6.QtGui import QColor, QPalette
 from eq_helper.audio.shared_state import ChannelMode, Mode
 from eq_helper.audio.generators import BandNoiseGenerator
 from resonancefit.audio import AudioService
-from resonancefit.guided_test import AUDIBLE, FIRST_SMOOTH_DELTA, LOUDER, PICK, SMOOTH_DELTA, SMOOTHNESS, UPPER
+from resonancefit.guided_test import FIRST_SMOOTH_DELTA, LOUDER, OVERVIEW, PICK, SMOOTH_DELTA, SMOOTHNESS, UPPER
 from resonancefit.ui import guided_test_view
 from resonancefit.ui.guided_widgets import OptionCard, stage_colors, visualizer_shape
 from resonancefit.ui.tuning_panel import TuningPanel
@@ -80,9 +80,6 @@ def answer_like_a_listener(qtbot, view, clock):
     if view.test.kind in (SMOOTHNESS, PICK):
         qtbot.waitUntil(lambda: view.ready, timeout=15000)
     hear_all(view, clock)
-    if view.test.kind == AUDIBLE:
-        view.answer_selected()  # heard clearly
-        return
     side = view.test.side
     f0 = view.test.predicted_upper[side] * UPPER_OFF if view.test.target == UPPER else F0[side]
     options = view._round.options
@@ -509,16 +506,14 @@ def test_optional_upper_treble_after_both_ears(qtbot, panel, view, clock):
     view.upperFound.connect(lambda side, hz: upper.append((side, hz)))
     view.upper_button.click()
     assert view.pages.currentWidget() is view.test_page
-    assert view.test.kind == AUDIBLE  # no louder test up there: first, can it be heard clearly?
-    assert view.stage_label.text() == "Upper treble: can you hear it?"
+    assert view.test.kind == OVERVIEW  # no louder test or audibility question up there: eight EQs
+    assert view.stage_label.text() == "Upper treble: overview" and view.rule_out_button.isVisibleTo(view)
+    assert view.sweep_button.isChecked()  # the sweep first up high
     predicted = dict(view.test.predicted_upper)
     for side in "LR":
         assert predicted[side] == pytest.approx(2.0 * view.test.results[side])
-    assert view._round.options == (predicted["L"],)
-    assert [c.isVisibleTo(view) for c in view.cards] == [True] + [False] * 7
-    assert view.answer_button.text() == "I hear it clearly" and not view.answer_button.isEnabled()
-    view.play()
-    assert view.audio.playing == "band" and not view.audio.eq_enabled  # a band, without the EQ
+    assert sum(c.isVisibleTo(view) for c in view.cards) == 8
+    assert list(view._round.options) == sorted(view._round.options)
     for _ in range(60):
         if view.pages.currentWidget() is view.done_page:
             assert "upper treble:" in view.result_label.text()
@@ -546,8 +541,7 @@ def test_optional_upper_treble_after_both_ears(qtbot, panel, view, clock):
 def test_smoothness_options_for_the_upper_treble_move_only_the_upper_resonance(qtbot, panel, view, clock):
     finish_primary(qtbot, view, clock)
     view.upper_button.click()
-    while view.test.kind == AUDIBLE:
-        answer_like_a_listener(qtbot, view, clock)
+    assert view.test.kind == OVERVIEW
     qtbot.waitUntil(lambda: view.ready, timeout=15000)
     primary = dict(panel.session.primary)
     lo, hi = view.test.upper_window("L")
@@ -558,19 +552,20 @@ def test_smoothness_options_for_the_upper_treble_move_only_the_upper_resonance(q
         assert eq.channels["L"].peak_hz == pytest.approx(primary["L"])
 
 
-def test_not_hearing_the_upper_treble_clearly_keeps_it_as_calibrated(qtbot, panel, view, clock):
+def test_cant_tell_the_upper_overview_apart_keeps_it_as_calibrated(qtbot, panel, view, clock):
     finish_primary(qtbot, view, clock)
     view.upper_button.click()
-    assert not view.same_button.isEnabled()  # play it first
+    assert not view.same_button.isEnabled()  # listen to each one first
+    qtbot.waitUntil(lambda: view.ready, timeout=15000)
     view.play()
     hear_all(view, clock)
-    assert view.same_button.text() == "Barely, or not at all"
+    assert view.same_button.text() == "Can't tell them apart"
     view.answer_same()
     assert view.pages.currentWidget() is view.done_page
     assert "as calibrated" in view.result_label.text()
     assert not panel.session.upper_enabled and panel.session.upper == {}
     view.next_button.click()
-    assert view.test.kind == AUDIBLE and view.test.side == "R"
+    assert view.test.kind == OVERVIEW and view.test.side == "R"
 
 
 def test_no_predicted_upper_peak_goes_straight_on(qtbot, panel, view, clock):

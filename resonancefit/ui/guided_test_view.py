@@ -39,7 +39,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..guided_test import AUDIBLE, LOUDER, PICK, PRIMARY, UPPER, GuidedTest
+from ..guided_test import LOUDER, OVERVIEW, PICK, PRIMARY, UPPER, GuidedTest
 from .common import Worker, side_name, tr
 from .guided_widgets import (
     CARD_MARGIN, AnswerButton, OptionCard, ProgressLine, StageBackground, TransportBar, accent_colors,
@@ -626,17 +626,22 @@ class GuidedTestView(StageBackground):
         louder = test.kind == LOUDER
         upper = test.target == UPPER
         self.title.setText(_ear_title(test.side, test.round_number))
-        if test.kind == AUDIBLE:
-            self._new_audible_round()
-            return
         if upper:  # the upper treble has no louder test (see guided_test)
-            self.stage_label.setText(tr("Upper treble: smoothness check"))
+            self.stage_label.setText(tr("Upper treble: overview") if test.overview
+                                     else tr("Upper treble: smoothness check"))
         elif test.overview:
             self.stage_label.setText(tr("Smoothness check: overview"))
         else:
             self.stage_label.setText(tr("Louder test") if louder else tr("Smoothness check"))
         self.rule_out_button.setVisible(test.overview)
-        if test.overview:
+        if upper and test.overview:
+            self.instructions.setText(tr(
+                "Eight EQs that differ only in the highest treble, from an upper peak set low to one set high. "
+                "Compare them as often as you like and cross out the ones that clearly sound worse (X or "
+                "right-click). With the sweep: pick the one that fades most evenly as it rises (a high sweep "
+                "fading is just your hearing). With noise: no sharp or hissy edge. If they all sound the same, "
+                "answer Can't tell them apart: this ear's upper treble then stays as calibrated."))
+        elif test.overview:
             self.instructions.setText(tr(
                 "Eight EQs, from a resonance set low to one set high. Listen to them all and compare any two as "
                 "often as you like. Cross out the ones that clearly sound worse (X or right-click; they stay "
@@ -700,30 +705,10 @@ class GuidedTestView(StageBackground):
         self._sync_cards()
         self._sync_answers()
 
-    def _new_audible_round(self) -> None:
-        """Before an ear's upper treble: one band at the predicted peak — heard clearly or not?"""
-        test = self.test
-        self.title.setText(_ear(test.side))
-        self.stage_label.setText(tr("Upper treble: can you hear it?"))
-        self.instructions.setText(tr(
-            "A high sound in your {ear}, at your normal listening volume. Play it: can you hear it clearly? "
-            "Many people hear sounds this high only faintly, or not at all. That's normal; the upper treble "
-            "then simply stays as calibrated.").format(ear=_ear(test.side).lower()))
-        self.sound_row.setVisible(False)
-        self.rule_out_button.setVisible(False)
-        self.same_button.setText(tr("Barely, or not at all"))
-        self._enter_louder_stage()
-        self.progress.set_value(test.progress())
-        self.back_button.setEnabled(self._can_undo())
-        if self._sound is not None:
-            self._pause()
-        self._sync_answers()
-        self._sync_transport()
-
     @property
     def _banded(self) -> bool:
-        """This round plays noise bands with the EQ off (the louder test and the audibility question)."""
-        return self.test is not None and self.test.kind in (LOUDER, AUDIBLE)
+        """This round plays noise bands with the EQ off (the louder test)."""
+        return self.test is not None and self.test.kind == LOUDER
 
     def _can_undo(self) -> bool:
         test = self.test
@@ -1027,13 +1012,13 @@ class GuidedTestView(StageBackground):
         self.done_title.setText(tr("{ear} done").format(ear=_ear(side)))
         if target == UPPER and hz is None:
             self.result_label.setText(tr("{ear}: upper treble as calibrated").format(ear=_ear(side)))
-            note = tr("You didn't hear the high sound clearly, so this ear's upper treble stays where your "
-                      "calibration predicts it. Nothing to fine-tune there.")
+            note = tr("The eight sounded alike, so this ear's upper treble stays where your calibration "
+                      "predicts it. That's common: many people hear little up there.")
         elif target == UPPER:
             self.result_label.setText(tr("{ear} upper treble: {hz} Hz").format(ear=side_name(side),
                                                                                 hz=f"{int(round(hz)):,}"))
-            note = tr("Found with {n} rounds of the smoothness check, starting from where your calibration "
-                      "predicts it. You can fine-tune it by hand later.").format(n=smooth_rounds)
+            note = tr("Found with an overview of eight EQs around where your calibration predicts it, then "
+                      "{n} rounds of three. You can fine-tune it by hand later.").format(n=smooth_rounds)
         else:
             self.result_label.setText(tr("{ear} resonance: {hz} Hz").format(ear=side_name(side),
                                                                              hz=f"{int(round(hz)):,}"))
@@ -1147,9 +1132,7 @@ class GuidedTestView(StageBackground):
             return
         letter = LETTERS[self.selected] if self.selected is not None else None
         louder = self.test.kind == LOUDER
-        if self.test.kind == AUDIBLE:
-            self.answer_button.setText(tr("I hear it clearly"))
-        elif letter is None:
+        if letter is None:
             self.answer_button.setText(tr("Louder") if louder else tr("Smoothest"))
         elif louder:
             self.answer_button.setText(tr("Louder: {n}").format(n=letter))
@@ -1164,7 +1147,7 @@ class GuidedTestView(StageBackground):
         if ok:
             self.listen_hint.setText(" ")
         else:
-            self.listen_hint.setText(tr("Play it first") if self.test.kind == AUDIBLE else tr("Listen to each one first"))
+            self.listen_hint.setText(tr("Listen to each one first"))
 
     def finish(self) -> None:
         self.stop()

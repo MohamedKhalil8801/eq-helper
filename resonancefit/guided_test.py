@@ -41,10 +41,11 @@ The upper resonance (about 15–18 kHz) gets no louder test: up there hearing
 falls off steeply and differs a lot between people, so "quieter" says more
 about the ear than about the IEM. It follows the primary resonance closely
 (about twice its frequency), so the calibration's prediction is the start,
-and only the smoothness check — a local comparison a smooth fall-off
-doesn't disturb — fine-tunes it, within the range the EQ can move it.
-First, an :class:`AudibilityCheck` asks whether a band there is heard
-clearly at all; if not, that ear's upper treble stays as calibrated.
+and only smoothness — a local comparison a smooth fall-off doesn't
+disturb — fine-tunes it, within the range the EQ can move it: an
+:class:`Overview` of eight EQs across that range, then the three-card
+check from the pick. "Can't tell them apart" in the overview leaves that
+ear's upper treble as calibrated: up there, many people hear little.
 """
 
 from __future__ import annotations
@@ -101,9 +102,10 @@ UPPER_SMOOTH_MIN_DELTA = 0.025
 SMOOTH_MAX_ROUNDS = 6
 SMOOTH_MAX_MOVES = 2         # edge picks in a row at one spacing before it halves
 UPPER_WINDOW = 1.25          # the upper search stays within ÷/× this of the prediction (the EQ moves it ≤ 1.4×)
-AUDIBLE_BAND = 1 / 3         # octaves: the band played to ask whether the upper treble is heard clearly
 
-LOUDER, SMOOTHNESS, AUDIBLE, PICK = "louder", "smoothness", "audible", "pick"
+LOUDER, SMOOTHNESS, PICK, OVERVIEW = "louder", "smoothness", "pick", "overview"
+OVERVIEW_CARDS = 8           # the upper treble's overview: this many EQs across its window
+UPPER_PARTS = {OVERVIEW: (0.0, 0.4), SMOOTHNESS: (0.4, 1.0)}  # share of an ear
 PRIMARY, UPPER = "primary", "upper"
 
 
@@ -438,17 +440,16 @@ class SmoothnessSearch:
         return min(0.9, max(by_delta, len(self.answers) / self.max_rounds))
 
 
-class AudibilityCheck:
-    """One question before an ear's upper treble: is a band at the predicted peak heard clearly?
+class Overview:
+    """One round of many EQs across a window, low to high: rule out the clearly worse ones, pick the
+    smoothest (the upper treble's start). ``result()``: the pick, or ``None`` after "Can't tell them
+    apart". ``delta``: octaves between neighbouring options."""
 
-    Asked, never inferred from the answers: a band there sounding quiet is
-    the ear's own fall-off as much as the IEM. ``answer(0)``: heard clearly;
-    ``answer(None)``: barely or not at all.
-    """
-
-    def __init__(self, hz: float):
-        self.hz = float(hz)
-        self.answers: list[bool] = []
+    def __init__(self, hz_range, n: int = OVERVIEW_CARDS):
+        lo, hi = (math.log2(float(v)) for v in hz_range)
+        self.delta = (hi - lo) / n
+        self.hz = tuple(float(2.0 ** (lo + self.delta * (k + 0.5))) for k in range(n))
+        self.answers: list[tuple[int | None, frozenset[int]]] = []
 
     @property
     def done(self) -> bool:
@@ -457,11 +458,11 @@ class AudibilityCheck:
     def options(self) -> Round:
         if self.done:
             raise RuntimeError("Already answered.")
-        return Round((self.hz,), band=AUDIBLE_BAND)
+        return Round(self.hz)
 
-    def answer(self, choice: int | None) -> None:
+    def answer(self, best: int | None, ruled_out=()) -> None:
         self.options()
-        self.answers.append(choice is not None)
+        self.answers.append((best, frozenset(int(i) for i in ruled_out if i != best)))
 
     def undo(self) -> bool:
         if not self.answers:
@@ -469,8 +470,9 @@ class AudibilityCheck:
         self.answers.pop()
         return True
 
-    def result(self) -> bool:
-        return self.answers[-1]
+    def result(self) -> float | None:
+        best = self.answers[-1][0]
+        return None if best is None else self.hz[best]
 
     def progress(self) -> float:
         return 1.0 if self.done else 0.0
@@ -479,9 +481,9 @@ class AudibilityCheck:
 @dataclass
 class _Stage:
     side: str
-    kind: str        # LOUDER / PICK / SMOOTHNESS / AUDIBLE
+    kind: str        # LOUDER / PICK / SMOOTHNESS / OVERVIEW
     target: str      # PRIMARY / UPPER
-    search: LouderSearch | PickSearch | SmoothnessSearch | AudibilityCheck
+    search: LouderSearch | PickSearch | SmoothnessSearch | Overview
 
 
 @dataclass
@@ -503,8 +505,8 @@ class GuidedTest:
       offered (``start_upper(predicted)`` / ``skip_upper()``);
     - "finished".
 
-    For the upper treble each ear gets an AUDIBLE stage (one question), then
-    a smoothness check around the prediction. ``upper_results[side]`` is
+    For the upper treble each ear gets an OVERVIEW of eight EQs across the
+    window around the prediction, then a smoothness check from the pick. ``upper_results[side]`` is
     ``None`` when that ear didn't hear it clearly or nothing was predicted
     (the upper treble then stays as calibrated).
     """
@@ -562,13 +564,13 @@ class GuidedTest:
         return _Stage(side, SMOOTHNESS, PRIMARY, SmoothnessSearch(center, delta, self.hz_range, self.rng))
 
     def _upper_start(self, index: int) -> None:
-        """The upper treble from ``sides[index]`` on: its audibility question, or (nothing
-        predicted) straight on to the next ear."""
+        """The upper treble from ``sides[index]`` on: its overview, or (nothing predicted) straight on
+        to the next ear."""
         for side in self.sides[index:]:
             predicted = self.predicted_upper.get(side)
             if predicted is not None:
                 self.status = "testing"
-                self.stages.append(_Stage(side, AUDIBLE, UPPER, AudibilityCheck(predicted)))
+                self.stages.append(_Stage(side, OVERVIEW, UPPER, Overview(self.upper_window(side))))
                 return
             self.upper_results[side] = None
         self.status = "finished"
@@ -604,15 +606,16 @@ class GuidedTest:
 
     @property
     def overview(self) -> bool:
-        """The current round is a PICK stage's overview: many EQs, some can be ruled out."""
-        return self.kind == PICK and self.stage.search.in_overview
+        """The current round is an overview (a PICK stage's first, or the upper treble's): many EQs,
+        some can be ruled out."""
+        return self.kind == OVERVIEW or (self.kind == PICK and self.stage.search.in_overview)
 
     def answer(self, choice: int | None, ruled_out=()) -> None:
         """``choice``: the option's index; ``None`` = "About the same" / "Can't tell them apart".
         ``ruled_out``: in the overview, the options the listener crossed out."""
         if self.status != "testing":
             raise RuntimeError(f"Can't answer while {self.status}.")
-        if self.kind == PICK:
+        if self.kind in (PICK, OVERVIEW):
             self.stage.search.answer(choice, ruled_out)
         else:
             self.stage.search.answer(choice)
@@ -622,12 +625,15 @@ class GuidedTest:
         stage = self.stage
         if not stage.search.done:
             return
-        if stage.kind == AUDIBLE:
-            if stage.search.result():
-                self.stages.append(self._smoothness(stage.side, UPPER, stage.search.hz, wide=False))
-            else:  # not heard clearly: the upper treble stays as calibrated
+        if stage.kind == OVERVIEW:  # the three-card check from the pick, starting half a card apart
+            picked = stage.search.result()
+            if picked is None:  # can't tell them apart: the upper treble stays as calibrated
                 self.upper_results[stage.side] = None
                 self._next_ear()
+            else:
+                search = SmoothnessSearch(picked, stage.search.delta / 2, self.upper_window(stage.side), self.rng,
+                                          min_delta=UPPER_SMOOTH_MIN_DELTA)
+                self.stages.append(_Stage(stage.side, SMOOTHNESS, UPPER, search))
             return
         if stage.kind == LOUDER:
             found = stage.search.result()
@@ -708,7 +714,7 @@ class GuidedTest:
                 return stage.search.result()
             if stage.kind == PICK:
                 return stage.search.estimate() if stage.search.answers else None
-            if stage.kind == AUDIBLE:
+            if stage.kind == OVERVIEW:
                 return None
             if len(stage.search.answers) >= 3 and stage.search.spread <= KEEP_ESTIMATE_RATIO:
                 return stage.search.estimate()
@@ -719,10 +725,13 @@ class GuidedTest:
         """0…1 within the current part (primary resonances, or the upper treble)."""
         if self.status in ("finished", "upper_offer"):
             return 1.0
-        total = 2 * len(self.sides)
-        done = 2 * self.sides.index(self.side)
-        if any(s.side == self.side and s.target == self.target for s in self.stages[:-1]):
-            return (done + 1 + self.stage.search.progress()) / total  # the second of two stages
-        # the louder test or audibility question, or an ear's only stage (PICK, or the smoothness check)
-        share = 2 if self.kind in (SMOOTHNESS, PICK) else 1
-        return (done + share * self.stage.search.progress()) / total
+        if self.target == UPPER:
+            lo, hi = UPPER_PARTS[self.kind]
+        elif any(s.side == self.side and s.target == self.target for s in self.stages[:-1]):
+            lo, hi = 0.5, 1.0  # the smoothness check after the louder test
+        elif self.kind in (SMOOTHNESS, PICK):
+            lo, hi = 0.0, 1.0  # the ear's only stage
+        else:
+            lo, hi = 0.0, 0.5  # the louder test
+        share = lo + (hi - lo) * self.stage.search.progress()
+        return (self.sides.index(self.side) + share) / len(self.sides)

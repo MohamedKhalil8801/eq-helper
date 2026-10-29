@@ -104,14 +104,14 @@ between people, so a high sound seeming quieter says more about your ears than a
 app starts from where your calibration predicts the upper peak for the resonance you just found (it sits
 at about twice that frequency). For each ear:
 
-1. **Can you hear it?** Play a high sound there at your normal volume. If you hear it clearly, answer
-   **I hear it clearly**. If you hear it only faintly or not at all, answer **Barely, or not at all**:
-   that ear's upper treble stays as calibrated. That's normal and nothing is lost: what you can barely
-   hear matters little for your EQ.
-2. **Smoothness check**, a few rounds: three EQs that differ only in the highest treble, around the
-   prediction (never further than the EQ can move it). The **sweep** is selected first: your hearing's
-   fall-off only makes it fade smoothly as it rises, while a misplaced peak leaves a swell or dip as it
-   passes. Pick the one that fades most evenly. Pink or grey noise works too.
+1. **Overview**: eight cards, **1** to **8** in order, EQs that differ only in the highest treble,
+   from an upper peak set low to one set high, around the prediction (never further than the EQ can
+   move it). The **sweep** is selected first: your hearing's fall-off only makes it fade smoothly as it
+   rises, while a misplaced peak leaves a swell or dip as it passes. Pick the one that fades most
+   evenly (pink or grey noise works too); rule out the clearly worse ones as in the first part. If all
+   eight sound the same, answer **Can't tell them apart**: that ear's upper treble stays as calibrated.
+   That's common and nothing is lost: what you can barely hear matters little for your EQ.
+2. **Smoothness check**, a few rounds of three cards around your pick, closer together each time.
 
 A found upper treble turns on **Adjust the upper treble** (step ③) with that value.
 
