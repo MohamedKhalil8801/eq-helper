@@ -143,7 +143,7 @@ def test_guided_test_finds_each_ear_with_the_smoothness_check_alone(predict):
 
 
 def test_scorecard_and_elimination_designs_run_end_to_end(predict):
-    table = sim.RoughnessTable(predict)
+    table = sim.model_table(predict)
     best = sim.best_eq_hz(_ear(predict, 7900, seed=3), predict)
     for outcome in (sim.ab_scorecard(_ear(predict, 7900, seed=3), predict, table, 7400, random.Random(1)),
                     sim.ab_scorecard(_ear(predict, 7900, seed=3), predict, table, 7400, random.Random(1),

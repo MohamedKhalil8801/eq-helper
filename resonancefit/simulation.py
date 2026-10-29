@@ -23,13 +23,13 @@ import sys
 from dataclasses import dataclass
 
 import numpy as np
-from scipy.special import ndtr
 
 from eq_helper.dsp.resonance import CONTROL_RANGE, Measurements, ResonanceModel
 from resonancefit.guided_test import (
     FINE_MIN_DELTA, FIRST_SMOOTH_DELTA, FIRST_SMOOTH_MAX_ROUNDS, SMOOTH_DELTA, SMOOTH_MAX_ROUNDS, SMOOTH_WIDE_DELTA,
     LouderSearch, Round, SmoothnessSearch,
 )
+from resonancefit.scorecard import DONE_WIDTH_HZ, POINTS, PickSearch, RoughnessTable, Scorecard
 from resonancefit.shape_match import ShapeMatch, ShapeModel, band_level
 
 SHAPE_SMOOTH_DELTA = 0.03  # after a confident shape match the smoothness check starts this close
@@ -222,151 +222,42 @@ def shape_only(ear: Ear, predict, shape: ShapeModel, start: float | None, rng, f
     return Outcome(search.result().hz, len(search.answers), "shape")
 
 
-# ── the scorecard: every answer scored against every possible resonance ──────────────────────
-SCORE_OCTAVES = 1 / 192
-SCORE_NOISE = 0.3          # dB: how much the scorecard assumes a roughness impression wobbles
-SCORE_SAME = 0.08          # dB: closer than this, "Can't tell them apart" is likely
-SCORE_LAPSE = 0.05
-SCORE_WIDTH_HZ = 100.0     # done when the middle 80 % of the belief is this narrow
-SCORE_MAX_ROUNDS = 14
-FUNNEL_FIRST = 8           # cards in the first round, across the whole range
+# ── the scorecard (resonancefit.scorecard) and elimination rounds ──────────────────────────
 FUNNEL_SECOND = 5
 FUNNEL_MAX_ROUNDS = 8
 
 
-class RoughnessTable:
-    """For every possible true resonance (rows) and every EQ (columns): how rough the treble should
-    sound, from the calibration's model alone (the same measure as :meth:`Ear.roughness`)."""
-
-    def __init__(self, predict, hz_range=CONTROL_RANGE):
-        lo, hi = (math.log2(v) for v in hz_range)
-        self.hz = 2.0 ** np.arange(lo, hi + 1e-9, SCORE_OCTAVES)
-        mask = (GRID >= 4500) & (GRID <= 11000)
-        g = np.log2(GRID[mask])
-        trend = np.vstack([g, np.ones_like(g)]).T
-        project = trend @ np.linalg.pinv(trend)
-        curves = np.array([predict(h)[1][mask] for h in self.hz])
-        self.table = np.empty((len(self.hz), len(self.hz)))
-        for i in range(len(self.hz)):
-            r = curves[i][None, :] - curves
-            r = r - r @ project.T
-            self.table[i] = np.sqrt(np.mean(r * r, axis=1))
-
-    def index(self, hz: float) -> int:
-        return int(np.argmin(np.abs(np.log(self.hz / hz))))
+def model_table(predict) -> RoughnessTable:
+    """The scorecard's table from cached predictions."""
+    return RoughnessTable(lambda hz: np.interp(np.log(POINTS), np.log(GRID), predict(hz)[1]))
 
 
-class Scorecard:
-    """A belief over the resonance (the table's rows), updated by every pick, never thrown away."""
-
-    def __init__(self, table: RoughnessTable, start: float | None = None):
-        self.t = table
-        x = np.log2(table.hz)
-        prior = np.full(len(x), 0.3 / len(x))
-        if start is not None:
-            bump = np.exp(-0.5 * ((x - math.log2(start)) / 0.1) ** 2)
-            prior = prior + 0.7 * bump / bump.sum()
-        self.log_p = np.log(prior / prior.sum())
-
-    def posterior(self) -> np.ndarray:
-        p = np.exp(self.log_p - self.log_p.max())
-        return p / p.sum()
-
-    def quantile(self, q: float) -> float:
-        return float(np.interp(q, np.cumsum(self.posterior()), self.t.hz))
-
-    @property
-    def width(self) -> float:
-        return self.quantile(0.9) - self.quantile(0.1)
-
-    def estimate(self) -> float:
-        return self.quantile(0.5)
-
-    @staticmethod
-    def _better(d):
-        """P(an option is heard smoother than another that is ``d`` dB rougher in truth)."""
-        return (1 - SCORE_LAPSE) * ndtr(d / (SCORE_NOISE * math.sqrt(2))) + SCORE_LAPSE / 2
-
-    def picked(self, shown: list[int], kept: list[int], best: int) -> None:
-        """``best`` (a column) was picked over the other ``kept``; the rest of ``shown`` were ruled out
-        as worse than it. Each comparison with the pick counts, but they all share the pick's own
-        wobble, so together they count as about √n comparisons rather than n."""
-        r = self.t.table
-        others = [k for k in shown if k != best]
-        weight = 1 / math.sqrt(len(others))
-        for k in others:
-            self.log_p += weight * np.log(self._better(r[:, k] - r[:, best]))
-
-    def same(self, a: int, b: int) -> None:
-        d = self.t.table[:, b] - self.t.table[:, a]
-        s = SCORE_NOISE * math.sqrt(2)
-        p = ndtr((SCORE_SAME - d) / s) - ndtr((-SCORE_SAME - d) / s)
-        self.log_p += np.log((1 - SCORE_LAPSE) * p + SCORE_LAPSE / 3)
-
-    def best_pair(self, step: int = 2) -> tuple[int, int]:
-        """The A/B pair whose answer should narrow the belief most."""
-        p = self.posterior()
-        cols = np.arange(0, len(self.t.hz), step)
-        i, j = np.triu_indices(len(cols), k=1)
-        a, b = cols[i], cols[j]
-        d = self.t.table[:, b] - self.t.table[:, a]                       # (states, pairs): >0 → A smoother
-        s = SCORE_NOISE * math.sqrt(2)
-        pa = ndtr((d - SCORE_SAME) / s)
-        pb = ndtr((-d - SCORE_SAME) / s)
-        probs = np.stack([pa, pb, np.clip(1 - pa - pb, 0, 1)]) * (1 - SCORE_LAPSE) + SCORE_LAPSE / 3
-        joint = probs * p[None, :, None]
-        outcome = joint.sum(axis=1)
-        cond = joint / np.maximum(outcome[:, None, :], 1e-300)
-        entropy = -(cond * np.log(np.maximum(cond, 1e-300))).sum(axis=1)
-        k = int(np.argmin((outcome * entropy).sum(axis=0)))
-        return int(a[k]), int(b[k])
-
-
-def _cards(table: RoughnessTable, lo: float, hi: float, n: int) -> list[int]:
-    """``n`` distinct columns spread evenly (log) from ``lo`` to ``hi``."""
-    cols = sorted({table.index(h) for h in np.geomspace(lo, hi, n)})
-    while len(cols) < n:  # too narrow for distinct columns: widen by one step each side
-        cols = sorted(set(cols) | {max(cols[0] - 1, 0), min(cols[-1] + 1, len(table.hz) - 1)})
-    return cols[:n]
+def _ask(ear: Ear, predict, search: PickSearch) -> None:
+    options = search.options()
+    if search.in_overview:
+        kept, best = ear.eliminate(options, predict)
+        search.answer(best, [i for i in range(len(options)) if i not in kept])
+    else:
+        search.answer(ear.smoothest(Round(options), predict))
 
 
 def ab_scorecard(ear: Ear, predict, table: RoughnessTable, start: float, rng, overview: bool = False) -> Outcome:
-    """Two EQs a round, the pair chosen and every answer scored by the scorecard. ``overview``: first a
-    round of 8 cards across the range (rule out, keep 2–3, pick the best), scored the same way."""
-    card = Scorecard(table, start)
-    rounds = cards = 0
-    if overview:
-        shown = _first_round(table)
-        kept, best = ear.eliminate([table.hz[c] for c in shown], predict)
-        card.picked(shown, [shown[i] for i in kept], shown[best])
-        rounds, cards = 1, len(shown)
-    while rounds < SCORE_MAX_ROUNDS and (rounds < 3 or card.width > SCORE_WIDTH_HZ):
-        a, b = card.best_pair()
-        options = [a, b]
-        rng.shuffle(options)
-        answer = ear.smoothest(Round(tuple(table.hz[c] for c in options)), predict)
-        if answer is None:
-            card.same(a, b)
-        else:
-            card.picked(options, options, options[answer])
-        rounds, cards = rounds + 1, cards + 2
-    return Outcome(card.estimate(), rounds, "ab", cards)
-
-
-def _first_round(table: RoughnessTable) -> list[int]:
-    lo, hi = table.hz[0], table.hz[-1]
-    step = (hi / lo) ** (1 / FUNNEL_FIRST)
-    return _cards(table, lo * step ** 0.5, hi / step ** 0.5, FUNNEL_FIRST)
+    """The scorecard's search (PickSearch): A/B rounds, after an overview round of 8 if ``overview``."""
+    search = PickSearch(table, start, rng, overview=overview)
+    while not search.done:
+        _ask(ear, predict, search)
+    cards = sum(len(shown) for shown, _b, _o in search.answers)
+    return Outcome(search.result(), len(search.answers), "ab", cards)
 
 
 def funnel_today(ear: Ear, predict, table: RoughnessTable, rng) -> Outcome:
     """Elimination with today's rule: 8 cards across the range, keep 2–3; 5 cards across what was kept
     (plus a step each side), keep 2–3 and pick the best; then today's smoothness check from that pick."""
-    shown = _first_round(table)
+    shown = table.overview()
     kept, _best = ear.eliminate([table.hz[c] for c in shown], predict)
     hz = sorted(table.hz[shown[i]] for i in kept)
     step = (table.hz[shown[-1]] / table.hz[shown[0]]) ** (1 / (len(shown) - 1))
-    second = _cards(table, max(hz[0] / step, table.hz[0]), min(hz[-1] * step, table.hz[-1]), FUNNEL_SECOND)
+    second = table.spread(max(hz[0] / step, table.hz[0]), min(hz[-1] * step, table.hz[-1]), FUNNEL_SECOND)
     _kept2, best2 = ear.eliminate([table.hz[c] for c in second], predict)
     spacing = math.log2(table.hz[second[-1]] / table.hz[second[0]]) / (len(second) - 1)
     hz, n = run_smoothness(ear, predict, table.hz[second[best2]], spacing, rng,
@@ -378,20 +269,20 @@ def funnel_scorecard(ear: Ear, predict, table: RoughnessTable, start: float, rng
     """Elimination, every pick scored: 8 cards across the range, then 5, then 3 at a time, each round
     spread over the middle of the belief; done when the belief is narrow."""
     card = Scorecard(table, start)
-    shown = _first_round(table)
+    shown = table.overview()
     rounds, cards = 0, 0
     while True:
         keep = (2, 3) if len(shown) > 3 else (1, 1)
-        kept, best = ear.eliminate([table.hz[c] for c in shown], predict, keep=keep)
-        card.picked(shown, [shown[i] for i in kept], shown[best])
+        _kept, best = ear.eliminate([table.hz[c] for c in shown], predict, keep=keep)
+        card.picked(shown, shown[best])
         rounds, cards = rounds + 1, cards + len(shown)
-        if rounds >= FUNNEL_MAX_ROUNDS or (rounds >= 4 and card.width <= SCORE_WIDTH_HZ):
+        if rounds >= FUNNEL_MAX_ROUNDS or (rounds >= 4 and card.width <= DONE_WIDTH_HZ):
             break
         n = FUNNEL_SECOND if rounds == 1 else 3
         lo, hi = card.quantile(0.05 if n > 3 else 0.15), card.quantile(0.95 if n > 3 else 0.85)
         middle = card.estimate()
         lo, hi = min(lo, middle * 2 ** -0.004), max(hi, middle * 2 ** 0.004)  # options at least ~50 Hz apart
-        shown = _cards(table, lo, hi, n)
+        shown = table.spread(lo, hi, n)
     return Outcome(card.estimate(), rounds, "funnel+score", cards)
 
 
@@ -466,7 +357,7 @@ def main(argv=None) -> None:
         for n_case, (_side, truth, true_hz, model) in enumerate(cases):
             if id(model) not in cache:
                 predictions = Predictions(model)
-                cache[id(model)] = (predictions, RoughnessTable(predictions))
+                cache[id(model)] = (predictions, model_table(predictions))
             predict, table = cache[id(model)]
             default = float(np.exp(np.median(np.log(model.peaks))))
             for _ in range(repeats):
