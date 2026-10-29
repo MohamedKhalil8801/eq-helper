@@ -16,7 +16,7 @@ from pathlib import Path
 import numpy as np
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
-    QButtonGroup, QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QLabel, QMessageBox, QPushButton,
+    QButtonGroup, QCheckBox, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QMessageBox, QPushButton,
     QSizePolicy, QSlider, QSpinBox, QStackedWidget, QTabBar, QToolButton, QVBoxLayout, QWidget,
 )
 
@@ -166,6 +166,7 @@ class TuningPanel(QWidget):
         self.guided.upperFound.connect(self._guided_upper)
         self.guided.adjustByHand.connect(self._guided_to_manual)
         self.guided.finished.connect(self._guided_finished)
+        self.guided.apoPauseRequested.connect(self.apoOffRequested)
         self.step1_stack.addWidget(self.guided)
 
         start = QHBoxLayout()
@@ -193,16 +194,33 @@ class TuningPanel(QWidget):
             "Press Play tone, then move the slider (or drag the orange line) until the tone sounds loudest "
             "or most piercing in this ear — that's your resonance. Do the same for the other ear. Click or "
             "drag on the graph to hear any frequency. Keep the volume low."))
-        self.other_eq = QLabel()
+        self.other_eq = QLabel()  # general advice: turn other EQs off
         self.other_eq.setObjectName("hint")
         self.other_eq.setWordWrap(True)
-        self.other_eq_off = QPushButton(tr("Turn it off in Equalizer APO"))
-        self.other_eq_off.hide()
-        self.other_eq_off.clicked.connect(self.apoOffRequested)
-        other_row = QHBoxLayout()
-        other_row.addWidget(self.other_eq, 1)
-        other_row.addWidget(self.other_eq_off, 0, Qt.AlignTop)
-        body.addLayout(other_row)
+        body.addWidget(self.other_eq)
+        # our own EQ is on (or was just paused) in the system-wide EQ app: one box, its button inside
+        self.apo_notice = QFrame()
+        self.apo_notice.setObjectName("notice")
+        notice = QHBoxLayout(self.apo_notice)
+        notice.setContentsMargins(12, 10, 12, 10)
+        notice.setSpacing(12)
+        texts = QVBoxLayout()
+        texts.setSpacing(2)
+        self.apo_title = QLabel()
+        self.apo_title.setObjectName("noticeTitle")
+        self.apo_title.setWordWrap(True)
+        texts.addWidget(self.apo_title)
+        self.apo_text = QLabel()
+        self.apo_text.setWordWrap(True)
+        texts.addWidget(self.apo_text)
+        notice.addLayout(texts, 1)
+        self.apo_pause = QPushButton(tr("Pause it while I tune"))
+        self.apo_pause.clicked.connect(self.apoOffRequested)
+        notice.addWidget(self.apo_pause, 0, Qt.AlignVCenter)
+        self.apo_notice.hide()
+        body.addWidget(self.apo_notice)
+        self._other_state = None
+        self._apo_was_on = False
         self.set_other_eqs([], False)
 
         self.graph = ResponseGraph()
@@ -359,11 +377,35 @@ class TuningPanel(QWidget):
 
     def set_other_eqs(self, found: list[str], apo_on: bool, app: str = "Equalizer APO") -> None:
         """Warn about other EQs: any EQ already running is heard on top of this one.
-        ``apo_on``: our own EQ is on in ``app`` (the system-wide EQ we apply to)."""
-        self.other_eq_off.setText(tr("Turn it off in {app}").format(app=app))
+        ``apo_on``: our own EQ is on in ``app`` (the system-wide EQ we apply to). Called again whenever
+        that may have changed (the main window re-checks while it's active); a no-op when nothing did."""
+        state = (tuple(found), bool(apo_on), app)
+        if state == self._other_state:
+            return
+        self._other_state = state
+        paused = not apo_on and self._apo_was_on  # on before, off now: from here or in the app itself
         if apo_on:
-            text = tr("Your EQ is on in {app}, so here you'd hear it twice. Turn it off while you "
-                      "tune, then apply again when you're done.").format(app=app)
+            self._apo_was_on = True
+        self.apo_notice.setVisible(apo_on or paused)
+        self.apo_pause.setVisible(apo_on)
+        self.apo_notice.setProperty("kind", "" if apo_on else "ok")
+        self.apo_notice.style().unpolish(self.apo_notice)
+        self.apo_notice.style().polish(self.apo_notice)
+        if apo_on:
+            self.apo_title.setText("⚠ " + tr("Your tuning is switched on in {app}").format(app=app))
+            self.apo_text.setText(tr(
+                "Everything you play goes through it, these sounds too, so you'd hear your EQ twice and tune "
+                "against it. Pause it while you tune. When you're done, “Apply to {app}” switches it back on "
+                "with your new tuning.").format(app=app))
+        elif paused:
+            self.apo_title.setText("✓ " + tr("Paused in {app}").format(app=app))
+            self.apo_text.setText(tr(
+                "Your music plays without this EQ for now. When you're done tuning, “Apply to {app}” switches "
+                "it back on with your new tuning.").format(app=app))
+        self.other_eq.setVisible(not (apo_on or paused))  # the notice says it all
+        if apo_on:
+            text = tr("Your tuning is switched on in {app}: pause it while you tune, or you'd hear your EQ "
+                      "twice.").format(app=app)
         elif found:
             text = tr("Turn off any other EQ while you tune. Found on this computer: {apps}. If one of them "
                       "(or your music app, a sound enhancement or your dongle) applies an EQ, you'd hear it on "
@@ -376,8 +418,7 @@ class TuningPanel(QWidget):
         self.other_eq.setObjectName("warning" if apo_on or found else "hint")
         self.other_eq.style().unpolish(self.other_eq)
         self.other_eq.style().polish(self.other_eq)
-        self.other_eq_off.setVisible(apo_on)
-        self.guided.set_other_eq_text("⚠ " + text, bool(apo_on or found))
+        self.guided.set_other_eq_text("⚠ " + text, bool(apo_on or found), can_pause=apo_on)
 
     # ── state ──────────────────────────────────────────────────────────────
     @property

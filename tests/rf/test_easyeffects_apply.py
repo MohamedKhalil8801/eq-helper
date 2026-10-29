@@ -129,6 +129,6 @@ def test_linux_window_applies_to_easyeffects(qtbot, tmp_path):
     entry = w.history.entries()[0]
     assert entry.reason == "apply" and entry.app == "easyeffects"
     assert "Applied in EasyEffects" in w.listen.status.text()
-    assert "twice" in w.tuning.other_eq.text() and "EasyEffects" in w.tuning.other_eq_off.text()
-    w.tuning.other_eq_off.click()
+    assert "twice" in w.tuning.apo_text.text() and "EasyEffects" in w.tuning.apo_title.text()
+    w.tuning.apo_pause.click()
     assert not applier.is_on()

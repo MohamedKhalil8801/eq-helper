@@ -24,6 +24,7 @@ from ..apo_apply import ApoApplier, ApoUnwritable
 from ..easyeffects_apply import EasyEffectsApplier, EasyEffectsProblem
 
 APPLY_PROBLEMS = (ApoUnwritable, EasyEffectsProblem)
+EQ_WATCH_MS = 3000  # how often the active window re-checks whether our EQ is on in Equalizer APO
 
 
 def system_eq_for(platform: str, settings):
@@ -245,6 +246,10 @@ class MainWindow(QMainWindow):
         self.tuning = TuningPanel(self.ctx, self.audio)
         self.tuning.eqChanged.connect(self.audio.set_eq)
         self.tuning.apoOffRequested.connect(self.turn_off_apo)
+        self._eq_watch = QTimer(self)  # Equalizer APO can be switched on or off outside the app at any time
+        self._eq_watch.setInterval(EQ_WATCH_MS)
+        self._eq_watch.timeout.connect(lambda: self.sync_other_eqs() if self.isActiveWindow() else None)
+        self._eq_watch.start()
         self.calibrationLoaded.connect(self.tuning.set_calibration)
         tune.addWidget(self.tuning, 1)
 
@@ -352,6 +357,8 @@ class MainWindow(QMainWindow):
     def changeEvent(self, event) -> None:
         if event.type() in (QEvent.PaletteChange, QEvent.ApplicationPaletteChange):
             self.setStyleSheet(build_style(self.palette()))
+        elif event.type() == QEvent.ActivationChange and self.isActiveWindow():
+            self.sync_other_eqs()  # back from Equalizer APO's own window, say
         super().changeEvent(event)
 
     def _apps_detected(self, installed) -> None:

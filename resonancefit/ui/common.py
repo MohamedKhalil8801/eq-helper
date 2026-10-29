@@ -119,6 +119,11 @@ def build_style(palette: QPalette) -> str:
 QFrame#card {{ border: 1px solid {c['border']}; border-radius: 10px; background: {c['base']}; }}
 QLabel#hint {{ color: {c['hint']}; }}
 QLabel#warning {{ color: {c['warning']}; }}
+QFrame#notice {{ border: 1px solid {c['warning']}; border-radius: 8px;
+    background: {_mix(QColor(c['warning']), QColor(c['base']), 0.9)}; }}
+QFrame#notice[kind="ok"] {{ border-color: {c['border']}; background: {c['base']}; }}
+QFrame#notice QLabel {{ background: transparent; }}
+QLabel#noticeTitle {{ font-weight: bold; }}
 QLabel#chip {{ border: 1px solid {c['border']}; border-radius: 9px; padding: 1px 8px; }}
 QLabel#chip[kind="yours"] {{ border-color: {COLOR_TARGET}; }}
 QLabel#chip[kind="operator"] {{ border-color: {COLOR_WITH_EQ}; }}

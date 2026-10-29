@@ -47,8 +47,11 @@ sound.** The bar at the bottom of the window always shows the **Output** you're 
 
 **Turn off any other EQ first:** your music app's EQ, sound enhancements (Dolby, Windows or Realtek
 effects…), Equalizer APO or Peace, and your dongle's EQ. Otherwise you hear it on top of this one and
-find the resonance in the wrong place. The app names the EQ apps it finds on your computer, and if your
-own EQ is still on in Equalizer APO it offers to turn it off while you tune (apply again when you're done).
+find the resonance in the wrong place. The app names the EQ apps it finds on your computer. If your
+own tuning is switched on in Equalizer APO, a box says so, with **Pause it while I tune** right in it (the
+test's first screen offers the same). Once it's paused the box says **Paused in Equalizer APO**; when
+you're done, **Apply to Equalizer APO** switches it back on with your new tuning. The app keeps checking,
+so switching it on or off in Equalizer APO itself shows here within a few seconds.
 
 ### Find it for me (the guided test)
 

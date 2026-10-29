@@ -98,6 +98,7 @@ class GuidedTestView(StageBackground):
     resultFound = Signal(str, float)
     upperFound = Signal(str, object)
     adjustByHand = Signal(object)
+    apoPauseRequested = Signal()  # the intro's "Pause it while I tune" (our EQ is on system-wide)
     finished = Signal()
 
     def __init__(self, audio, option_eqs=None, upper_prediction=None, tables=None, parent=None):
@@ -210,6 +211,14 @@ class GuidedTestView(StageBackground):
         layout.addLayout(self._padded(self.intro_steps))
         self.intro_other_eq = self._label()
         layout.addLayout(self._padded(self.intro_other_eq))
+        pause_row = QHBoxLayout()
+        pause_row.setContentsMargins(CARD_MARGIN, 0, CARD_MARGIN, 0)
+        self.intro_pause = QPushButton(tr("Pause it while I tune"))
+        self.intro_pause.clicked.connect(self.apoPauseRequested)
+        self.intro_pause.hide()
+        pause_row.addWidget(self.intro_pause)
+        pause_row.addStretch(1)
+        layout.addLayout(pause_row)
         row = QHBoxLayout()
         row.setContentsMargins(CARD_MARGIN, 8, CARD_MARGIN, 0)
         self.start_button = QPushButton(tr("Start the test"))
@@ -479,9 +488,11 @@ class GuidedTestView(StageBackground):
             f"QFrame#gtDivider {{ background: rgba({border.red()},{border.green()},{border.blue()},"
             f"{border.alpha()}); border: none; }}")
 
-    def set_other_eq_text(self, text: str, warning: bool) -> None:
-        """The same "turn off other EQs" warning step ① shows."""
+    def set_other_eq_text(self, text: str, warning: bool, can_pause: bool = False) -> None:
+        """The same "turn off other EQs" warning step ① shows; ``can_pause``: our own EQ is on
+        system-wide, so the intro offers to pause it right there."""
         self._other_eq = (text, warning)
+        self.intro_pause.setVisible(can_pause)
         self.intro_other_eq.setText(text)
         self.intro_other_eq.setObjectName("gtWarning" if warning else "gtMuted")
         self.intro_other_eq.style().unpolish(self.intro_other_eq)

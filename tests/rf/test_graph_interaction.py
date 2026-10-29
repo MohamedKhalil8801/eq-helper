@@ -132,13 +132,24 @@ def test_grey_noise_through_the_eq_works_like_pink(qtbot, panel):
 
 def test_other_eq_warning(qtbot, panel):
     panel.set_other_eqs([], False)
-    assert "other EQ" in panel.other_eq.text() and not panel.other_eq_off.isVisibleTo(panel)
+    assert "other EQ" in panel.other_eq.text() and not panel.apo_notice.isVisibleTo(panel)
     panel.set_other_eqs(["Equalizer APO", "Peace"], False)
     assert "Equalizer APO, Peace" in panel.other_eq.text() and panel.other_eq.objectName() == "warning"
     panel.set_other_eqs(["Equalizer APO"], True)
-    assert "twice" in panel.other_eq.text() and panel.other_eq_off.isVisibleTo(panel)
+    # one box: what's wrong, what to do, and its button inside it; the general advice steps aside
+    assert panel.apo_notice.isVisibleTo(panel) and not panel.other_eq.isVisibleTo(panel)
+    assert "switched on in Equalizer APO" in panel.apo_title.text() and "twice" in panel.apo_text.text()
+    assert panel.apo_pause.isVisibleTo(panel) and panel.apo_pause.parent() is panel.apo_notice
+    assert panel.apo_pause.text() == "Pause it while I tune"
+    assert panel.guided.intro_pause.isVisibleTo(panel.guided) or not panel.guided.isVisible()
     with qtbot.waitSignal(panel.apoOffRequested, timeout=1000):
-        panel.other_eq_off.click()
+        panel.apo_pause.click()
+    with qtbot.waitSignal(panel.apoOffRequested, timeout=1000):
+        panel.guided.intro_pause.click()  # the test's first screen offers it too
+    panel.set_other_eqs(["Equalizer APO"], False)  # off now: say so, and how to switch it back on
+    assert panel.apo_notice.isVisibleTo(panel) and not panel.apo_pause.isVisibleTo(panel)
+    assert "Paused in Equalizer APO" in panel.apo_title.text() and "Apply to Equalizer APO" in panel.apo_text.text()
+    assert not panel.guided.intro_pause.isVisibleTo(panel.guided)
 
 
 def test_main_window_names_installed_system_eqs_and_turns_ours_off(qtbot, tmp_path, monkeypatch):
@@ -168,12 +179,15 @@ def test_main_window_names_installed_system_eqs_and_turns_ours_off(qtbot, tmp_pa
     w = MainWindow(ctx, start_audio=False, apo=apo)
     qtbot.addWidget(w)
     w._apps_detected({"equalizer-apo", "foobar2000"})       # foobar2000 is a player, not system-wide
-    text = w.tuning.other_eq.text()
-    assert "twice" in text and w.tuning.other_eq_off.isVisibleTo(w)
-    w.tuning.other_eq_off.click()
+    assert "twice" in w.tuning.apo_text.text() and w.tuning.apo_pause.isVisibleTo(w)
+    w.tuning.apo_pause.click()
     assert apo.offs == 1
     text = w.tuning.other_eq.text()
-    assert "Equalizer APO" in text and "foobar2000" not in text and not w.tuning.other_eq_off.isVisibleTo(w)
+    assert "Equalizer APO" in text and "foobar2000" not in text and not w.tuning.apo_pause.isVisibleTo(w)
+    assert w._eq_watch.isActive()  # re-checked every few seconds while the window is active
+    apo.on = True  # switched back on in Equalizer APO itself
+    w.sync_other_eqs()  # what the watch does
+    assert w.tuning.apo_pause.isVisibleTo(w)
 
 
 def test_dragging_the_resonance_line_with_the_mouse_moves_the_resonance(qtbot, panel):
