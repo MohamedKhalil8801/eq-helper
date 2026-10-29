@@ -59,14 +59,15 @@ right (one ear only for a calibration made for both ears at once), a **smoothnes
 Every card plays the same sound through a slightly different EQ, each placing your resonance a little
 differently; you pick the one whose treble sounds smoothest.
 
-1. **Overview: eight cards**, **A** to **H** in two rows, from an EQ made for a low resonance to one
-   made for a high one (in shuffled order). Listen to them all and compare any two as often as you
-   like. **Rule out** the ones that clearly sound worse (select a card and press **Rule out** or X, or
+1. **Overview: eight cards**, **1** to **8** in two rows (the numbers are also their keys), in order
+   from an EQ made for a low resonance to one made for a high one. Going through them in order, the
+   sound usually gets smoother card by card, then harsher again past the right one, which makes the
+   smoothest easy to spot. Listen to them all and compare any two as often as you like. **Rule out** the ones that clearly sound worse (select a card and press **Rule out** or X, or
    right-click it): it fades and gets a ✕ but stays playable, and the same again brings it back. Then
-   pick the smoothest of the rest: **Smoothest: C**. Ruling out is optional, it just leaves fewer to
+   pick the smoothest of the rest: **Smoothest: 3**. Ruling out is optional, it just leaves fewer to
    compare.
-2. **Pairs**: then a few rounds of just two cards. Which sounds smoother? Answer **Smoothest: A** (or B)
-   or **Can't tell them apart**, which is a fine answer when they're close.
+2. **Pairs**: then a few rounds of just two cards, the lower one first. Which sounds smoother? Answer
+   **Smoothest: 1** (or 2) or **Can't tell them apart**, which is a fine answer when they're close.
 
 **Listen with Pink noise, Grey noise, Focused noise or Sweep** (switch any time, use any; keys N, G, F,
 W): with noise, the smoothest card has no harsh, hissy or dull spot; with **Sweep**, a slow sweep
@@ -84,8 +85,8 @@ right ear on the left ear's result, but both start with the overview, so neither
 wrong place. Without the model (rare) each ear is the older three-card smoothness check: it starts wide
 around your calibration's guess and closes in.
 
-The cards are in a different order every round and never show frequencies, and the moving bars on the
-playing card only follow how loud the sound is, the same for every card, so you choose by ear. The
+The cards never show frequencies, and the moving bars on the playing card only follow how loud the
+sound is, the same for every card, so you choose by ear. The
 answer buttons wake up once you've listened to each card for a moment (**Listen to each one first**).
 
 When an ear is done the app shows its result, e.g. **Left resonance: 7,640 Hz**, and sets it in the
@@ -93,7 +94,7 @@ graph and the EQ exactly as the slider would. **Back** takes back your last answ
 leaves the test and keeps what's been found so far.
 
 Without a starting point from the calibration (rare), each ear begins with a **louder test** instead:
-two cards, each a narrow band of noise at the same level; answer **Louder: A** (or B) or **About the
+two cards, each a narrow band of noise at the same level; answer **Louder: 1** (or 2) or **About the
 same**, about seven rounds, then the smoothness check from what it found. If those answers point to more
 than one place, the app offers **Do this ear again**, **Use it anyway** or **Adjust by hand**.
 

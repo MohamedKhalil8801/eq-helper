@@ -3,8 +3,8 @@
 Drives a :class:`~resonancefit.guided_test.GuidedTest`. One Play/Pause bar
 plays the selected option continuously; clicking a card switches the sound
 at once (noise bands crossfade in the engine, EQs crossfade in ``StereoFIR``).
-An answer unlocks once every option has been heard for a moment. Option
-order is shuffled each round and only letters are shown; the cards'
+An answer unlocks once every option has been heard for a moment. Cards
+are numbered 1–8 (their keys), never show frequencies, and their
 animation follows the overall level only, so nothing gives the answer away.
 
 With the calibration's model ready (its roughness tables are built on a
@@ -50,7 +50,7 @@ HEARD_SECONDS = 0.5   # an option counts as heard after this long selected while
 FRAME_MS = 33         # ~30 fps while sound plays
 LEVEL_SAMPLES = 1024
 LEVEL_SMOOTHING = 0.35
-LETTERS = "ABCDEFGH"   # cards: up to eight (the overview), four to a row
+LETTERS = "12345678"   # card names (and their keys): up to eight (the overview), four to a row
 CARDS_PER_ROW = 4
 STAGE2_SOUNDS = ("pink", "grey", "region", "focus")  # the smoothness check: pink, grey or focused noise, or the sweep
 CENTRED_SOUNDS = ("region", "focus")  # follow each round's options
@@ -275,7 +275,9 @@ class GuidedTestView(StageBackground):
         self.cards_grid = QGridLayout()
         self.cards_grid.setContentsMargins(0, 0, 0, 0)
         self.cards_grid.setSpacing(0)
-        self.cards = [OptionCard(letter, tr("Play {letter}").format(letter=letter)) for letter in LETTERS]
+        self.cards = [OptionCard(letter, letter) for letter in LETTERS]
+        for card in self.cards:
+            card.setAccessibleName(tr("Play {n}").format(n=card.letter))
         for index, card in enumerate(self.cards):
             card.clicked.connect(lambda _=False, i=index: self.select(i))
             card.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -1150,9 +1152,9 @@ class GuidedTestView(StageBackground):
         elif letter is None:
             self.answer_button.setText(tr("Louder") if louder else tr("Smoothest"))
         elif louder:
-            self.answer_button.setText(tr("Louder: {letter}").format(letter=letter))
+            self.answer_button.setText(tr("Louder: {n}").format(n=letter))
         else:
-            self.answer_button.setText(tr("Smoothest: {letter}").format(letter=letter))
+            self.answer_button.setText(tr("Smoothest: {n}").format(n=letter))
         self.answer_button.set_accent(self.cards[self.selected].accent if self.selected is not None else None)
         ok = self.can_answer
         self.answer_button.setEnabled(ok and self.selected is not None and self.selected not in self.ruled_out)

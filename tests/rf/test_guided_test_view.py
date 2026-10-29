@@ -106,7 +106,7 @@ def test_find_it_for_me_replaces_step_one(panel, view):
     started(view)
     assert view.title.text() == "Left ear · Round 1"
     assert view.stage_label.text() == "Louder test"
-    assert [c.text() for c in view.cards[:2]] == ["Play A", "Play B"] and not view.cards[2].isVisibleTo(view)
+    assert [c.text() for c in view.cards[:2]] == ["1", "2"] and not view.cards[2].isVisibleTo(view)
     view.leave_for_manual()
     assert not panel.guided_active and panel.step2.isEnabled()
     assert panel.manual_box.isVisibleTo(panel)
@@ -204,9 +204,9 @@ def test_answers_unlock_only_once_every_option_was_heard(view, clock):
     view._account()
     assert view.heard == {0, 1}
     assert view.answer_button.isEnabled() and view.same_button.isEnabled()
-    assert view.answer_button.text() == "Louder: A"
+    assert view.answer_button.text() == "Louder: 1"
     view.select(1)
-    assert view.answer_button.text() == "Louder: B"
+    assert view.answer_button.text() == "Louder: 2"
     assert view.answer_button.accent == view.cards[1].accent
 
 
@@ -237,11 +237,11 @@ def test_clicking_a_card_in_the_smoothness_check_plays_once_the_eqs_are_ready(qt
     assert view.audio.playing == "pink" and view.audio._eq is view._eqs[2][0]
 
 
-def test_option_order_is_random_and_no_frequency_is_shown(panel, view, clock):
+def test_louder_pairs_are_shuffled_smoothness_cards_in_order_and_no_frequency_is_shown(panel, view, clock):
     started(view)
     firsts = set()
     for seed in range(8):
-        panel.start_guided_test(random.Random(seed))
+        view.start(panel.session.sides, {}, random.Random(seed))  # the louder test
         started(view)
         options = view._round.options
         firsts.add(options[0] < options[1])
@@ -250,6 +250,9 @@ def test_option_order_is_random_and_no_frequency_is_shown(panel, view, clock):
                          + [c.text() for c in view.cards])
         assert "Hz" not in shown and not re.search(r"\d{3}", shown)
     assert firsts == {True, False}
+    panel.start_guided_test(random.Random(1))  # the smoothness check: low to high
+    started(view)
+    assert list(view._round.options) == sorted(view._round.options)
 
 
 def test_eq_is_off_for_tones_and_put_back_afterwards(panel, view, clock):

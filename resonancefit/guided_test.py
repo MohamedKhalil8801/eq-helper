@@ -32,8 +32,10 @@ louder test is the fallback when there's no starting point.
 
 :class:`GuidedTest` runs the stages for each ear, first for the primary
 resonance and then, if the customer wants, for the upper resonance. It keeps
-one undo history across stages and ears. Option order is shuffled every
-round; options are plain frequencies, the UI only ever shows letters.
+one undo history across stages and ears. Smoothness options come low to
+high (the sound gets smoother towards the right one, then harsher again);
+the louder test's pair is shuffled. Options are plain frequencies, the UI
+only ever shows card numbers.
 
 The upper resonance (about 15–18 kHz) gets no louder test: up there hearing
 falls off steeply and differs a lot between people, so "quieter" says more
@@ -117,7 +119,7 @@ class Round:
     band: float = 0.0
 
     def letter(self, index: int) -> str:
-        return "ABC"[index]
+        return str(index + 1)
 
 
 @dataclass(frozen=True)
@@ -391,9 +393,7 @@ class SmoothnessSearch:
         if self.done:
             raise RuntimeError("The smoothness check is finished.")
         if self._round is None:
-            triple = list(self._triple())
-            self.rng.shuffle(triple)
-            self._round = Round(tuple(triple))
+            self._round = Round(tuple(self._triple()))  # low to high, like the scorecard's cards
         return self._round
 
     def answer(self, smoothest: int | None) -> None:

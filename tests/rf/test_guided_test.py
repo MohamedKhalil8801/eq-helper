@@ -177,14 +177,11 @@ def pick(search, which):
     search.answer(search.options().options.index(triple[{"low": 0, "mid": 1, "high": 2}[which]]))
 
 
-def test_smoothness_options_are_centre_and_neighbours_shuffled():
-    seen = set()
-    for seed in range(12):
+def test_smoothness_options_are_centre_and_neighbours_low_to_high():
+    for seed in range(4):
         search = SmoothnessSearch(7500, rng=random.Random(seed))
         options = search.options().options
-        assert sorted(options) == pytest.approx([7500 * 2 ** -SMOOTH_DELTA, 7500, 7500 * 2 ** SMOOTH_DELTA])
-        seen.add(options.index(7500))
-    assert seen == {0, 1, 2}
+        assert options == pytest.approx((7500 * 2 ** -SMOOTH_DELTA, 7500, 7500 * 2 ** SMOOTH_DELTA))
 
 
 def test_centre_pick_halves_the_step_and_cant_tell_ends():

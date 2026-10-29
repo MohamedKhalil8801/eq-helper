@@ -155,8 +155,9 @@ class Scorecard:
 class PickSearch:
     """One ear: an overview round of eight EQs, then A/B rounds, all scored on one :class:`Scorecard`.
 
-    ``options()`` is a round's EQs as resonance frequencies (Hz), in display
-    order; ``answer(best, ruled_out)`` takes the index of the smoothest one
+    ``options()`` is a round's EQs as resonance frequencies (Hz), low to high
+    (shown in that order: the sound gets smoother card by card towards the
+    right one, then harsher again, which makes the smoothest easy to find); ``answer(best, ruled_out)`` takes the index of the smoothest one
     (``None``: can't tell them apart) and, in the overview, the indices the
     listener ruled out (kept with the answer; every EQ but the pick counts
     as heard rougher than it). ``overview=False`` starts with A/B.
@@ -193,8 +194,7 @@ class PickSearch:
             shown = self.table.overview()
         else:
             shown = list(self._card.best_pair())
-        self.rng.shuffle(shown)
-        return tuple(shown)
+        return tuple(sorted(shown))  # low to high: smoother card by card, then harsher again
 
     def options(self) -> tuple[float, ...]:
         """The current round's EQs (Hz), stable until it's answered or undone."""
