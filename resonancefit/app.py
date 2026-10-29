@@ -9,6 +9,8 @@ is already running they are handed to that window instead.
 from __future__ import annotations
 
 import sys
+import traceback
+from datetime import datetime
 from pathlib import Path
 
 from eq_helper.winquirks import disable_wmi_platform_queries
@@ -20,6 +22,7 @@ disable_wmi_platform_queries()
 
 from eq_helper.calibration.rescal import RESCAL_SUFFIX  # noqa: E402
 
+ERROR_LOG_MAX = 256 * 1024  # bytes: the log starts over beyond this
 ICON = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[1])) / "resonancefit" / "assets" / "icon.png"
 
 
@@ -27,6 +30,26 @@ def calibration_args(argv) -> list[Path]:
     """The ``.rescal`` files named on the command line (flags ignored)."""
     return [Path(a) for a in list(argv)[1:]
             if not a.startswith("-") and a.lower().endswith(RESCAL_SUFFIX)]
+
+
+def log_errors(path: Path, version: str = "") -> None:
+    """Write uncaught errors to ``path`` (then report them as before). Errors in Qt slots otherwise
+    vanish, leaving a button that silently does nothing; the log says what went wrong."""
+    previous = sys.excepthook
+
+    def hook(kind, value, tb):
+        try:
+            if path.exists() and path.stat().st_size > ERROR_LOG_MAX:
+                path.unlink()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8") as log:
+                log.write(f"\n{datetime.now().isoformat(timespec='seconds')} {version}\n")
+                log.write("".join(traceback.format_exception(kind, value, tb)))
+        except OSError:
+            pass
+        previous(kind, value, tb)
+
+    sys.excepthook = hook
 
 
 def main(argv=None) -> int:
@@ -71,6 +94,7 @@ def main(argv=None) -> int:
     ctx = AppContext.create(branding=branding)
     from .updates import UpdateChecker
     from .version import app_version
+    log_errors(ctx.paths.data_dir / "errors.log", app_version())
     window = MainWindow(ctx, updates=UpdateChecker(ctx.settings, app_version(), ctx.paths.platform))
     instance.listen(window.open_files)
     window.open_files([*files, *pending], activate=False)
