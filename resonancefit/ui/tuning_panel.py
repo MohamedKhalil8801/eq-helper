@@ -111,6 +111,7 @@ class _TargetItem:
 class TuningPanel(QWidget):
     eqChanged = Signal(object)  # ChannelEQ
     apoOffRequested = Signal()
+    guidedActiveChanged = Signal(bool)  # the guided test opened (True) or closed (False)
 
     def __init__(self, ctx, audio, parent=None):
         super().__init__(parent)
@@ -511,6 +512,7 @@ class TuningPanel(QWidget):
         self.step1_stack.setCurrentWidget(self.guided)
         for card in (self.step2, self.step3):
             card.setEnabled(False)  # the test's EQs are made with today's target and upper treble
+        self.guidedActiveChanged.emit(True)
 
     def _option_eqs(self, side: str, hz_list, which: str = "primary"):
         """For the smoothness check: a worker job making one EQ (and its preview filters) per option,
@@ -587,6 +589,7 @@ class TuningPanel(QWidget):
             if self._guided_eq:
                 self.eqChanged.emit(self.channel_eq)
         self._guided_eq = False
+        self.guidedActiveChanged.emit(False)
 
     def _show_manual(self, shown: bool) -> None:
         self.manual_box.setVisible(shown)

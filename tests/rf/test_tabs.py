@@ -163,3 +163,11 @@ def test_about_page_branding_licences_and_sheet(win, qtbot, tmp_path, opened):
     assert about.sheet_combo.count() == 1
     about.open_sheet.click()
     assert Path(opened[-1].toLocalFile()) == sheet
+
+
+def test_the_side_panels_are_hidden_while_the_guided_test_runs(win):
+    assert win.sidebar.isVisibleTo(win)
+    win.tuning.start_guided_test()
+    assert win.tuning.guided_active and not win.sidebar.isVisibleTo(win)  # no EQ switch, saving or history
+    win.tuning.guided.leave_for_manual()
+    assert not win.tuning.guided_active and win.sidebar.isVisibleTo(win)
