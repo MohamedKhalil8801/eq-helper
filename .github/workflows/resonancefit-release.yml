@@ -4,6 +4,8 @@
 # (MohamedKhalil8801/resonancefit-releases, workflow "Build and publish"),
 # which checks out this source, tests it, builds Windows/macOS/Linux, runs
 # --self-test on every build and publishes the release with SHA256SUMS.
+# The release notes open with the "## X.Y.Z" section of
+# docs/resonancefit-changelog.md, so write it before tagging.
 #
 # Pushing a tag rf-vX.Y.Z here starts that build automatically when the
 # secret RELEASES_DISPATCH_TOKEN exists (a fine-grained token with
