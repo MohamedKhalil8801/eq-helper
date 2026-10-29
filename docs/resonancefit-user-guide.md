@@ -90,13 +90,13 @@ sound is, the same for every card, so you choose by ear. The
 answer buttons wake up once you've listened to each card for a moment (**Listen to each one first**).
 
 When an ear is done the app shows its result, e.g. **Left resonance: 7,640 Hz**, and sets it in the
-graph and the EQ exactly as the slider would. **Back** takes back your last answer; **Adjust by hand**
-leaves the test and keeps what's been found so far.
+graph and the EQ exactly as the slider would. **Back** takes back your last answer; **✕ Stop the test**
+leaves it and keeps what's been found so far (**Cancel** on the first screen).
 
 Without a starting point from the calibration (rare), each ear begins with a **louder test** instead:
 two cards, each a narrow band of noise at the same level; answer **Louder: 1** (or 2) or **About the
 same**, about seven rounds, then the smoothness check from what it found. If those answers point to more
-than one place, the app offers **Do this ear again**, **Use it anyway** or **Adjust by hand**.
+than one place, the app offers **Do this ear again**, **Use it anyway** or **Stop the test**.
 
 **Upper treble (optional).** After both ears the app offers **Fine-tune my upper treble** or **Skip, I'm
 done**. There's no louder test up there: above about 12 kHz hearing falls off steeply and differs a lot
@@ -122,8 +122,8 @@ is *About the same* / *Can't tell them apart*, **X** rules the selected card out
 
 ### Adjust by hand
 
-Press **Adjust by hand** to show the slider and its sound buttons (they're shown from the start once
-you've found your resonance before):
+The slider and its sound buttons are always under **Find it for me**: use them to find the resonance
+yourself, or to fine-tune what the test found:
 
 1. Put both IEMs in as you normally wear them, with your usual tips.
 2. On the **Left** tab, press **▶ Play tone**. The tone plays in your left ear only, and a dotted line on

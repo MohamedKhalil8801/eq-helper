@@ -216,9 +216,9 @@ class GuidedTestView(StageBackground):
         self.start_button.setObjectName("primary")
         self.start_button.clicked.connect(self.begin)
         row.addWidget(self.start_button)
-        self.intro_manual = QPushButton(tr("Adjust by hand"))
-        self.intro_manual.clicked.connect(self.leave_for_manual)
-        row.addWidget(self.intro_manual)
+        self.intro_cancel = QPushButton(tr("Cancel"))
+        self.intro_cancel.clicked.connect(self.leave_for_manual)
+        row.addWidget(self.intro_cancel)
         row.addStretch(1)
         layout.addLayout(row)
         self._shortcut(page, (Qt.Key_Return, Qt.Key_Enter), lambda: self._enter(self.begin))
@@ -318,10 +318,10 @@ class GuidedTestView(StageBackground):
         self.back_button.clicked.connect(self.back)
         footer.addWidget(self.back_button)
         footer.addStretch(1)
-        self.manual_button = QPushButton(tr("Adjust by hand"))
-        self.manual_button.setToolTip(tr("Leave the test and keep what's been found so far"))
-        self.manual_button.clicked.connect(self.leave_for_manual)
-        footer.addWidget(self.manual_button)
+        self.stop_button = QPushButton(tr("✕  Stop the test"))
+        self.stop_button.setToolTip(tr("Leave the test; what's been found so far is kept"))
+        self.stop_button.clicked.connect(self.leave_for_manual)
+        footer.addWidget(self.stop_button)
         layout.addLayout(footer)
         layout.addSpacing(10)
         self.keys_hint = self._label(tr("Keys: 1–8 choose · X rule out · P play/pause · Enter answer · S same · "
@@ -366,9 +366,9 @@ class GuidedTestView(StageBackground):
         self.use_anyway_button.setToolTip(tr("Carry on from the best guess; the next part checks it"))
         self.use_anyway_button.clicked.connect(self.use_estimate)
         row.addWidget(self.use_anyway_button)
-        self.unsure_manual = QPushButton(tr("Adjust by hand"))
-        self.unsure_manual.clicked.connect(self.leave_for_manual)
-        row.addWidget(self.unsure_manual)
+        self.unsure_stop = QPushButton(tr("Stop the test"))
+        self.unsure_stop.clicked.connect(self.leave_for_manual)
+        row.addWidget(self.unsure_stop)
         self.unsure_back = QPushButton(tr("Back"))
         self.unsure_back.clicked.connect(self.back)
         row.addWidget(self.unsure_back)
@@ -448,7 +448,7 @@ class GuidedTestView(StageBackground):
         return self.done_progress
 
     def _enter(self, default) -> None:
-        """Enter clicks a focused button (Back, Adjust by hand…), else does the page's main action."""
+        """Enter clicks a focused button (Back, Stop the test…), else does the page's main action."""
         focused = QApplication.focusWidget()
         if isinstance(focused, QPushButton) and self.isAncestorOf(focused):
             focused.click()

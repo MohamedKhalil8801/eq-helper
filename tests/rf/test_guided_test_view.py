@@ -400,7 +400,7 @@ def reach_unsure(panel, view, clock):
 def test_unsure_answers_offer_redo_use_anyway_or_by_hand(qtbot, panel, view, clock):
     reach_unsure(panel, view, clock)
     assert not view.playing
-    assert view.use_anyway_button.isVisibleTo(view) and view.unsure_manual.isVisibleTo(view)
+    assert view.use_anyway_button.isVisibleTo(view) and view.unsure_stop.isVisibleTo(view)
     view.redo_button.click()
     assert view.pages.currentWidget() is view.test_page and view.test.round_number == 1
     reach_unsure(panel, view, clock)
@@ -413,7 +413,7 @@ def test_unsure_answers_offer_redo_use_anyway_or_by_hand(qtbot, panel, view, clo
 def test_leaving_from_the_unsure_page_keeps_the_estimate(panel, view, clock):
     reach_unsure(panel, view, clock)
     estimate = view.test.stage.search.estimate()
-    view.unsure_manual.click()
+    view.unsure_stop.click()
     assert not panel.guided_active
     if view.test.stage.search.spread <= 1.15:
         assert panel.session.primary["L"] == pytest.approx(round(estimate))
@@ -424,7 +424,7 @@ def test_leaving_during_the_louder_test_keeps_its_estimate(qtbot, panel, view, c
     for _ in range(4):
         answer_like_a_listener(qtbot, view, clock)
     assert view.test.kind == LOUDER
-    view.manual_button.click()
+    view.stop_button.click()
     assert abs(panel.session.primary["L"] / F0["L"] - 1) < 0.05
 
 

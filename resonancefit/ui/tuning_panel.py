@@ -2,7 +2,7 @@
 
 Driven by :class:`~eq_helper.calibration.tuning.TuningSession`. Step ① starts
 with the guided test ("Find it for me", :mod:`.guided_test_view`), which
-takes the place of step ①'s contents while it runs. "Adjust by hand" ports
+takes the place of step ①'s contents while it runs. The slider under it ports
 the behaviour of EQ Helper's ResonanceDialog in plain language: moving the
 slider (or dragging the marker) updates the "Your IEM" curve at once and
 regenerates the EQ after a short pause; a playing tone follows the slider.
@@ -175,11 +175,6 @@ class TuningPanel(QWidget):
                                        "smoothest, for each ear."))
         self.find_button.clicked.connect(self.start_guided_test)
         start.addWidget(self.find_button)
-        self.by_hand_button = QPushButton(tr("Adjust by hand"))
-        self.by_hand_button.setCheckable(True)
-        self.by_hand_button.setToolTip(tr("Find it yourself with a tone and the slider."))
-        self.by_hand_button.toggled.connect(self._show_manual)
-        start.addWidget(self.by_hand_button)
         start.addStretch(1)
         body.addLayout(start)
         top = QHBoxLayout()
@@ -235,7 +230,7 @@ class TuningPanel(QWidget):
         readout.addWidget(self.readout)
         readout.addStretch(1)
         row.addLayout(readout)
-        self.manual_box = QWidget()  # "Adjust by hand": the slider and its sounds
+        self.manual_box = QWidget()  # finding it by hand: the slider and its sounds
         rows = QVBoxLayout(self.manual_box)
         rows.setContentsMargins(0, 0, 0, 0)
         rows.addWidget(self.hint)
@@ -296,9 +291,6 @@ class TuningPanel(QWidget):
         listen.addStretch(1)
         rows.addLayout(listen)
         row.addWidget(self.manual_box, 1)
-        self.manual_box.hide()
-        self.manual_space = QWidget()  # keeps the readout on the left while the manual controls are hidden
-        row.addWidget(self.manual_space, 1)
         body.addLayout(row)
         self.focus = "primary"
         self._sync_focus_widgets()
@@ -428,8 +420,6 @@ class TuningPanel(QWidget):
 
         self._load_targets(loaded.manifest.default_target, remembered.get("target"))
         self._sync_controls()
-        # found before: show the slider; the first time, the guided test is the way in
-        self.by_hand_button.setChecked(bool(remembered.get("primary")))
         self.regenerate()
 
     def _load_targets(self, manifest_default, preferred) -> None:
@@ -558,7 +548,7 @@ class TuningPanel(QWidget):
         self._schedule_regen()
 
     def _guided_to_manual(self, found: dict) -> None:
-        """Leave the test for "Adjust by hand", keeping what's been found so far."""
+        """The test was stopped: keep what's been found so far."""
         for side, hz in found.get("primary", {}).items():
             if self.session is not None and round(self.session.primary.get(side, 0)) != round(hz):
                 self._select_side(side)
@@ -568,7 +558,6 @@ class TuningPanel(QWidget):
                 self._guided_upper(side, hz)
         current = self.guided.test.side if self.guided.test is not None else None
         self._close_guided()
-        self.by_hand_button.setChecked(True)
         if current is not None:
             self._select_side(current)
 
@@ -590,10 +579,6 @@ class TuningPanel(QWidget):
                 self.eqChanged.emit(self.channel_eq)
         self._guided_eq = False
         self.guidedActiveChanged.emit(False)
-
-    def _show_manual(self, shown: bool) -> None:
-        self.manual_box.setVisible(shown)
-        self.manual_space.setVisible(not shown)
 
     def _marker_dragged(self, hz: float) -> None:
         self.set_primary_hz(hz)
@@ -773,8 +758,6 @@ class TuningPanel(QWidget):
         if self._syncing or self.session is None:
             return
         self.session.upper_enabled = bool(enabled)
-        if enabled:
-            self.by_hand_button.setChecked(True)  # the upper treble is set by hand, under the resonance
         self._sync_upper_controls()
         self.set_focus("upper" if enabled else "primary")
         self.regenerate()
