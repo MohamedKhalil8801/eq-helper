@@ -24,6 +24,9 @@ PERSONAL_TREBLE_RANGE = (10500, 18000)
 PERSONAL_TREBLE_MAX_WARP = 1.4
 # Local shoulders around the source/destination anchors, not the whole treble.
 PERSONAL_TREBLE_SHOULDER_OCTAVES = 1 / 6
+# Equalizer APO channel selection for both ears. Named explicitly rather than "Channel: all",
+# which also reaches any extra channels the device reports and was heard to upset the balance.
+BOTH_CHANNELS = "Channel: L R"
 
 
 def interp(freqs, db, grid):
@@ -407,7 +410,7 @@ class ChannelEQ:
         target = self.target_name.replace("\n", " ").replace("\r", " ")
         header = (f"# Measurement-trained resonance EQ; target: {target}\n"
                   "# Unsmoothed target minus prediction; shared measurement level reference.\n"
-                  "Channel: ALL\n"
+                  f"{BOTH_CHANNELS}\n"
                   f"Preamp: {self.preamp_db:.6f} dB\n")
         if self.personal_treble_enabled:
             header += "# Personal higher-treble fit is optional and affects EQ correction only.\n"
@@ -415,7 +418,7 @@ class ChannelEQ:
             return header + "# EQ bypassed; same shared preamp for comparison.\n"
         stereo = len(self.channels) == 2
         for side, eq in self.channels.items():
-            channel = side if stereo else "ALL"
+            channel = f"Channel: {side}" if stereo else BOTH_CHANNELS
             header += f"# {side}: estimated resonance {eq.peak_hz:.0f} Hz; {eq.prediction_note}\n"
             if eq.personal_peak_hz is not None:
                 header += ("# Personal treble correction alignment: coupler peak "
@@ -428,9 +431,9 @@ class ChannelEQ:
                                "outside this band the original EQ is unchanged.\n")
                 if eq.applied_personal_peak_hz != eq.personal_peak_hz:
                     header += "# Alignment limited by supported frequency range / maximum warp.\n"
-            header += f"Channel: {channel}\n"
+            header += f"{channel}\n"
             header += eq.graphic_text()
-        return header + "Channel: ALL\n"
+        return header + f"{BOTH_CHANNELS}\n"
 
 
 def match_target(model, peak_hz, target_freqs, target_db, target_name):

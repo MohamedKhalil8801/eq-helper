@@ -26,7 +26,7 @@ import zipfile
 from pathlib import Path
 
 from eq_helper.dsp import convolution as conv
-from eq_helper.dsp.resonance import ChannelEQ
+from eq_helper.dsp.resonance import BOTH_CHANNELS, ChannelEQ
 
 from .base import ExportMeta, prepend_readme, register
 
@@ -94,7 +94,7 @@ def apo_convolution_lines(base_name: str, rates, fallback: str | None = None) ->
     config file). ``fallback`` (APO text, e.g. GraphicEQ) covers any other rate."""
     lines = ["# Convolution: the file matching the device's sample rate is used.",
              "# Equalizer APO can't resample a convolution file, so each rate has its own.",
-             "Channel: all"]
+             BOTH_CHANNELS]
     for i, rate in enumerate(rates):
         lines += [f"{'If' if i == 0 else 'ElseIf'}: sampleRate == {rate}", f"Convolution: {base_name} {rate}.wav"]
     if fallback:

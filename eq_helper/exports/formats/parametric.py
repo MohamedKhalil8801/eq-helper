@@ -15,7 +15,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from eq_helper.dsp.parametric_fit import ParametricEQ, PeqLimits, fit_stereo
-from eq_helper.dsp.resonance import ChannelEQ
+from eq_helper.dsp.resonance import BOTH_CHANNELS, ChannelEQ
 
 from .base import ExportMeta, register
 
@@ -68,7 +68,7 @@ class ParametricFormat:
                     lines.append(f"Channel: {side}")
                 lines += [_filter_line(n, f) for n, f in enumerate(peq.filters, 1)]
             if stereo:
-                lines.append("Channel: ALL")
+                lines.append(BOTH_CHANNELS)
             path = folder / f"{base_name}.txt"
             path.write_text("\n".join(lines) + "\n", encoding="utf-8")
             return [path]

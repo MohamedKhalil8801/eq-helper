@@ -97,7 +97,8 @@ def test_stereo_eq_uses_channel_filters_and_one_common_preamp(tmp_path):
     assert text.count('Preamp:') == 1
     assert text.count('GraphicEQ:') == 2
     assert '\nChannel: L\n' in text and '\nChannel: R\n' in text
-    assert text.endswith('Channel: ALL\n')
+    assert text.endswith('Channel: L R\n')
+    assert 'channel: all' not in text.lower()  # heard to upset the balance; L R named instead
     for channel, line in zip(eq.channels.values(), [s for s in text.splitlines() if s.startswith('GraphicEQ:')]):
         np.testing.assert_allclose(channel.predicted_db + channel.correction_db, channel.target_db, atol=1e-12)
         bands = parse_graphic_eq_line(line).bands
@@ -118,6 +119,7 @@ def test_one_side_or_unlabelled_set_applies_same_eq_to_both(tmp_path, side):
     text = eq.apo_text()
     assert 'GraphicEQ:' in text
     assert '\nChannel: L\n' not in text and '\nChannel: R\n' not in text
+    assert 'channel: all' not in text.lower() and '\nChannel: L R\nGraphicEQ:' in text
     assert 'single fit' in data.models[side].describe(7700)
 
 

@@ -81,9 +81,10 @@ The displayed coupler-plus-EQ curve is **not** a prediction of your real-ear
 response after personalization. Saved preferences are a starting point only;
 recheck them after changing IEMs, tips or fit.
 
-Stereo exports use a common `Channel: ALL` preamp followed by separate
-`Channel: L` and `Channel: R` GraphicEQ filters, then restore `Channel: ALL`.
-Single-side exports use one `Channel: ALL` GraphicEQ. Bypass retains the same
+Stereo exports use a common `Channel: L R` preamp followed by separate
+`Channel: L` and `Channel: R` GraphicEQ filters, then restore `Channel: L R`.
+Single-side exports use one `Channel: L R` GraphicEQ. `Channel: all` is never
+written: it also reaches any extra channels the device reports. Bypass retains the same
 shared preamp. Using separate independently chosen preamps would undo channel
 level balancing, so the worst-case boost across both corrections determines
 headroom (plus 1 dB).
