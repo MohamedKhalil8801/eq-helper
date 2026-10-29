@@ -3,7 +3,7 @@
 Drives a :class:`~resonancefit.guided_test.GuidedTest`. One Play/Pause bar
 plays the selected option continuously; clicking a card switches the sound
 at once (noise bands crossfade in the engine, EQs crossfade in ``StereoFIR``).
-An answer unlocks once every option has been heard for a moment. Cards
+An answer can be given at any time (a ✓ marks the cards heard). Cards
 are numbered 1–8 (their keys), never show frequencies, and their
 animation follows the overall level only, so nothing gives the answer away.
 
@@ -127,7 +127,6 @@ class GuidedTestView(StageBackground):
         self._level = 0.0
         self._sound = None            # "band" or one of STAGE2_SOUNDS while this view's sound plays
         self.stage2_sound = "pink"    # what the smoothness check plays: one of STAGE2_SOUNDS
-        self._stage2_target = None    # the part (primary / upper) stage2_sound was last defaulted for
         self._starting = False        # starting our own sound: its change notices aren't a stop
         self._eqs: dict[int, tuple] = {}
         self._eq_generation = 0
@@ -311,9 +310,6 @@ class GuidedTestView(StageBackground):
         answers.addWidget(self.same_button, 1)
         layout.addLayout(answers)
         layout.addSpacing(8)
-        self.listen_hint = self._label(tr("Listen to each one first"), "gtMuted", wrap=False)
-        self.listen_hint.setAlignment(Qt.AlignCenter)
-        layout.addWidget(self.listen_hint)
         layout.addSpacing(8)
         self.progress = ProgressLine()
         self.progress.setAccessibleName(tr("Progress"))
@@ -505,7 +501,6 @@ class GuidedTestView(StageBackground):
         self._sides, self._defaults = tuple(sides), dict(default_hz or {})
         self.test = self._new_test({})
         self._prepare_tables()
-        self._stage2_target = None
         self._hue = self.rng.uniform(0.0, 360.0)
         self._round_index = 0
         self._saved_eq_enabled = None
@@ -579,8 +574,8 @@ class GuidedTestView(StageBackground):
         self._begin_when_ready = False
         self._sync_intro()
         self._saved_eq_enabled = self.audio.eq_enabled
+        self.pages.setCurrentWidget(self.test_page)  # first: the round's buttons depend on the page
         self._new_round(keep_playing=False)
-        self.pages.setCurrentWidget(self.test_page)
         self.transport.setFocus()
 
     def stop(self) -> None:
@@ -674,9 +669,6 @@ class GuidedTestView(StageBackground):
             self.instructions.setText(tr("Three EQs. Which sounds smoothest? With noise: no harsh, hissy or dull "
                                          "spot in the treble. With the sweep: it stays even, with no swell or dip "
                                          "as it passes. Switch as often as you like."))
-        if not louder and test.target != self._stage2_target:
-            self._stage2_target = test.target  # the sweep first up high: hearing's fall-off makes noise dull
-            self.stage2_sound = "focus" if upper else "pink"
         self.sound_row.setVisible(not louder)
         self._sync_sound_buttons()
         if louder:
@@ -868,6 +860,7 @@ class GuidedTestView(StageBackground):
         self._frame.start()
         self._sync_cards()
         self._sync_transport()
+        self._sync_answers()  # Play selects the first card: it can be the answer
 
     def _pause(self) -> None:
         self._account()
@@ -958,8 +951,7 @@ class GuidedTestView(StageBackground):
     # ── answering ──────────────────────────────────────────────────────────
     @property
     def can_answer(self) -> bool:
-        return (self._round is not None and self.pages.currentWidget() is self.test_page
-                and len(self.heard) == len(self._round.options))
+        return self._round is not None and self.pages.currentWidget() is self.test_page
 
     def answer_selected(self) -> None:
         if self.can_answer and self.selected is not None and self.selected not in self.ruled_out:
@@ -1155,10 +1147,6 @@ class GuidedTestView(StageBackground):
         self.same_button.setEnabled(ok)
         self.rule_out_button.setEnabled(self.selected is not None)
         self.rule_out_button.setText(tr("Bring back") if self.selected in self.ruled_out else tr("Rule out"))
-        if ok:
-            self.listen_hint.setText(" ")
-        else:
-            self.listen_hint.setText(tr("Listen to each one first"))
 
     def finish(self) -> None:
         self.stop()

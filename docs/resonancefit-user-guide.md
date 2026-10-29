@@ -90,8 +90,9 @@ wrong place. Without the model (rare) each ear is the older three-card smoothnes
 around your calibration's guess and closes in.
 
 The cards never show frequencies, and the moving bars on the playing card only follow how loud the
-sound is, the same for every card, so you choose by ear. The
-answer buttons wake up once you've listened to each card for a moment (**Listen to each one first**).
+sound is, the same for every card, so you choose by ear. You can answer whenever you're ready; a ✓
+marks the cards you've listened to. The sound you pick (pink, grey, focused or sweep) stays the same
+from round to round and for the upper treble, until you change it.
 
 When an ear is done the app shows its result, e.g. **Left resonance: 7,640 Hz**, and sets it in the
 graph and the EQ exactly as the slider would. **Back** takes back your last answer; **✕ Stop the test**
@@ -110,9 +111,9 @@ at about twice that frequency). For each ear:
 
 1. **Overview**: eight cards, **1** to **8** in order, EQs that differ only in the highest treble,
    from an upper peak set low to one set high, around the prediction (never further than the EQ can
-   move it). The **sweep** is selected first: your hearing's fall-off only makes it fade smoothly as it
-   rises, while a misplaced peak leaves a swell or dip as it passes. Pick the one that fades most
-   evenly (pink or grey noise works too); rule out the clearly worse ones as in the first part. If all
+   move it), with whichever sound you were using. Pick the smoothest and rule out the clearly worse
+   ones as in the first part. With the **sweep**, your hearing's fall-off only makes it fade smoothly
+   as it rises, while a misplaced peak leaves a swell or dip as it passes. If all
    eight sound the same, answer **Can't tell them apart**: that ear's upper treble stays as calibrated.
    That's common and nothing is lost: what you can barely hear matters little for your EQ.
 2. **Smoothness check**, a few rounds of three cards around your pick, closer together each time.

@@ -187,20 +187,19 @@ def test_first_play_selects_a_and_switching_keeps_the_tone_going(view):
     assert np.min([np.abs(out[i:i + 240]).max() for i in range(0, len(out), 240)]) > 0  # no gap
 
 
-def test_answers_unlock_only_once_every_option_was_heard(view, clock):
+def test_answers_are_open_at_once_and_heard_cards_get_a_tick(view, clock):
     started(view)
-    assert not view.answer_button.isEnabled() and not view.same_button.isEnabled()
-    assert view.listen_hint.text() == "Listen to each one first"
+    assert not view.answer_button.isEnabled() and view.same_button.isEnabled()  # nothing selected yet
     view.play()
+    assert view.answer_button.isEnabled()  # no need to hear every card first
     clock[0] += 0.3
-    view.select(1)                 # A for 0.3 s: not enough
+    view.select(1)                 # 1 for 0.3 s: not a tick yet
     clock[0] += 0.6
-    view.select(0)                 # B heard
-    assert view.heard == {1} and not view.answer_button.isEnabled()
+    view.select(0)                 # 2 heard
+    assert view.heard == {1} and view.cards[1].heard and not view.cards[0].heard
     clock[0] += 0.6
     view._account()
     assert view.heard == {0, 1}
-    assert view.answer_button.isEnabled() and view.same_button.isEnabled()
     assert view.answer_button.text() == "Louder: 1"
     view.select(1)
     assert view.answer_button.text() == "Louder: 2"
@@ -508,7 +507,7 @@ def test_optional_upper_treble_after_both_ears(qtbot, panel, view, clock):
     assert view.pages.currentWidget() is view.test_page
     assert view.test.kind == OVERVIEW  # no louder test or audibility question up there: eight EQs
     assert view.stage_label.text() == "Upper treble: overview" and view.rule_out_button.isVisibleTo(view)
-    assert view.sweep_button.isChecked()  # the sweep first up high
+    assert view.noise_button.isChecked()  # the sound the listener was using: nothing switches by itself
     predicted = dict(view.test.predicted_upper)
     for side in "LR":
         assert predicted[side] == pytest.approx(2.0 * view.test.results[side])
@@ -523,7 +522,7 @@ def test_optional_upper_treble_after_both_ears(qtbot, panel, view, clock):
             continue
         if view.test.kind == SMOOTHNESS:
             assert view.stage_label.text() == "Upper treble: smoothness check"
-            assert view.sweep_button.isChecked()  # the sweep first up high
+            assert view.noise_button.isChecked()
         answer_like_a_listener(qtbot, view, clock)
     assert [side for side, _hz in upper] == ["L", "R"]
     for side, hz in upper:
@@ -555,7 +554,6 @@ def test_smoothness_options_for_the_upper_treble_move_only_the_upper_resonance(q
 def test_cant_tell_the_upper_overview_apart_keeps_it_as_calibrated(qtbot, panel, view, clock):
     finish_primary(qtbot, view, clock)
     view.upper_button.click()
-    assert not view.same_button.isEnabled()  # listen to each one first
     qtbot.waitUntil(lambda: view.ready, timeout=15000)
     view.play()
     hear_all(view, clock)
