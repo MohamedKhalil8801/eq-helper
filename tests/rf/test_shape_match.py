@@ -140,3 +140,14 @@ def test_guided_test_finds_each_ear_with_the_smoothness_check_alone(predict):
         pass
     assert test.kind == SMOOTHNESS and test.side == "L" and not test.stage.search.answers
     assert GuidedTest(("L",), {}, random.Random(1)).kind == LOUDER  # no starting point: the louder test
+
+
+def test_scorecard_and_elimination_designs_run_end_to_end(predict):
+    table = sim.RoughnessTable(predict)
+    best = sim.best_eq_hz(_ear(predict, 7900, seed=3), predict)
+    for outcome in (sim.ab_scorecard(_ear(predict, 7900, seed=3), predict, table, 7400, random.Random(1)),
+                    sim.ab_scorecard(_ear(predict, 7900, seed=3), predict, table, 7400, random.Random(1),
+                                     overview=True),
+                    sim.funnel_today(_ear(predict, 7900, seed=3), predict, table, random.Random(1)),
+                    sim.funnel_scorecard(_ear(predict, 7900, seed=3), predict, table, 7400, random.Random(1))):
+        assert abs(outcome.hz - best) < 150 and outcome.cards > 0

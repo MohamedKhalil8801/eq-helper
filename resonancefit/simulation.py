@@ -23,13 +23,14 @@ import sys
 from dataclasses import dataclass
 
 import numpy as np
+from scipy.special import ndtr
 
 from eq_helper.dsp.resonance import CONTROL_RANGE, Measurements, ResonanceModel
 from resonancefit.guided_test import (
     FINE_MIN_DELTA, FIRST_SMOOTH_DELTA, FIRST_SMOOTH_MAX_ROUNDS, SMOOTH_DELTA, SMOOTH_MAX_ROUNDS, SMOOTH_WIDE_DELTA,
-    LouderSearch, SmoothnessSearch,
+    LouderSearch, Round, SmoothnessSearch,
 )
-from resonancefit.shape_match import ShapeMatch, ShapeModel, band_level, stable_anchor
+from resonancefit.shape_match import ShapeMatch, ShapeModel, band_level
 
 SHAPE_SMOOTH_DELTA = 0.03  # after a confident shape match the smoothness check starts this close
 GRID = np.geomspace(1000, 20000, 900)   # where responses are kept (log spaced)
@@ -141,12 +142,27 @@ class Ear:
 
     def smoothest(self, round_, predict) -> int | None:
         if self._slipped():
-            return self.rng.choice([0, 1, 2, None])
+            return self.rng.choice([*range(len(round_.options)), None])
         rough = [self.roughness(predict, hz) for hz in round_.options]
         if max(rough) - min(rough) < self.listener.cant_tell:
             return None
         noisy = [r + self.rng.gauss(0, self.listener.smooth_noise) for r in rough]
         return int(np.argmin(noisy))
+
+
+    def eliminate(self, options, predict, keep=(2, 3)) -> tuple[list[int], int]:
+        """Many cards, free to switch between: rule out the clearly worse ones until ``keep`` are left,
+        then pick the best of those. Returns (kept indices, best index). Each card's impression wobbles
+        once per round (it can be heard again, so it settles); a slip rules out the best-sounding card."""
+        rough = np.array([self.roughness(predict, hz) for hz in options])
+        seen = rough + np.array([self.rng.gauss(0, self.listener.smooth_noise) for _ in options])
+        order = [int(i) for i in np.argsort(seen)]
+        if self._slipped():
+            order = order[1:] + order[:1]
+        close = [i for i in order if seen[i] <= seen[order[0]] + self.listener.cant_tell]
+        kept = order[:min(max(len(close), keep[0]), keep[1])]
+        best = self.rng.choice(kept) if self._slipped() else kept[0]
+        return kept, best
 
 
 # ── test designs ────────────────────────────────────────────────────────────
@@ -155,6 +171,7 @@ class Outcome:
     hz: float
     questions: int
     stages: str
+    cards: int = 0          # options heard in all (how much listening the rounds took)
 
 
 def run_smoothness(ear: Ear, predict, centre: float, delta: float, rng, **options) -> tuple[float, int]:
@@ -205,6 +222,179 @@ def shape_only(ear: Ear, predict, shape: ShapeModel, start: float | None, rng, f
     return Outcome(search.result().hz, len(search.answers), "shape")
 
 
+# ── the scorecard: every answer scored against every possible resonance ──────────────────────
+SCORE_OCTAVES = 1 / 192
+SCORE_NOISE = 0.3          # dB: how much the scorecard assumes a roughness impression wobbles
+SCORE_SAME = 0.08          # dB: closer than this, "Can't tell them apart" is likely
+SCORE_LAPSE = 0.05
+SCORE_WIDTH_HZ = 100.0     # done when the middle 80 % of the belief is this narrow
+SCORE_MAX_ROUNDS = 14
+FUNNEL_FIRST = 8           # cards in the first round, across the whole range
+FUNNEL_SECOND = 5
+FUNNEL_MAX_ROUNDS = 8
+
+
+class RoughnessTable:
+    """For every possible true resonance (rows) and every EQ (columns): how rough the treble should
+    sound, from the calibration's model alone (the same measure as :meth:`Ear.roughness`)."""
+
+    def __init__(self, predict, hz_range=CONTROL_RANGE):
+        lo, hi = (math.log2(v) for v in hz_range)
+        self.hz = 2.0 ** np.arange(lo, hi + 1e-9, SCORE_OCTAVES)
+        mask = (GRID >= 4500) & (GRID <= 11000)
+        g = np.log2(GRID[mask])
+        trend = np.vstack([g, np.ones_like(g)]).T
+        project = trend @ np.linalg.pinv(trend)
+        curves = np.array([predict(h)[1][mask] for h in self.hz])
+        self.table = np.empty((len(self.hz), len(self.hz)))
+        for i in range(len(self.hz)):
+            r = curves[i][None, :] - curves
+            r = r - r @ project.T
+            self.table[i] = np.sqrt(np.mean(r * r, axis=1))
+
+    def index(self, hz: float) -> int:
+        return int(np.argmin(np.abs(np.log(self.hz / hz))))
+
+
+class Scorecard:
+    """A belief over the resonance (the table's rows), updated by every pick, never thrown away."""
+
+    def __init__(self, table: RoughnessTable, start: float | None = None):
+        self.t = table
+        x = np.log2(table.hz)
+        prior = np.full(len(x), 0.3 / len(x))
+        if start is not None:
+            bump = np.exp(-0.5 * ((x - math.log2(start)) / 0.1) ** 2)
+            prior = prior + 0.7 * bump / bump.sum()
+        self.log_p = np.log(prior / prior.sum())
+
+    def posterior(self) -> np.ndarray:
+        p = np.exp(self.log_p - self.log_p.max())
+        return p / p.sum()
+
+    def quantile(self, q: float) -> float:
+        return float(np.interp(q, np.cumsum(self.posterior()), self.t.hz))
+
+    @property
+    def width(self) -> float:
+        return self.quantile(0.9) - self.quantile(0.1)
+
+    def estimate(self) -> float:
+        return self.quantile(0.5)
+
+    @staticmethod
+    def _better(d):
+        """P(an option is heard smoother than another that is ``d`` dB rougher in truth)."""
+        return (1 - SCORE_LAPSE) * ndtr(d / (SCORE_NOISE * math.sqrt(2))) + SCORE_LAPSE / 2
+
+    def picked(self, shown: list[int], kept: list[int], best: int) -> None:
+        """``best`` (a column) was picked over the other ``kept``; the rest of ``shown`` were ruled out
+        as worse than it. Each comparison with the pick counts, but they all share the pick's own
+        wobble, so together they count as about √n comparisons rather than n."""
+        r = self.t.table
+        others = [k for k in shown if k != best]
+        weight = 1 / math.sqrt(len(others))
+        for k in others:
+            self.log_p += weight * np.log(self._better(r[:, k] - r[:, best]))
+
+    def same(self, a: int, b: int) -> None:
+        d = self.t.table[:, b] - self.t.table[:, a]
+        s = SCORE_NOISE * math.sqrt(2)
+        p = ndtr((SCORE_SAME - d) / s) - ndtr((-SCORE_SAME - d) / s)
+        self.log_p += np.log((1 - SCORE_LAPSE) * p + SCORE_LAPSE / 3)
+
+    def best_pair(self, step: int = 2) -> tuple[int, int]:
+        """The A/B pair whose answer should narrow the belief most."""
+        p = self.posterior()
+        cols = np.arange(0, len(self.t.hz), step)
+        i, j = np.triu_indices(len(cols), k=1)
+        a, b = cols[i], cols[j]
+        d = self.t.table[:, b] - self.t.table[:, a]                       # (states, pairs): >0 → A smoother
+        s = SCORE_NOISE * math.sqrt(2)
+        pa = ndtr((d - SCORE_SAME) / s)
+        pb = ndtr((-d - SCORE_SAME) / s)
+        probs = np.stack([pa, pb, np.clip(1 - pa - pb, 0, 1)]) * (1 - SCORE_LAPSE) + SCORE_LAPSE / 3
+        joint = probs * p[None, :, None]
+        outcome = joint.sum(axis=1)
+        cond = joint / np.maximum(outcome[:, None, :], 1e-300)
+        entropy = -(cond * np.log(np.maximum(cond, 1e-300))).sum(axis=1)
+        k = int(np.argmin((outcome * entropy).sum(axis=0)))
+        return int(a[k]), int(b[k])
+
+
+def _cards(table: RoughnessTable, lo: float, hi: float, n: int) -> list[int]:
+    """``n`` distinct columns spread evenly (log) from ``lo`` to ``hi``."""
+    cols = sorted({table.index(h) for h in np.geomspace(lo, hi, n)})
+    while len(cols) < n:  # too narrow for distinct columns: widen by one step each side
+        cols = sorted(set(cols) | {max(cols[0] - 1, 0), min(cols[-1] + 1, len(table.hz) - 1)})
+    return cols[:n]
+
+
+def ab_scorecard(ear: Ear, predict, table: RoughnessTable, start: float, rng, overview: bool = False) -> Outcome:
+    """Two EQs a round, the pair chosen and every answer scored by the scorecard. ``overview``: first a
+    round of 8 cards across the range (rule out, keep 2–3, pick the best), scored the same way."""
+    card = Scorecard(table, start)
+    rounds = cards = 0
+    if overview:
+        shown = _first_round(table)
+        kept, best = ear.eliminate([table.hz[c] for c in shown], predict)
+        card.picked(shown, [shown[i] for i in kept], shown[best])
+        rounds, cards = 1, len(shown)
+    while rounds < SCORE_MAX_ROUNDS and (rounds < 3 or card.width > SCORE_WIDTH_HZ):
+        a, b = card.best_pair()
+        options = [a, b]
+        rng.shuffle(options)
+        answer = ear.smoothest(Round(tuple(table.hz[c] for c in options)), predict)
+        if answer is None:
+            card.same(a, b)
+        else:
+            card.picked(options, options, options[answer])
+        rounds, cards = rounds + 1, cards + 2
+    return Outcome(card.estimate(), rounds, "ab", cards)
+
+
+def _first_round(table: RoughnessTable) -> list[int]:
+    lo, hi = table.hz[0], table.hz[-1]
+    step = (hi / lo) ** (1 / FUNNEL_FIRST)
+    return _cards(table, lo * step ** 0.5, hi / step ** 0.5, FUNNEL_FIRST)
+
+
+def funnel_today(ear: Ear, predict, table: RoughnessTable, rng) -> Outcome:
+    """Elimination with today's rule: 8 cards across the range, keep 2–3; 5 cards across what was kept
+    (plus a step each side), keep 2–3 and pick the best; then today's smoothness check from that pick."""
+    shown = _first_round(table)
+    kept, _best = ear.eliminate([table.hz[c] for c in shown], predict)
+    hz = sorted(table.hz[shown[i]] for i in kept)
+    step = (table.hz[shown[-1]] / table.hz[shown[0]]) ** (1 / (len(shown) - 1))
+    second = _cards(table, max(hz[0] / step, table.hz[0]), min(hz[-1] * step, table.hz[-1]), FUNNEL_SECOND)
+    _kept2, best2 = ear.eliminate([table.hz[c] for c in second], predict)
+    spacing = math.log2(table.hz[second[-1]] / table.hz[second[0]]) / (len(second) - 1)
+    hz, n = run_smoothness(ear, predict, table.hz[second[best2]], spacing, rng,
+                           max_rounds=FUNNEL_MAX_ROUNDS - 2, min_delta=FINE_MIN_DELTA)
+    return Outcome(hz, 2 + n, "funnel", len(shown) + len(second) + 3 * n)
+
+
+def funnel_scorecard(ear: Ear, predict, table: RoughnessTable, start: float, rng) -> Outcome:
+    """Elimination, every pick scored: 8 cards across the range, then 5, then 3 at a time, each round
+    spread over the middle of the belief; done when the belief is narrow."""
+    card = Scorecard(table, start)
+    shown = _first_round(table)
+    rounds, cards = 0, 0
+    while True:
+        keep = (2, 3) if len(shown) > 3 else (1, 1)
+        kept, best = ear.eliminate([table.hz[c] for c in shown], predict, keep=keep)
+        card.picked(shown, [shown[i] for i in kept], shown[best])
+        rounds, cards = rounds + 1, cards + len(shown)
+        if rounds >= FUNNEL_MAX_ROUNDS or (rounds >= 4 and card.width <= SCORE_WIDTH_HZ):
+            break
+        n = FUNNEL_SECOND if rounds == 1 else 3
+        lo, hi = card.quantile(0.05 if n > 3 else 0.15), card.quantile(0.95 if n > 3 else 0.85)
+        middle = card.estimate()
+        lo, hi = min(lo, middle * 2 ** -0.004), max(hi, middle * 2 ** 0.004)  # options at least ~50 Hz apart
+        shown = _cards(table, lo, hi, n)
+    return Outcome(card.estimate(), rounds, "funnel+score", cards)
+
+
 # ── ground truth ────────────────────────────────────────────────────────────
 def measured_cases(measurements: Measurements):
     """(side, response on GRID, true resonance, model without it): each measured insertion left out in turn."""
@@ -244,40 +434,40 @@ def best_eq_hz(ear: Ear, predict) -> float:
 def summarise(name: str, outcomes: list[tuple[float, Outcome]]) -> str:
     errors = np.array([abs(o.hz - truth) for truth, o in outcomes])
     questions = np.array([o.questions for _t, o in outcomes])
-    return (f"{name:<26} median {np.median(errors):4.0f} Hz   90% {np.percentile(errors, 90):5.0f} Hz   "
+    cards = np.array([o.cards or 3 * o.questions for _t, o in outcomes])
+    return (f"{name:<22} median {np.median(errors):4.0f} Hz   90% {np.percentile(errors, 90):5.0f} Hz   "
             f"within 50 Hz {np.mean(errors <= 50):4.0%}   within 100 Hz {np.mean(errors <= 100):4.0%}   "
-            f"questions {np.mean(questions):4.1f}")
+            f"rounds {np.mean(questions):4.1f}   cards heard {np.mean(cards):4.1f}")
 
 
-def designs(ear, predict, shape, default, other, rng_seed):
-    """Every design for one ear: name → Outcome."""
+def designs(ear, predict, table, default, rng_seed):
+    """The first ear's designs: name → Outcome. (The loudness-match designs: shape_then_smooth.)"""
     return {
-        "louder+smooth": louder_then_smooth(ear(), predict, default, random.Random(rng_seed)),
-        "shape": shape_only(ear(), predict, shape, default, random.Random(rng_seed)),
-        "shape+smooth": shape_then_smooth(ear(), predict, shape, default, random.Random(rng_seed)),
-        "shape, other ear": shape_only(ear(), predict, shape, other, random.Random(rng_seed), from_other_ear=True),
-        "shape+smooth, other ear": shape_then_smooth(ear(), predict, shape, other, random.Random(rng_seed),
-                                                     from_other_ear=True),
-        "smooth from calibration": smooth_only(ear(), predict, default, FIRST_SMOOTH_DELTA,
-                                               random.Random(rng_seed)),
-        "smooth, other ear": smooth_only(ear(), predict, other, SMOOTH_DELTA, random.Random(rng_seed)),
+        "today (3 cards)": smooth_only(ear(), predict, default, FIRST_SMOOTH_DELTA, random.Random(rng_seed)),
+        "funnel, today's rule": funnel_today(ear(), predict, table, random.Random(rng_seed)),
+        "A/B scorecard": ab_scorecard(ear(), predict, table, default, random.Random(rng_seed)),
+        "funnel + scorecard": funnel_scorecard(ear(), predict, table, default, random.Random(rng_seed)),
+        "8 cards, then A/B": ab_scorecard(ear(), predict, table, default, random.Random(rng_seed), overview=True),
     }
 
 
 def main(argv=None) -> None:
+    """``python -m resonancefit.simulation [repeats] [measurement folder]`` (default: the bundled set)."""
     argv = list(sys.argv[1:] if argv is None else argv)
     repeats = int(argv[0]) if argv else 3
     rng = random.Random(7)
-    measurements = Measurements.bundled()
-    cases = measured_cases(measurements) + synthetic_cases(measurements, 6, rng)
+    measurements = Measurements.from_folder(argv[1]) if len(argv) > 1 else Measurements.bundled()
+    print(measurements.name)
+    measured = measured_cases(measurements)
+    cases = measured + synthetic_cases(measurements, 6, rng)
     cache = {}
     for listener in (TRAINED, AVERAGE):
         results: dict[str, list] = {}
-        for _side, truth, true_hz, model in cases:
+        for n_case, (_side, truth, true_hz, model) in enumerate(cases):
             if id(model) not in cache:
                 predictions = Predictions(model)
-                cache[id(model)] = (predictions, ShapeModel(predictions, stable_anchor(model.freqs, model.curves)))
-            predict, shape = cache[id(model)]
+                cache[id(model)] = (predictions, RoughnessTable(predictions))
+            predict, table = cache[id(model)]
             default = float(np.exp(np.median(np.log(model.peaks))))
             for _ in range(repeats):
                 seed = rng.random()
@@ -286,12 +476,14 @@ def main(argv=None) -> None:
                 def ear():
                     return Ear(truth, true_hz, listener, random.Random(seed + 1), person)
                 best = best_eq_hz(ear(), predict)
-                other = best * 2 ** random.Random(seed + 2).gauss(0, 0.05)  # the other ear's result
-                for name, outcome in designs(ear, predict, shape, default, other, seed).items():
-                    results.setdefault(name, []).append((best, outcome))
+                for name, outcome in designs(ear, predict, table, default, seed).items():
+                    results.setdefault(name, []).append((best, outcome, n_case < len(measured)))
         print(f"\n{listener.name} listener: {len(cases)} ears × {repeats}, error from the smoothest EQ")
         for name, outcomes in results.items():
-            print(" ", summarise(name, outcomes))
+            print(" ", summarise(name, [(t, o) for t, o, _m in outcomes]))
+        print(f"  measured insertions only ({len(measured)} ears, left out of the model):")
+        for name, outcomes in results.items():
+            print(" ", summarise(name, [(t, o) for t, o, m in outcomes if m]))
 
 
 if __name__ == "__main__":
