@@ -295,10 +295,15 @@ class OptionCard(_SpaceIgnoring):
         painter.drawRoundedRect(rect.adjusted(0.5, 0.5, -0.5, -0.5), CARD_RADIUS, CARD_RADIUS)
 
         painter.setPen(colors["text"] if self.isEnabled() else colors["muted"])
-        painter.setFont(self.font())
+        font = self.font()
+        if len(self.text()) <= 2:  # a card number, which is also its key: big enough to read at a glance
+            font.setPointSizeF(font.pointSizeF() * 1.8)
+            font.setBold(True)
+        painter.setFont(font)
         painter.drawText(rect.adjusted(16, 14, -16, -14), Qt.AlignLeft | Qt.AlignTop, self.text())
         if self.heard or self.ruled_out:
             painter.setPen(colors["muted"])
+            painter.setFont(self.font())
             painter.drawText(rect.adjusted(16, 14, -16, -14), Qt.AlignRight | Qt.AlignTop,
                              "✕" if self.ruled_out else "✓")
 
