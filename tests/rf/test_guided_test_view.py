@@ -98,14 +98,14 @@ def test_find_it_for_me_replaces_step_one(panel, view):
     assert panel.find_button.text().startswith("Find it for me")
     assert panel.guided_active and panel.step1_stack.currentWidget() is view
     assert view.pages.currentWidget() is view.intro_page
-    assert not panel.step2.isEnabled() and not panel.step3.isEnabled()
+    assert not panel.step2.isVisibleTo(panel) and not panel.step3.isVisibleTo(panel)
     assert view.intro_other_eq.text() == panel.other_eq.text()  # the same other-EQ warning
     started(view)
     assert view.title.text() == "Left ear · Round 1"
     assert view.stage_label.text() == "Louder test"
     assert [c.text() for c in view.cards[:2]] == ["1", "2"] and not view.cards[2].isVisibleTo(view)
     view.leave_for_manual()
-    assert not panel.guided_active and panel.step2.isEnabled()
+    assert not panel.guided_active and panel.step2.isVisibleTo(panel)
     assert panel.manual_box.isVisibleTo(panel)
 
 

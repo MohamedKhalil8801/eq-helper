@@ -184,6 +184,15 @@ class MainWindow(QMainWindow):
         worker.start()
         return worker
 
+    def _guided_focus(self, active: bool) -> None:
+        """The guided test has the window to itself: only it and the sound bar (output, volume, Stop
+        all sound) stay; the header, tabs, sidebar (EQ switch, saving, history) and update banner hide."""
+        if active:
+            self._banner_shown = self.update_banner.isVisibleTo(self)
+        for widget in (self.header, self.tabs.tabBar(), self.sidebar):
+            widget.setVisible(not active)
+        self.update_banner.setVisible(not active and getattr(self, "_banner_shown", False))
+
     # ── updates (notify only) ──────────────────────────────────────────────
     def open_url(self, url: str) -> None:
         if url:
@@ -252,8 +261,7 @@ class MainWindow(QMainWindow):
         side.setContentsMargins(0, 0, 0, 0)
         self.sidebar.setFixedWidth(330)
         tune.addWidget(self.sidebar)
-        # the guided test has the window to itself: no EQ switch, saving or history while it runs
-        self.tuning.guidedActiveChanged.connect(lambda active: self.sidebar.setVisible(not active))
+        self.tuning.guidedActiveChanged.connect(self._guided_focus)
         self.calibrationLoaded.connect(self._calibration_ready)
         self.listen.exportRequested.connect(self.open_export)
         self.listen.applyRequested.connect(self.apply_to_apo)

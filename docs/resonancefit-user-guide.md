@@ -54,7 +54,8 @@ own EQ is still on in Equalizer APO it offers to turn it off while you tune (app
 
 Press **Find it for me (a few minutes)**. A short screen reminds you to wear both IEMs as usual, keep
 the volume low and turn other EQs off; press **Start the test**. While the test runs it has the window to
-itself: **Listen & save** and **History** are hidden until it ends. Then, for the left ear and then the
+itself: only the output, volume and **Stop all sound** stay at the bottom; the tabs, steps ② and ③,
+**Listen & save** and **History** come back when it ends. Then, for the left ear and then the
 right (one ear only for a calibration made for both ears at once), a **smoothness check** in two parts.
 Every card plays the same sound through a slightly different EQ, each placing your resonance a little
 differently; you pick the one whose treble sounds smoothest.

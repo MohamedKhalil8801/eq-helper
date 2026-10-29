@@ -501,7 +501,7 @@ class TuningPanel(QWidget):
         self.guided.start(self.session.sides, defaults, rng)
         self.step1_stack.setCurrentWidget(self.guided)
         for card in (self.step2, self.step3):
-            card.setEnabled(False)  # the test's EQs are made with today's target and upper treble
+            card.hide()  # the test has the window to itself (its EQs use today's target and upper treble)
         self.guidedActiveChanged.emit(True)
 
     def _option_eqs(self, side: str, hz_list, which: str = "primary"):
@@ -572,7 +572,7 @@ class TuningPanel(QWidget):
         self.guided.stop()
         self.step1_stack.setCurrentWidget(self.manual_page)
         for card in (self.step2, self.step3):
-            card.setEnabled(True)
+            card.show()
         if self.channel_eq is not None:
             self.audio.set_eq(self.channel_eq)  # the test previewed its own EQs
             if self._guided_eq:
