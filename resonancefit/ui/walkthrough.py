@@ -10,8 +10,8 @@ STEPS = (
     ("Step 1 of 3: find your resonance",
      "Put your IEMs in with the same ear tips you were measured with, turn your volume down and turn "
      "off any other EQ (your player app's, sound enhancements, your dongle's). "
-     "Press Find it for me: a short listening test (about 2 minutes) asks which of three EQs sounds "
-     "smoothest, a few times for each ear. Or adjust by hand with a tone and the slider."),
+     "Press Find it for me: a short listening test (a few minutes) plays the same noise through "
+     "different EQs and asks which sounds smoothest, for each ear. Or adjust by hand with a tone and the slider."),
     ("Step 2 of 3: pick a target and listen",
      "The target is the sound you want; the one marked default was chosen for you. Play something you "
      "know well and switch the EQ on and off to compare."),

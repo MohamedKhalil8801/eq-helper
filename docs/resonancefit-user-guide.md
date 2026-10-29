@@ -3,7 +3,7 @@
 ResonanceFit turns the calibration of **your** IEMs into an EQ for **your** ears. Your IEMs were measured
 on a coupler at several insertion depths; that is your *calibration*. Because everyone's ears are
 different, the app asks you one thing: where the strongest treble peak, your *resonance*, sits in each
-ear. You find it by ear with a short guided listening test (about 2 minutes), choose the sound you want
+ear. You find it by ear with a short guided listening test (a few minutes), choose the sound you want
 (a *target*), and the app builds a separate EQ for your left and right ear.
 
 ## What you received
@@ -52,23 +52,36 @@ own EQ is still on in Equalizer APO it offers to turn it off while you tune (app
 
 ### Find it for me (the guided test)
 
-Press **Find it for me (about 2 minutes)**. A short screen reminds you to wear both IEMs as usual, keep
+Press **Find it for me (a few minutes)**. A short screen reminds you to wear both IEMs as usual, keep
 the volume low and turn other EQs off; press **Start the test**. Then, for the left ear and then the
-right (one ear only for a calibration made for both ears at once), a **smoothness check**:
+right (one ear only for a calibration made for both ears at once), a **smoothness check** in two parts.
+Every card plays the same sound through a slightly different EQ, each placing your resonance a little
+differently; you pick the one whose treble sounds smoothest.
 
-- Three cards, **A**, **B** and **C**: the same sound through three slightly different EQs, each
-  placing your resonance a little differently. **Listen with Pink noise, Grey noise, Focused noise or
-  Sweep** (switch any time, use any; keys N, G, F, W): with noise, pick the one whose treble sounds
-  **smoothest**, with no harsh, hissy or dull spot; with **Sweep**, a slow sweep through the treble, pick
-  the one where it **stays even**, with no swell or dip as it passes. Grey noise is pink noise with the
-  treble (and bass) lifted the way hearing needs it, so a harsh or dull spot high up stands out more.
-  **Focused noise** is grey noise kept to about an octave and a half around the three EQs (fading out
-  gently beyond), so everything you hear is where they differ; it follows them from round to round.
-- Answer **Smoothest: B** or **Can't tell them apart**.
-- The left ear starts from where your calibration's measurements put the resonance, with the three EQs
-  far apart; each time you pick the middle one they move closer, down to about 50 Hz apart. Pick an
-  outer one and the three move that way. About 8 rounds.
-- The right ear starts from the left ear's result, closer together, so it's quicker (about 5 rounds).
+1. **Overview: eight cards**, **A** to **H** in two rows, from an EQ made for a low resonance to one
+   made for a high one (in shuffled order). Listen to them all and compare any two as often as you
+   like. **Rule out** the ones that clearly sound worse (select a card and press **Rule out** or X, or
+   right-click it): it fades and gets a ✕ but stays playable, and the same again brings it back. Then
+   pick the smoothest of the rest: **Smoothest: C**. Ruling out is optional, it just leaves fewer to
+   compare.
+2. **Pairs**: then a few rounds of just two cards. Which sounds smoother? Answer **Smoothest: A** (or B)
+   or **Can't tell them apart**, which is a fine answer when they're close.
+
+**Listen with Pink noise, Grey noise, Focused noise or Sweep** (switch any time, use any; keys N, G, F,
+W): with noise, the smoothest card has no harsh, hissy or dull spot; with **Sweep**, a slow sweep
+through the treble, it **stays even**, with no swell or dip as it passes. Grey noise is pink noise with
+the treble (and bass) lifted the way hearing needs it, so a harsh or dull spot high up stands out more.
+**Focused noise** is grey noise kept to about an octave and a half around the cards (fading out gently
+beyond), so everything you hear is where they differ.
+
+How it decides: your calibration's model knows how rough each card should sound for every possible
+resonance, so every answer counts for the resonances it fits and against the rest. No single answer
+decides anything: a slip only counts a little and later answers outvote it. Each pair is the one whose
+answer should tell the most, and the ear is done when your answers point to one place about 100 Hz wide
+(usually 8–10 rounds, at most 14). The left ear leans on your calibration's measurements at first, the
+right ear on the left ear's result, but both start with the overview, so neither can get stuck in the
+wrong place. Without the model (rare) each ear is the older three-card smoothness check: it starts wide
+around your calibration's guess and closes in.
 
 The cards are in a different order every round and never show frequencies, and the moving bars on the
 playing card only follow how loud the sound is, the same for every card, so you choose by ear. The
@@ -100,9 +113,10 @@ at about twice that frequency). For each ear:
 
 A found upper treble turns on **Adjust the upper treble** (step ③) with that value.
 
-Keys: **1 2 3** pick and play a card, **P** play/pause, **Enter** answers for the selected card, **S**
-is *About the same* / *Can't tell them apart*, **N** / **G** / **F** / **W** pink, grey or focused noise,
-or the sweep in the smoothness check, **Backspace** goes back, **Space** stops all sound.
+Keys: **1**–**8** pick and play a card, **P** play/pause, **Enter** answers for the selected card, **S**
+is *About the same* / *Can't tell them apart*, **X** rules the selected card out (in the overview),
+**N** / **G** / **F** / **W** pink, grey or focused noise, or the sweep in the smoothness check,
+**Backspace** goes back, **Space** stops all sound.
 
 ### Adjust by hand
 

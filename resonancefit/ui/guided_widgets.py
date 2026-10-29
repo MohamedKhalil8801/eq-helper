@@ -192,6 +192,7 @@ class OptionCard(_SpaceIgnoring):
         self.selected = False
         self.playing = False
         self.heard = False
+        self.ruled_out = False
         self.shape: tuple[np.ndarray, np.ndarray] | None = None
         self._emphasis = 0.0
         self._anim = QVariantAnimation(self)
@@ -236,6 +237,11 @@ class OptionCard(_SpaceIgnoring):
         self.heard = heard
         self.update()
 
+    def set_ruled_out(self, ruled_out: bool) -> None:
+        """Crossed out by the listener: drawn faded, with a ✕ (still playable)."""
+        self.ruled_out = ruled_out
+        self.update()
+
     def set_level(self, level: float, t: float) -> None:
         """Animate from the overall level only (see :func:`visualizer_shape`)."""
         self.shape = visualizer_shape(level, t)
@@ -255,6 +261,8 @@ class OptionCard(_SpaceIgnoring):
         rect = self.card_rect()
         e = self._emphasis
         live = self.selected and self.playing
+        if self.ruled_out:
+            painter.setOpacity(0.4)
 
         glow = e * (1.0 if live else 0.3) * colors["glow"]
         if glow > 0.01:
@@ -289,9 +297,10 @@ class OptionCard(_SpaceIgnoring):
         painter.setPen(colors["text"] if self.isEnabled() else colors["muted"])
         painter.setFont(self.font())
         painter.drawText(rect.adjusted(16, 14, -16, -14), Qt.AlignLeft | Qt.AlignTop, self.text())
-        if self.heard:
+        if self.heard or self.ruled_out:
             painter.setPen(colors["muted"])
-            painter.drawText(rect.adjusted(16, 14, -16, -14), Qt.AlignRight | Qt.AlignTop, "✓")
+            painter.drawText(rect.adjusted(16, 14, -16, -14), Qt.AlignRight | Qt.AlignTop,
+                             "✕" if self.ruled_out else "✓")
 
         area = rect.adjusted(16, rect.height() * 0.38, -16, -16)
         baseline = area.top() + area.height() * 0.62

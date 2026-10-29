@@ -7,8 +7,12 @@ An answer unlocks once every option has been heard for a moment. Option
 order is shuffled each round and only letters are shown; the cards'
 animation follows the overall level only, so nothing gives the answer away.
 
-With the calibration's starting point each ear gets Stage 2 alone (see
-:mod:`resonancefit.guided_test`); without one, Stage 1 comes first.
+With the calibration's model ready (its roughness tables are built on a
+worker while the intro shows), each ear is the scorecard search (see
+:mod:`resonancefit.scorecard`): an overview of eight EQs (two rows of
+cards; right-click or X rules a card out, it stays playable), then A/B
+rounds, all through Stage 2's sounds. Without the model each ear gets
+Stage 2 alone from the calibration's guess; without that, Stage 1 first.
 Stage 1 (Louder test) plays narrow noise bands (the search picks their
 width) with the EQ preview off; Stage 2
 (Smoothness check) plays pink noise, grey noise, focused noise (grey noise
@@ -31,11 +35,11 @@ import time
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
-    QApplication, QFrame, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QStackedWidget, QVBoxLayout,
+    QApplication, QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QStackedWidget, QVBoxLayout,
     QWidget,
 )
 
-from ..guided_test import AUDIBLE, LOUDER, PRIMARY, UPPER, GuidedTest
+from ..guided_test import AUDIBLE, LOUDER, PICK, PRIMARY, UPPER, GuidedTest
 from .common import Worker, side_name, tr
 from .guided_widgets import (
     CARD_MARGIN, AnswerButton, OptionCard, ProgressLine, StageBackground, TransportBar, accent_colors,
@@ -46,6 +50,8 @@ HEARD_SECONDS = 0.5   # an option counts as heard after this long selected while
 FRAME_MS = 33         # ~30 fps while sound plays
 LEVEL_SAMPLES = 1024
 LEVEL_SMOOTHING = 0.35
+LETTERS = "ABCDEFGH"   # cards: up to eight (the overview), four to a row
+CARDS_PER_ROW = 4
 STAGE2_SOUNDS = ("pink", "grey", "region", "focus")  # the smoothness check: pink, grey or focused noise, or the sweep
 CENTRED_SOUNDS = ("region", "focus")  # follow each round's options
 
@@ -83,6 +89,10 @@ class GuidedTestView(StageBackground):
     ``upper_prediction(side, primary_hz)`` (optional): where the calibration
     puts that ear's upper peak for its found primary resonance, or ``None``.
     Without it the upper treble isn't offered.
+
+    ``tables()`` (optional) is called on the GUI thread when a test starts
+    and returns a function that, on a worker thread, returns ``{side:
+    RoughnessTable}``; with it, each ear is the overview and A/B rounds.
     """
 
     resultFound = Signal(str, float)
@@ -90,11 +100,18 @@ class GuidedTestView(StageBackground):
     adjustByHand = Signal(object)
     finished = Signal()
 
-    def __init__(self, audio, option_eqs=None, upper_prediction=None, parent=None):
+    def __init__(self, audio, option_eqs=None, upper_prediction=None, tables=None, parent=None):
         super().__init__(parent)
         self.audio = audio
         self.option_eqs = option_eqs
         self.upper_prediction = upper_prediction
+        self.tables = tables
+        self._table_generation = 0
+        self._preparing = False        # the roughness tables are being built
+        self._begin_when_ready = False
+        self._sides: tuple = ()
+        self._defaults: dict = {}
+        self.ruled_out: set[int] = set()  # overview cards crossed out this round
         self.test: GuidedTest | None = None
         self.rng = random.Random()
         self._clock = time.monotonic
@@ -186,11 +203,11 @@ class GuidedTestView(StageBackground):
         tips = [
             tr("Put both IEMs in as you normally wear them, with the ear tips you were measured with."),
             tr("Turn your volume low: some sounds can be piercing. Press Space at any time to stop the sound."),
-            tr("For each ear you'll hear three versions of the same noise, through slightly different EQs. "
-               "Pick the smoothest each time; they get closer as you go. It takes about 2 minutes in all."),
         ]
         for text in tips:
             layout.addLayout(self._padded(self._label("•  " + text)))
+        self.intro_steps = self._label()
+        layout.addLayout(self._padded(self.intro_steps))
         self.intro_other_eq = self._label()
         layout.addLayout(self._padded(self.intro_other_eq))
         row = QHBoxLayout()
@@ -255,14 +272,16 @@ class GuidedTestView(StageBackground):
         self.sound_row.hide()
         layout.addSpacing(4)
 
-        self.cards_row = QHBoxLayout()
-        self.cards_row.setContentsMargins(0, 0, 0, 0)
-        self.cards_row.setSpacing(0)
-        self.cards = [OptionCard(letter, tr("Play {letter}").format(letter=letter)) for letter in "ABC"]
+        self.cards_grid = QGridLayout()
+        self.cards_grid.setContentsMargins(0, 0, 0, 0)
+        self.cards_grid.setSpacing(0)
+        self.cards = [OptionCard(letter, tr("Play {letter}").format(letter=letter)) for letter in LETTERS]
         for index, card in enumerate(self.cards):
             card.clicked.connect(lambda _=False, i=index: self.select(i))
-            self.cards_row.addWidget(card, 1)
-        layout.addLayout(self.cards_row)
+            card.setContextMenuPolicy(Qt.CustomContextMenu)
+            card.customContextMenuRequested.connect(lambda _pos, i=index: self.toggle_rule_out(i))
+        self._lay_out_cards(3)
+        layout.addLayout(self.cards_grid)
         layout.addSpacing(4)
 
         answers = QHBoxLayout()
@@ -271,6 +290,11 @@ class GuidedTestView(StageBackground):
         self.answer_button = AnswerButton()
         self.answer_button.clicked.connect(self.answer_selected)
         answers.addWidget(self.answer_button, 3)
+        self.rule_out_button = AnswerButton(tr("Rule out"))
+        self.rule_out_button.setToolTip(tr("Cross out the selected card: it sounds clearly worse (X, or "
+                                           "right-click a card). It stays playable; again to bring it back."))
+        self.rule_out_button.clicked.connect(lambda: self.toggle_rule_out(self.selected))
+        answers.addWidget(self.rule_out_button, 1)
         self.same_button = AnswerButton()
         self.same_button.clicked.connect(self.answer_same)
         answers.addWidget(self.same_button, 1)
@@ -298,14 +322,15 @@ class GuidedTestView(StageBackground):
         footer.addWidget(self.manual_button)
         layout.addLayout(footer)
         layout.addSpacing(10)
-        self.keys_hint = self._label(tr("Keys: 1 2 3 choose · P play/pause · Enter answer · S same · "
+        self.keys_hint = self._label(tr("Keys: 1–8 choose · X rule out · P play/pause · Enter answer · S same · "
                                         "N pink · G grey · F focused · W sweep · Space stop"),
                                      "gtMuted")
         self.keys_hint.setAlignment(Qt.AlignCenter)
         layout.addLayout(self._padded(self.keys_hint))
 
-        for index, key in enumerate((Qt.Key_1, Qt.Key_2, Qt.Key_3)):
-            self._shortcut(page, (key,), lambda i=index: self.select(i))
+        for index in range(len(LETTERS)):
+            self._shortcut(page, (Qt.Key_1 + index,), lambda i=index: self.select(i))
+        self._shortcut(page, (Qt.Key_X,), lambda: self.toggle_rule_out(self.selected))
         self._shortcut(page, (Qt.Key_P,), self.toggle_play)
         self._shortcut(page, (Qt.Key_Return, Qt.Key_Enter), lambda: self._enter(self.answer_selected))
         self._shortcut(page, (Qt.Key_S,), self.answer_same)
@@ -464,8 +489,9 @@ class GuidedTestView(StageBackground):
     def start(self, sides, default_hz=None, rng: random.Random | None = None) -> None:
         """Show the intro for a new test over ``sides``."""
         self.rng = rng or random.Random()
-        self.test = GuidedTest(tuple(sides), dict(default_hz or {}), self.rng,
-                               offer_upper=self.upper_prediction is not None)
+        self._sides, self._defaults = tuple(sides), dict(default_hz or {})
+        self.test = self._new_test({})
+        self._prepare_tables()
         self._stage2_target = None
         self._hue = self.rng.uniform(0.0, 360.0)
         self._round_index = 0
@@ -473,10 +499,72 @@ class GuidedTestView(StageBackground):
         self.pages.setCurrentWidget(self.intro_page)
         self.start_button.setFocus()
 
+    def _new_test(self, tables: dict) -> GuidedTest:
+        return GuidedTest(self._sides, dict(self._defaults), self.rng, offer_upper=self.upper_prediction is not None,
+                          tables=tables)
+
+    def _prepare_tables(self) -> None:
+        """Build the scorecard's tables on a worker; until then (or without them) the smoothness check."""
+        self._table_generation += 1
+        self._begin_when_ready = False
+        self._preparing = self.tables is not None
+        self._sync_intro()
+        if not self._preparing:
+            return
+        generation = self._table_generation
+        build = self.tables()
+
+        def work():
+            return generation, build()
+
+        job = Worker(work)
+        job.finished_ok.connect(self._tables_ready)
+        job.failed.connect(self._tables_failed)
+        job.finished.connect(lambda: _JOBS.discard(job))
+        _JOBS.add(job)
+        job.start()
+
+    def _tables_ready(self, result) -> None:
+        generation, tables = result
+        if generation != self._table_generation or self.test is None:
+            return
+        self._preparing = False
+        if self.pages.currentWidget() is self.intro_page or self._begin_when_ready:
+            self.test = self._new_test(dict(tables))
+        self._sync_intro()
+        if self._begin_when_ready:
+            self.begin()
+
+    def _tables_failed(self, _message: str) -> None:
+        self._preparing = False  # the smoothness check alone, then
+        self._sync_intro()
+        if self._begin_when_ready:
+            self.begin()
+
+    def _sync_intro(self) -> None:
+        if self.tables is not None:
+            self.intro_steps.setText("•  " + tr(
+                "For each ear: first eight versions of the same noise, through different EQs. Listen to them "
+                "all, compare any two as often as you like, cross out the ones that clearly sound worse, and "
+                "pick the smoothest. Then a few rounds of just two: which is smoother? About 2 minutes per ear."))
+        else:
+            self.intro_steps.setText("•  " + tr(
+                "For each ear you'll hear three versions of the same noise, through slightly different EQs. "
+                "Pick the smoothest each time; they get closer as you go. It takes about 2 minutes in all."))
+        waiting = self._preparing and self._begin_when_ready
+        self.start_button.setText(tr("Getting ready…") if waiting else tr("Start the test"))
+        self.start_button.setEnabled(not waiting)
+
     def begin(self) -> None:
         """Leave the intro: the first round."""
         if self.test is None:
             return
+        if self._preparing:
+            self._begin_when_ready = True
+            self._sync_intro()
+            return
+        self._begin_when_ready = False
+        self._sync_intro()
         self._saved_eq_enabled = self.audio.eq_enabled
         self._new_round(keep_playing=False)
         self.pages.setCurrentWidget(self.test_page)
@@ -524,9 +612,11 @@ class GuidedTestView(StageBackground):
         self._applied = None
         self._eqs = {}
         self._play_when_ready = False
-        for index, card in enumerate(self.cards):
-            card.setVisible(index < count)
+        self.ruled_out = set()
+        self._lay_out_cards(count)
+        for card in self.cards:
             card.set_heard(False)
+            card.set_ruled_out(False)
             card.set_selected(False, animate=False)
             card.clear_shape()
         self.selected = None
@@ -539,9 +629,21 @@ class GuidedTestView(StageBackground):
             return
         if upper:  # the upper treble has no louder test (see guided_test)
             self.stage_label.setText(tr("Upper treble: smoothness check"))
+        elif test.overview:
+            self.stage_label.setText(tr("Smoothness check: overview"))
         else:
             self.stage_label.setText(tr("Louder test") if louder else tr("Smoothness check"))
-        if louder:
+        self.rule_out_button.setVisible(test.overview)
+        if test.overview:
+            self.instructions.setText(tr(
+                "Eight EQs, from a resonance set low to one set high. Listen to them all and compare any two as "
+                "often as you like. Cross out the ones that clearly sound worse (X or right-click; they stay "
+                "playable), then pick the smoothest of the rest: no harsh, hissy or dull spot in the treble."))
+        elif test.kind == PICK:
+            self.instructions.setText(tr("Two EQs. Which sounds smoother? With noise: no harsh, hissy or dull "
+                                         "spot in the treble. With the sweep: it stays even, with no swell or "
+                                         "dip as it passes. Switch as often as you like."))
+        elif louder:
             self.instructions.setText(tr("Two sounds in your {ear}. Which one is louder? Click a card (or "
                                          "press 1 or 2) to switch between them as often as you like.").format(
                 ear=_ear(test.side).lower()))
@@ -574,6 +676,28 @@ class GuidedTestView(StageBackground):
         self._sync_answers()
         self._sync_transport()
 
+    def _lay_out_cards(self, count: int) -> None:
+        """Show ``count`` cards, up to four to a row."""
+        for card in self.cards:
+            self.cards_grid.removeWidget(card)
+            card.hide()
+        columns = min(count, CARDS_PER_ROW)
+        for index in range(count):
+            self.cards_grid.addWidget(self.cards[index], index // CARDS_PER_ROW, index % CARDS_PER_ROW)
+            self.cards[index].show()
+        for column in range(CARDS_PER_ROW):
+            self.cards_grid.setColumnStretch(column, 1 if column < columns else 0)
+
+    def toggle_rule_out(self, index: int | None) -> None:
+        """Overview only: cross a card out (it sounds clearly worse), or bring it back."""
+        if (self.test is None or not self.test.overview or self._round is None or index is None
+                or not 0 <= index < len(self._round.options) or self.pages.currentWidget() is not self.test_page):
+            return
+        self.ruled_out ^= {index}
+        self.cards[index].set_ruled_out(index in self.ruled_out)
+        self._sync_cards()
+        self._sync_answers()
+
     def _new_audible_round(self) -> None:
         """Before an ear's upper treble: one band at the predicted peak — heard clearly or not?"""
         test = self.test
@@ -584,6 +708,7 @@ class GuidedTestView(StageBackground):
             "Many people hear sounds this high only faintly, or not at all. That's normal; the upper treble "
             "then simply stays as calibrated.").format(ear=_ear(test.side).lower()))
         self.sound_row.setVisible(False)
+        self.rule_out_button.setVisible(False)
         self.same_button.setText(tr("Barely, or not at all"))
         self._enter_louder_stage()
         self.progress.set_value(test.progress())
@@ -839,7 +964,7 @@ class GuidedTestView(StageBackground):
                 and len(self.heard) == len(self._round.options))
 
     def answer_selected(self) -> None:
-        if self.can_answer and self.selected is not None:
+        if self.can_answer and self.selected is not None and self.selected not in self.ruled_out:
             self._answer(self.selected)
 
     def answer_same(self) -> None:
@@ -851,7 +976,10 @@ class GuidedTestView(StageBackground):
         target = self.test.target
         results = self.test.upper_results if target == UPPER else self.test.results
         before = set(results)
-        self.test.answer(choice)
+        if self.test.kind == PICK:
+            self.test.answer(choice, sorted(self.ruled_out))
+        else:
+            self.test.answer(choice)
         finished = [side for side in results if side not in before]
         self._after_change(forward=True, finished=(finished[0], target) if finished else None)
 
@@ -907,7 +1035,11 @@ class GuidedTestView(StageBackground):
         else:
             self.result_label.setText(tr("{ear} resonance: {hz} Hz").format(ear=side_name(side),
                                                                              hz=f"{int(round(hz)):,}"))
-            if louder is None:
+            pick = next((s.search for s in stages if s.kind == PICK), None)
+            if pick is not None:
+                note = tr("Found with {n} rounds: an overview of eight EQs, then pairs. You can fine-tune it "
+                          "by hand later.").format(n=len(pick.answers))
+            elif louder is None:
                 start = (tr("the other ear's result") if len(stages) == 1 and test.sides.index(side) > 0
                          else tr("your calibration's measurements"))
                 note = tr("Found with {n} rounds of the smoothness check, starting from {start}. You can "
@@ -995,6 +1127,8 @@ class GuidedTestView(StageBackground):
                 state.append(tr("selected"))
             if index in self.heard:
                 state.append(tr("heard"))
+            if index in self.ruled_out:
+                state.append(tr("ruled out"))
             card.setAccessibleDescription(", ".join(state))
 
     def _sync_transport(self) -> None:
@@ -1009,7 +1143,7 @@ class GuidedTestView(StageBackground):
     def _sync_answers(self) -> None:
         if self._round is None:
             return
-        letter = "ABC"[self.selected] if self.selected is not None else None
+        letter = LETTERS[self.selected] if self.selected is not None else None
         louder = self.test.kind == LOUDER
         if self.test.kind == AUDIBLE:
             self.answer_button.setText(tr("I hear it clearly"))
@@ -1021,8 +1155,10 @@ class GuidedTestView(StageBackground):
             self.answer_button.setText(tr("Smoothest: {letter}").format(letter=letter))
         self.answer_button.set_accent(self.cards[self.selected].accent if self.selected is not None else None)
         ok = self.can_answer
-        self.answer_button.setEnabled(ok and self.selected is not None)
+        self.answer_button.setEnabled(ok and self.selected is not None and self.selected not in self.ruled_out)
         self.same_button.setEnabled(ok)
+        self.rule_out_button.setEnabled(self.selected is not None)
+        self.rule_out_button.setText(tr("Bring back") if self.selected in self.ruled_out else tr("Rule out"))
         if ok:
             self.listen_hint.setText(" ")
         else:

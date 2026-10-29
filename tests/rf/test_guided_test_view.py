@@ -12,7 +12,7 @@ from PySide6.QtGui import QColor, QPalette
 from eq_helper.audio.shared_state import ChannelMode, Mode
 from eq_helper.audio.generators import BandNoiseGenerator
 from resonancefit.audio import AudioService
-from resonancefit.guided_test import AUDIBLE, FIRST_SMOOTH_DELTA, LOUDER, SMOOTH_DELTA, SMOOTHNESS, UPPER
+from resonancefit.guided_test import AUDIBLE, FIRST_SMOOTH_DELTA, LOUDER, PICK, SMOOTH_DELTA, SMOOTHNESS, UPPER
 from resonancefit.ui import guided_test_view
 from resonancefit.ui.guided_widgets import OptionCard, stage_colors, visualizer_shape
 from resonancefit.ui.tuning_panel import TuningPanel
@@ -41,9 +41,18 @@ def clock():
 def view(panel, clock):
     v = panel.guided
     v._clock = lambda: clock[0]
+    v.tables = None  # the scorecard's own tests below put it back
     panel.start_guided_test(random.Random(5))
     v.start(panel.session.sides, {}, random.Random(5))  # no starting point: the louder test comes first
     return v
+
+
+def with_tables(qtbot, panel, view, seed=5):
+    """Start the test as the app does: the scorecard's tables built on a worker first."""
+    view.tables = panel._scorecard_tables
+    panel.start_guided_test(random.Random(seed))
+    qtbot.waitUntil(lambda: not view._preparing, timeout=30000)
+    return started(view)
 
 
 def started(view):
@@ -68,7 +77,7 @@ def answer_like_a_listener(qtbot, view, clock):
     if not view.playing:
         qtbot.waitUntil(lambda: view.ready, timeout=15000)
         view.play()
-    if view.test.kind == SMOOTHNESS:
+    if view.test.kind in (SMOOTHNESS, PICK):
         qtbot.waitUntil(lambda: view.ready, timeout=15000)
     hear_all(view, clock)
     if view.test.kind == AUDIBLE:
@@ -81,6 +90,9 @@ def answer_like_a_listener(qtbot, view, clock):
         choice = int(np.argmax([loudness(hz, f0) for hz in options]))
     else:
         choice = int(np.argmin([abs(math.log(hz / f0)) for hz in options]))
+    if view.test.overview:  # cross out the far half
+        for i in sorted(range(len(options)), key=lambda i: abs(math.log(options[i] / f0)))[len(options) // 2:]:
+            view.toggle_rule_out(i)
     view.select(choice)
     view.answer_selected()
 
@@ -100,7 +112,51 @@ def test_find_it_for_me_replaces_step_one(panel, view):
     assert panel.manual_box.isVisibleTo(panel)
 
 
-def test_with_the_calibration_each_ear_is_the_smoothness_check_alone(qtbot, panel, view, clock):
+def test_each_ear_is_an_overview_of_eight_then_pairs(qtbot, panel, view, clock):
+    with_tables(qtbot, panel, view)
+    assert view.test.kind == PICK and view.test.overview
+    assert view.stage_label.text() == "Smoothness check: overview"
+    assert sum(card.isVisibleTo(view) for card in view.cards) == 8 and view.rule_out_button.isVisibleTo(view)
+    assert view.cards_grid.getItemPosition(view.cards_grid.indexOf(view.cards[7]))[:2] == (1, 3)  # two rows
+    qtbot.waitUntil(lambda: view.ready, timeout=30000)
+    hear_all(view, clock)
+    options = view._round.options
+    order = sorted(range(8), key=lambda i: abs(math.log(options[i] / F0["L"])))
+    for i in order[4:]:
+        view.toggle_rule_out(i)
+    assert view.ruled_out == set(order[4:]) and view.cards[order[7]].ruled_out
+    view.select(order[7])
+    assert not view.answer_button.isEnabled()  # a crossed-out card can't be the pick
+    assert view.rule_out_button.text() == "Bring back"
+    view.select(order[0])
+    view.answer_selected()
+    shown, best, out = view.test.stage.search.answers[0]
+    assert best == order[0] and out == frozenset(order[4:])
+    assert view.test.kind == PICK and not view.test.overview
+    assert sum(card.isVisibleTo(view) for card in view.cards) == 2 and not view.rule_out_button.isVisibleTo(view)
+    assert not view.cards[0].ruled_out
+    while view.test.side == "L":
+        answer_like_a_listener(qtbot, view, clock)
+    assert view.pages.currentWidget() is view.done_page
+    assert "overview of eight" in view.result_note.text()
+    assert abs(view.test.results["L"] / F0["L"] - 1) < 0.02
+    view.next_button.click()
+    assert view.test.kind == PICK and view.test.overview
+    assert view.test.stage.search.start == pytest.approx(view.test.results["L"])  # the right ear starts there
+
+
+def test_start_waits_for_the_tables(qtbot, panel, view, clock):
+    view.tables = panel._scorecard_tables
+    panel.start_guided_test(random.Random(5))
+    if view._preparing:
+        view.begin()
+        assert view.start_button.text() == "Getting ready…" and not view.start_button.isEnabled()
+        assert view.pages.currentWidget() is view.intro_page
+    qtbot.waitUntil(lambda: view.pages.currentWidget() is view.test_page, timeout=30000)
+    assert view.test.kind == PICK
+
+
+def test_with_the_calibration_but_no_tables_each_ear_is_the_smoothness_check_alone(qtbot, panel, view, clock):
     panel.start_guided_test(random.Random(5))
     started(view)
     assert view.test.kind == SMOOTHNESS and view.stage_label.text() == "Smoothness check"
@@ -456,7 +512,7 @@ def test_optional_upper_treble_after_both_ears(qtbot, panel, view, clock):
     for side in "LR":
         assert predicted[side] == pytest.approx(2.0 * view.test.results[side])
     assert view._round.options == (predicted["L"],)
-    assert [c.isVisibleTo(view) for c in view.cards] == [True, False, False]
+    assert [c.isVisibleTo(view) for c in view.cards] == [True] + [False] * 7
     assert view.answer_button.text() == "I hear it clearly" and not view.answer_button.isEnabled()
     view.play()
     assert view.audio.playing == "band" and not view.audio.eq_enabled  # a band, without the EQ
