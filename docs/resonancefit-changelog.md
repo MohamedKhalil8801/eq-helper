@@ -3,6 +3,11 @@
 Each release's section is copied into its notes on the releases page. Add a
 `## X.Y.Z` section here before tagging `rf-vX.Y.Z`.
 
+## Unreleased
+
+- Find it for me: every card in a round now plays at the same loudness, for whichever sound you
+  use. Before, cards could differ by up to about 6 dB, and the louder one tends to sound better.
+
 ## 0.3.0
 
 ### New: Find it for me

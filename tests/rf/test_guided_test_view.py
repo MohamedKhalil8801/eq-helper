@@ -690,3 +690,22 @@ def test_sweep_animation_is_blind_too(qtbot, view, clock):
             engine.process_block(480)
         levels.append(view.measure_level(engine.pop_recent_samples(1024)))
     assert max(levels) - min(levels) < 0.02  # the level fed to the cards ignores the EQ
+
+
+def test_cards_are_level_matched(qtbot, panel, view, clock):
+    """A gain after each card's EQ makes it as loud as the quietest card, for the sound playing."""
+    with_tables(qtbot, panel, view)
+    assert view.test.kind == PICK
+    qtbot.waitUntil(lambda: view.ready, timeout=15000)
+    eqs = [view._eqs[i][0] for i in range(len(view._round.options))]
+    offsets = [view._offsets[i] for i in range(len(eqs))]
+    assert max(offsets) == pytest.approx(0.0) and min(offsets) < -0.01 and all(o <= 0 for o in offsets)
+    engine = view.audio.engine
+    for i in (0, len(eqs) - 1):
+        view.select(i)
+        assert engine._lr_target == pytest.approx((10 ** (offsets[i] / 20),) * 2)
+    view.set_stage2_sound("region")  # another sound: matched again for what it plays
+    assert view._offsets != dict(enumerate(offsets))
+    assert engine._lr_target == pytest.approx((10 ** (view._offsets[len(eqs) - 1] / 20),) * 2)
+    view.stop()
+    assert engine._lr_target == (1.0, 1.0)

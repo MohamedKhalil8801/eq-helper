@@ -90,7 +90,9 @@ wrong place. Without the model (rare) each ear is the older three-card smoothnes
 around your calibration's guess and closes in.
 
 The cards never show frequencies, and the moving bars on the playing card only follow how loud the
-sound is, the same for every card, so you choose by ear. You can answer whenever you're ready; a ✓
+sound is, the same for every card, so you choose by ear. Every card plays at the same loudness: the
+app turns the louder ones down to match the quietest, for the sound you're using, so a card never
+wins just by being louder. You can answer whenever you're ready; a ✓
 marks the cards you've listened to. The sound you pick (pink, grey, focused or sweep) stays the same
 from round to round and for the upper treble, until you change it.
 

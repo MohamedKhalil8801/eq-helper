@@ -40,6 +40,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..guided_test import LOUDER, OVERVIEW, PICK, PRIMARY, UPPER, GuidedTest
+from ..loudness import card_curve, level_offsets
 from .common import Worker, side_name, tr
 from .guided_widgets import (
     CARD_MARGIN, AnswerButton, OptionCard, ProgressLine, StageBackground, TransportBar, accent_colors,
@@ -129,6 +130,7 @@ class GuidedTestView(StageBackground):
         self.stage2_sound = "pink"    # what the smoothness check plays: one of STAGE2_SOUNDS
         self._starting = False        # starting our own sound: its change notices aren't a stop
         self._eqs: dict[int, tuple] = {}
+        self._offsets: dict[int, float] = {}  # dB per option making every card equally loud
         self._eq_generation = 0
         self._applied: int | None = None   # option whose EQ is in the preview
         self._saved_eq_enabled: bool | None = None
@@ -585,6 +587,7 @@ class GuidedTestView(StageBackground):
         if self._sound is not None:
             self._sound = None
             self.audio.stop_all()
+        self._set_card_gain(0.0)
         if self._saved_eq_enabled is not None:
             self.audio.set_eq_enabled(self._saved_eq_enabled)
             self._saved_eq_enabled = None
@@ -619,6 +622,7 @@ class GuidedTestView(StageBackground):
         self._since = None
         self._applied = None
         self._eqs = {}
+        self._offsets = {}
         self._play_when_ready = False
         self.ruled_out = set()
         self._lay_out_cards(count)
@@ -771,6 +775,9 @@ class GuidedTestView(StageBackground):
             return
         self.stage2_sound = kind
         self._sync_sound_buttons()
+        self._level_match()
+        if self._sound in STAGE2_SOUNDS and self._applied is not None:
+            self._set_card_gain(self._offsets.get(self._applied, 0.0))
         if self.test is not None and not self._banded and self._sound is not None and self._sound != kind:
             self._account()
             if self._start_stage2_sound():
@@ -808,6 +815,7 @@ class GuidedTestView(StageBackground):
         if generation != self._eq_generation or self.test is None:
             return
         self._eqs = dict(enumerate(built))
+        self._level_match()
         if self._sound is not None and self.selected is not None:
             self._apply_option(self.selected)
         elif self._play_when_ready and self.pages.currentWidget() is self.test_page:
@@ -841,6 +849,7 @@ class GuidedTestView(StageBackground):
             self._sync_cards()
         side, index = self.test.side, self.selected
         if self._banded:
+            self._set_card_gain(0.0)
             self.audio.switch_band(self._round.options[index], self._round.band, side)
             sound = "band"
         else:
@@ -900,7 +909,20 @@ class GuidedTestView(StageBackground):
         eq, designed = built
         self.audio.offer_firs(eq, designed)
         self.audio.set_eq(eq)
+        self._set_card_gain(self._offsets.get(index, 0.0))
         self._applied = index
+
+    def _level_match(self) -> None:
+        """Every card as loud as the quietest, for the sound being played (see ``loudness``)."""
+        if self.test is None or self._round is None or len(self._eqs) != len(self._round.options):
+            self._offsets = {}
+            return
+        curves = [card_curve(self._eqs[i][0], self.test.side) for i in range(len(self._eqs))]
+        self._offsets = dict(enumerate(level_offsets(curves, self.stage2_sound, self._sweep_center())))
+
+    def _set_card_gain(self, db: float) -> None:
+        gain = 10 ** (db / 20)
+        self.audio.engine.set_lr_gains(gain, gain)
 
     def _audible(self) -> bool:
         """The selected option is what's playing right now."""
