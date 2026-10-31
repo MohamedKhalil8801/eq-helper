@@ -252,15 +252,26 @@ pre-filled with the rate your output device runs at.
 When the app opens, it checks once a day whether a newer version has been published. If today's check
 already worked, it doesn't check again until tomorrow; if it couldn't check (no internet, GitHub
 unreachable), it tries again the next time you open it. There is no background service: nothing runs
-while the app is closed, and nothing is installed automatically.
+while the app is closed.
 
-When a new version is out, a strip at the top of the window says so, with **Download** and **What's new**.
-**Not now** hides it until a newer version comes out. **Settings → Version and updates** shows your
-version, the latest one, when the last successful check happened and **Check for updates now**. You can
-turn off the daily check there; checking by hand still works.
+When a new version is out, it downloads in the background; a strip at the top of the window shows the
+progress. Once it's downloaded, the strip offers **Install and restart**: the app closes, the new version
+replaces it and opens. If you don't, it installs when you close the app (and doesn't open again). Every
+download is checked against the release's checksums first, and if installing fails your current version
+is put back and the strip says what went wrong. **Not now** hides the strip; the update still installs
+when you close the app.
 
-To update, download the new version and replace the old app (keep the `Calibrations` and `Targets` folders
-next to it on Windows and Linux). Your calibrations, history and settings are kept.
+Only the app itself is replaced: the `Calibrations` and `Targets` folders and the calibration sheets next
+to it, and your history and settings, are kept.
+
+**Settings → Version and updates** shows your version, the latest one, when the last successful check
+happened and **Check for updates now**. You can turn off the check when the app opens there; checking by
+hand still works.
+
+Where the app can't replace itself, the strip offers **Download** instead: then download the new version
+and replace the old app yourself. That's the case when its folder can't be written to, on macOS when
+the app runs from the disk image or Downloads (move it to Applications), and on Linux when it isn't run
+as the AppImage.
 
 ## Troubleshooting
 
@@ -281,4 +292,5 @@ Everything stays on your computer: imported calibrations, history and settings l
 folder (Windows `%APPDATA%\ResonanceFit`, macOS `~/Library/Application Support/ResonanceFit`, Linux
 `~/.local/share/resonancefit`). Deleting the download doesn't delete them, and a newer version of the app
 finds them automatically. The update check sends one anonymous request to GitHub for the latest
-release; nothing about you, your IEMs or your calibration is sent.
+release, and downloading an update fetches only the release files; nothing about you, your IEMs or your
+calibration is sent.

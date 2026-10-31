@@ -36,6 +36,13 @@ Each release's section is copied into its notes on the releases page. Add a
   resonance no longer moves an ear you hadn't set (it did for the right ear).
 - Centre asks before giving both ears the same value when they differ.
 - **Space** plays and stops, as in EQ Helper: it stops whatever plays, and plays the last sound again.
+- The EQ follows the resonance slider in real time while you drag it, instead of after you stop.
+- Automatic updates: a new version downloads in the background (checked against the release's
+  checksums), then **Install and restart**, or it installs when you close the app. Your calibrations,
+  the files next to the app, history and settings are kept. Where the app can't replace itself (a
+  read-only folder, macOS running it from Downloads, Linux not as an AppImage) it shows the download
+  link as before. Updating from 0.3.0 still uses the link once: automatic updates start with the
+  version after this one.
 
 ## 0.3.0
 

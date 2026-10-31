@@ -130,8 +130,13 @@ releases repo's "Build and publish" workflow (ADR 0005); `packaging/` holds the
 PyInstaller spec helpers, release packaging and `e2e_check.py`. The app checks
 that repo's latest release when it opens (`resonancefit/updates.py`): at most
 once a day after a successful check, retried on the next launch after a failed
-one, notify only. Release tags must stay `rf-vX.Y.Z` with assets named
-`…-windows.zip`, `…-macos.dmg`, `…-linux.AppImage` for the download link.
+one. `resonancefit/updater.py` then downloads the release for that OS, checks it
+against `SHA256SUMS`, and installs it on close or with "Install and restart"
+(the new build replaces the old one with `--rf-install-update`; Linux swaps the
+AppImage). Development builds (a source run, or a version that isn't plain
+X.Y.Z, like local `0.1.3-dev` builds) never check. Release tags must stay
+`rf-vX.Y.Z` with assets named `…-windows.zip` (one top folder), `…-macos.dmg`
+(the .app), `…-linux.AppImage`, plus `SHA256SUMS`.
 
 ## What is learned
 
