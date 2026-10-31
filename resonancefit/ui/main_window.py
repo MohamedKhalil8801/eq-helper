@@ -676,6 +676,7 @@ class MainWindow(QMainWindow):
 
     # ── shutdown ───────────────────────────────────────────────────────────
     def closeEvent(self, event):
+        self.tuning.flush()
         self.audio.stop_all()
         for worker in list(self._workers):
             worker.wait(5000)

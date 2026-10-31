@@ -47,7 +47,7 @@ def test_sides_default_target_and_first_eq(panel):
     assert panel.graph.curve_names() == ["Your IEM", "Target", "With your EQ"]
 
 
-def test_slider_moves_only_the_selected_side_and_is_debounced(qtbot, panel):
+def test_slider_moves_only_the_selected_side_and_settles_on_the_newest(qtbot, panel):
     panel.ears.setCurrentIndex(0)
     right_before = panel.session.primary["R"]
     emitted = []
@@ -62,6 +62,17 @@ def test_slider_moves_only_the_selected_side_and_is_debounced(qtbot, panel):
     qtbot.wait(400)
     assert len(emitted) == 1
     assert emitted[0].channels["L"].peak_hz == pytest.approx(7200)
+
+
+def test_the_eq_follows_a_moving_slider_without_waiting_for_it_to_stop(qtbot, panel):
+    panel.ears.setCurrentIndex(0)
+    emitted = []
+    panel.eqChanged.connect(emitted.append)
+    for hz in range(6800, 7600, 100):  # a drag: a move every 60 ms, never still for long
+        panel.peak_slider.setValue(hz)
+        qtbot.wait(60)
+    assert len(emitted) >= 3  # updates arrived during the drag, not only after it
+    qtbot.waitUntil(lambda: emitted[-1].channels["L"].peak_hz == pytest.approx(7500), timeout=3000)
 
 
 def test_dragging_marker_updates_controls_and_is_clamped(qtbot, panel):
@@ -106,7 +117,8 @@ def test_upper_resonance_auto_follows_the_resonance_manual_stays_put(qtbot, pane
     assert not panel.session.upper_enabled and not hasattr(panel, "reset_upper")
     assert not panel.graph.upper_marker.isVisible()
     panel.ears.setCurrentIndex(0)
-    panel._upper_prediction = lambda side, hz: 1.9 * hz  # this test calibration has no upper peak
+    panel._upper_prediction = lambda side, hz, model=None: 1.9 * hz  # this calibration has no upper peak
+    panel._upper_cache.clear()
     shown = []
     for hz in (6500, 8500):  # Auto shows the calibration's upper treble for the resonance: it moves with it
         panel.peak_slider.setValue(hz)
@@ -234,3 +246,11 @@ def test_power_button_switches_the_eq_preview(panel):
     assert seen == [True] and "EQ on" in panel.power_button.text()
     panel.set_eq_on(False)  # follows changes made elsewhere, without echoing them back
     assert seen == [True] and not panel.power_button.isChecked() and "EQ off" in panel.power_button.text()
+
+
+def test_choices_are_remembered_once_the_moving_stops_and_on_close(qtbot, panel):
+    panel.ears.setCurrentIndex(0)
+    panel.peak_slider.setValue(7111)
+    qtbot.waitUntil(lambda: panel._remember.isActive(), timeout=3000)
+    panel.flush()  # the window closing writes it at once
+    assert panel.ctx.settings.get("tunings")[panel.loaded.calibration_id]["primary"]["L"] == 7111

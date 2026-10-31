@@ -10,7 +10,7 @@ from PySide6.QtWidgets import QApplication
 
 from eq_helper.audio.shared_state import ChannelMode, Mode
 from resonancefit.audio import AudioService
-from resonancefit.ui.tuning_panel import LIVE_REGENERATE_DELAY_MS, TuningPanel
+from resonancefit.ui.tuning_panel import REGENERATE_THROTTLE_MS, TuningPanel
 
 from .test_tuning_panel import ctx, loaded  # noqa: F401 - fixtures/helpers
 
@@ -109,7 +109,7 @@ def test_pink_noise_through_the_eq_follows_the_resonance(qtbot, panel):
     emitted = []
     panel.eqChanged.connect(emitted.append)
     panel.peak_slider.setValue(7400)
-    assert panel._regen.interval() == LIVE_REGENERATE_DELAY_MS
+    assert panel._regen.interval() == REGENERATE_THROTTLE_MS  # follows the slider, no waiting
     qtbot.waitUntil(lambda: bool(emitted), timeout=2000)
     assert emitted[-1].channels[panel.side].peak_hz == pytest.approx(7400)
     panel.pink_button.click()
@@ -124,7 +124,7 @@ def test_grey_noise_through_the_eq_works_like_pink(qtbot, panel):
     assert panel.grey_button.isChecked() and panel.grey_button.text() == "■ Stop noise"
     assert not panel.pink_button.isChecked() and panel.pink_hint.isVisibleTo(panel)
     panel.peak_slider.setValue(7400)
-    assert panel._regen.interval() == LIVE_REGENERATE_DELAY_MS
+    assert panel._regen.interval() == REGENERATE_THROTTLE_MS  # follows the slider, no waiting
     panel.grey_button.click()
     assert audio.playing is None and not panel.grey_button.isChecked()
 

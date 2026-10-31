@@ -39,9 +39,11 @@ def _join_live_jobs() -> None:
         job.wait(5000)
 
 
-REGENERATE_DELAY_MS = 250
-CURVE_REDRAW_MS = 15  # coalesce "Your IEM" redraws while a slider or line is dragged
-LIVE_REGENERATE_DELAY_MS = 60   # while pink noise plays through the EQ: follow the slider closely
+# While a slider or line moves, the EQ is rebuilt continuously on a worker (about 30 ms: model, EQ and
+# preview filters), the newest position winning; these only coalesce the GUI's own updates.
+REGENERATE_THROTTLE_MS = 16
+CURVE_REDRAW_MS = 16   # "Your IEM" redraws while a slider or line is dragged
+REMEMBER_DELAY_MS = 500  # the settings file is written once the moving stops
 DEFAULT_UPPER_HZ = 15500
 CENTRE = "C"  # the ear tab for both ears at once: sound in both, the sliders move both
 
@@ -135,7 +137,7 @@ class TuningPanel(QWidget):
         self._graph_tone = False  # the playing tone came from a press on the graph, not a resonance
         self._regen = QTimer(self)
         self._regen.setSingleShot(True)
-        self._regen.setInterval(REGENERATE_DELAY_MS)
+        self._regen.setInterval(REGENERATE_THROTTLE_MS)
         self._regen.timeout.connect(self._regenerate_live)
         self._live_job = None
         self._live_again = False
@@ -144,6 +146,11 @@ class TuningPanel(QWidget):
         self._iem_redraw.setSingleShot(True)
         self._iem_redraw.setInterval(CURVE_REDRAW_MS)
         self._iem_redraw.timeout.connect(self._show_iem_curve)
+        self._remember = QTimer(self)
+        self._remember.setSingleShot(True)
+        self._remember.setInterval(REMEMBER_DELAY_MS)
+        self._remember.timeout.connect(self.remember)
+        self._upper_cache: dict = {}  # (side, resonance Hz) → the calibration's upper peak (None: none)
         self._playing_poll = QTimer(self)
         self._playing_poll.setInterval(40)
         self._playing_poll.timeout.connect(self._show_playing)
@@ -509,6 +516,7 @@ class TuningPanel(QWidget):
         self._close_guided()
         self.audio.stop_all()
         self.loaded = loaded
+        self._upper_cache.clear()
         self.session = TuningSession(loaded.measurements)
         remembered = (self.ctx.settings.get("tunings") or {}).get(loaded.calibration_id) or {}
         for side, hz in (remembered.get("primary") or {}).items():
@@ -577,6 +585,12 @@ class TuningPanel(QWidget):
             self.target_combo.setCurrentIndex(chosen)
         self._syncing = False
 
+    def flush(self) -> None:
+        """Write a pending remember now (the window is closing)."""
+        if self._remember.isActive():
+            self._remember.stop()
+            self.remember()
+
     def remember(self) -> None:
         """Keep the current choices for the next launch (not a history entry)."""
         if self.session is None:
@@ -600,7 +614,8 @@ class TuningPanel(QWidget):
             value = self.session.set_primary(side, round(float(hz)))
         self._follow("primary", value)       # sound first: it must not wait for drawing
         self._sync_peak_controls()
-        self._iem_redraw.start()
+        if not self._iem_redraw.isActive():
+            self._iem_redraw.start()
         self._schedule_regen()
 
     # ── ① the guided test ─────────────────────────────────────────────────
@@ -781,8 +796,9 @@ class TuningPanel(QWidget):
             self._show_playing()
 
     def _schedule_regen(self) -> None:
-        self._regen.setInterval(LIVE_REGENERATE_DELAY_MS if self.audio.playing in NOISES else REGENERATE_DELAY_MS)
-        self._regen.start()
+        """Rebuild as the slider moves (a throttle, not a wait for it to stop)."""
+        if not self._regen.isActive():
+            self._regen.start()
 
     def _focus_hz(self) -> float:
         if self.focus == "upper":
@@ -924,9 +940,10 @@ class TuningPanel(QWidget):
             return out
         return work
 
-    def _upper_prediction(self, side: str, primary_hz: float) -> float | None:
-        """Where the calibration puts ``side``'s upper peak for this primary resonance (None: no peak)."""
-        model = self.session.measurements.models[side]
+    def _upper_prediction(self, side: str, primary_hz: float, model=None) -> float | None:
+        """Where the calibration puts ``side``'s upper peak for this primary resonance (None: no peak).
+        ``model``: that side's model, given by a worker so it never reads the session."""
+        model = model if model is not None else self.session.measurements.models[side]
         try:
             hz = detect_high_treble_peak(model.freqs, model.predict(float(primary_hz)), float(primary_hz))
         except ValueError:
@@ -935,7 +952,13 @@ class TuningPanel(QWidget):
 
     def _calibrated_upper(self, side: str) -> int:
         """Where the calibration puts ``side``'s upper treble for its current resonance (Auto's value)."""
-        hz = self._upper_prediction(side, self.session.primary[side])
+        primary = self.session.primary[side]
+        key = (side, int(round(primary)))
+        if key not in self._upper_cache:  # the live rebuild fills this as the resonance moves
+            if len(self._upper_cache) > 2000:
+                self._upper_cache.clear()
+            self._upper_cache[key] = self._upper_prediction(side, primary)
+        hz = self._upper_cache[key]
         lo, hi = PERSONAL_TREBLE_RANGE
         return int(round(min(max(hz or DEFAULT_UPPER_HZ, lo), hi)))
 
@@ -1010,9 +1033,13 @@ class TuningPanel(QWidget):
         upper = dict(s.upper) if s.upper_enabled else None
         rate, audio, generation = int(self.audio.engine.sample_rate), self.audio, self._sync_generation
 
+        predict_upper, models = self._upper_prediction, dict(s.measurements.models)
+
         def work():
             eq = match_channels(measurements, primary, *target, name, personal_treble=upper)
-            return generation, eq, audio.design_firs(eq, rate)
+            # Auto's upper treble for these resonances, here rather than on the GUI thread (~6 ms an ear)
+            uppers = {(side, int(round(hz))): predict_upper(side, hz, models[side]) for side, hz in primary.items()}
+            return generation, eq, audio.design_firs(eq, rate), uppers
 
         job = Worker(work)
         job.finished_ok.connect(self._live_done)
@@ -1029,13 +1056,16 @@ class TuningPanel(QWidget):
             self._regenerate_live()
 
     def _live_done(self, result) -> None:
-        generation, eq, designed = result
+        generation, eq, designed, uppers = result
         self._live_finished()
+        self._upper_cache.update(uppers)
         if generation != self._sync_generation or self.session is None:
             return  # a direct regenerate (target, history…) happened since: it wins
         self.channel_eq = eq
         self._show_eq_curves()
-        self.remember()
+        self._sync_upper_value()
+        self._sync_readout()
+        self._remember.start()
         if self.guided_active:  # the test is previewing its own EQs: hand this one over when it closes
             self._guided_eq = True
             return
@@ -1066,8 +1096,7 @@ class TuningPanel(QWidget):
         self.eqChanged.emit(self.channel_eq)
 
     def _show_iem_curve(self) -> None:
-        """Redrawn (coalesced) as the resonance moves; so is Auto's upper treble, which moves with it."""
-        self._sync_upper_value()
+        """Redrawn (coalesced) as the resonance moves. (Auto's upper treble follows with the live rebuild.)"""
         model = self.model
         if self.session.target is not None:
             # same 1 kHz alignment as the matched curves

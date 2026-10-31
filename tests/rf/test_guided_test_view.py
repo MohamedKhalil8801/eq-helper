@@ -456,7 +456,8 @@ def test_full_flow_finds_both_ears(qtbot, panel, view, clock):
     with qtbot.waitSignal(panel.eqChanged, timeout=10000):
         pass
     assert panel.channel_eq.channels["L"].peak_hz == pytest.approx(round(results[0][1]))
-    assert panel.ctx.settings.get("tunings")[panel.loaded.calibration_id]["primary"]["R"] == round(results[1][1])
+    qtbot.waitUntil(lambda: panel.ctx.settings.get("tunings")[panel.loaded.calibration_id]["primary"]["R"]
+                    == round(results[1][1]), timeout=3000)  # written once the moving stops
 
 
 def test_eq_changes_wait_until_the_test_closes(qtbot, panel, view, clock):
