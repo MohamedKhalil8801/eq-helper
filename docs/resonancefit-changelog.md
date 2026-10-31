@@ -3,7 +3,7 @@
 Each release's section is copied into its notes on the releases page. Add a
 `## X.Y.Z` section here before tagging `rf-vX.Y.Z`.
 
-## Unreleased
+## 0.4.0
 
 - Find it for me: every card in a round now plays at the same loudness, for whichever sound you
   use. Before, cards could differ by up to about 6 dB, and the louder one tends to sound better.
@@ -43,6 +43,10 @@ Each release's section is copied into its notes on the releases page. Add a
   read-only folder, macOS running it from Downloads, Linux not as an AppImage) it shows the download
   link as before. Updating from 0.3.0 still uses the link once: automatic updates start with the
   version after this one.
+- Linux: the AppImage opens on systems with AppImageLauncher, which couldn't start 0.3.0
+  ("Cannot mount AppImage"). AppImageLauncher now leaves it alone, so it also stays next to your
+  Calibrations folder instead of being moved to `~/Applications`.
+- Linux: the X11 libraries the window needs are included, for systems that don't have them.
 
 ## 0.3.0
 
