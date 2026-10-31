@@ -133,7 +133,7 @@ at about twice that frequency). For each ear:
    That's common and nothing is lost: what you can barely hear matters little for your EQ.
 2. **Smoothness check**, a few rounds of three cards around your pick, closer together each time.
 
-A found upper treble unlocks the **Upper treble** slider with that value.
+A found upper treble switches the **Upper treble** slider to **Manual** with that value.
 
 Keys: **1**–**8** pick and play a card, **P** play/pause, **Enter** answers for the selected card, **S**
 is *About the same* / *Can't tell them apart*, **X** rules the selected card out (in the overview),
@@ -173,12 +173,13 @@ tells you so: the EQ there is an estimate, which is fine if it sounds right.
 level-matched, so you compare tone, not loudness. Use a tone, a sweep or something you know well (see
 *Test audio*). It only changes what you hear in the app, not Equalizer APO.
 
-**Upper treble (advanced, optional).** The **Upper treble** slider under the resonance slider is
-**🔒 Locked** at first: it shows your calibration's value and the EQ keeps it as calibrated. Unlock it
-only if you hear a second, higher peak (above about 10.5 kHz) that still bothers you: a pink **Upper**
-line appears on the graph, and the same sound buttons play at whichever one you last moved (or pick
-**Resonance** or **Upper treble** next to them). Move it to where you hear the peak, per ear. **Reset**
-puts the selected ear back; locking it again puts both back as calibrated.
+**Upper treble (advanced, optional).** The **Upper treble** slider under the resonance slider starts on
+**Auto**: it shows where your calibration puts the upper peak for your resonance, so it moves as you move
+the resonance, and the EQ keeps it as calibrated. Switch to **Manual** only if you hear a second, higher
+peak (above about 10.5 kHz) that still bothers you: a pink **Upper** line appears on the graph, and the
+same sound buttons play at whichever one you last moved (or pick **Resonance** or **Upper treble** next
+to them). Move it to where you hear the peak, per ear. **Reset** puts the selected ear back; **Auto**
+puts both back as calibrated.
 
 ## Listen & save
 
@@ -232,7 +233,8 @@ pre-filled with the rate your output device runs at.
   (any recording you know well) or web links. **+ Add audio files…** and **Add link…** sit in the middle
   of the list while it's empty. Files play in the app
   through your EQ with the **⏻ EQ** switch. Formats the app can't play open in your system's player.
-- **Settings:** output device, Equalizer APO, the calibrations and data folders, the walkthrough, and
+- **Settings:** **Appearance** (System, Light or Dark; System follows your computer), output device,
+  Equalizer APO, the calibrations and data folders, the walkthrough, and
   **Version and updates** (below).
 - **About:** your calibration sheet, contact and licences.
 

@@ -147,3 +147,16 @@ def test_the_guided_test_has_the_window_to_itself(win):
     assert win.sound_bar.isVisibleTo(win)  # output, volume and Stop all sound stay
     win.tuning.guided.leave_for_manual()
     assert not win.tuning.guided_active and all(w.isVisibleTo(win) for w in others)
+
+
+def test_appearance_light_dark_or_system(win):
+    page = win.settings_page
+    assert page.theme_buttons["system"].isChecked()
+    page.theme_buttons["dark"].click()
+    assert win.ctx.settings.get("theme") == "dark" and page.theme_buttons["dark"].isChecked()
+    assert not page.theme_buttons["system"].isChecked()
+    from resonancefit.ui.common import is_branded
+    from PySide6.QtWidgets import QApplication
+    assert is_branded(QApplication.instance().palette())  # the app's accent, in either scheme
+    page.theme_buttons["system"].click()
+    assert win.ctx.settings.get("theme") == "system"

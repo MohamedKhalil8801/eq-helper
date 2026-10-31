@@ -38,7 +38,7 @@ from ..library import LibraryEntry
 from ..os_integration import FileAssociation
 from ..paths import is_translocated
 from .about_page import AboutPage
-from .common import Worker, brand_palette, build_style, is_branded, side_name, tr
+from .common import Worker, apply_theme, brand_palette, build_style, is_branded, side_name, tr
 from .export_flow import PREDICTED_APP_ID, ExportFlow, ExportJob
 from .header_card import HeaderCard, calibration_label
 from .history_panel import HistoryPanel, describe_entry, entry_name
@@ -122,6 +122,7 @@ class MainWindow(QMainWindow):
             ctx.paths.platform, ctx.branding, ICON)
         self.setWindowTitle(ctx.branding.title)
         self.setAcceptDrops(True)
+        apply_theme(ctx.settings.get("theme"))
         self._brand()
         self.resize(1180, 860)
 

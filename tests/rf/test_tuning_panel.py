@@ -98,14 +98,22 @@ def test_plain_warning_outside_measured_range(panel):
     assert "estimate" in panel.range_warning.text().lower()
 
 
-def test_upper_resonance_shown_locked_then_unlocked_per_side_and_reset(qtbot, panel):
-    """The upper treble row is always there, locked (as calibrated) until unlocked."""
+def test_upper_resonance_auto_follows_the_resonance_manual_is_per_side_and_reset(qtbot, panel):
+    """The upper treble row is always there: Auto (as calibrated) until switched to Manual."""
     assert panel.upper.isVisibleTo(panel) and not panel.upper_slider.isEnabled()
-    assert not panel.upper_lock.isChecked() and not panel.session.upper_enabled
-    assert "Locked" in panel.upper_lock.text() and not panel.reset_upper.isEnabled()
+    assert panel.upper_auto.isChecked() and not panel.upper_manual.isChecked()
+    assert not panel.session.upper_enabled and not panel.reset_upper.isEnabled()
     assert not panel.graph.upper_marker.isVisible()
-    panel.upper_lock.click()
-    assert panel.upper_slider.isEnabled() and "Unlocked" in panel.upper_lock.text()
+    panel.ears.setCurrentIndex(0)
+    panel._upper_prediction = lambda side, hz: 1.9 * hz  # this test calibration has no upper peak
+    shown = []
+    for hz in (6500, 8500):  # Auto shows the calibration's upper treble for the resonance: it moves with it
+        panel.peak_slider.setValue(hz)
+        qtbot.waitUntil(lambda: panel.upper_slider.value() == panel._predicted_upper(), timeout=2000)
+        shown.append(panel.upper_slider.value())
+    assert shown[0] != shown[1]
+    panel.upper_manual.click()
+    assert panel.upper_slider.isEnabled() and panel.session.upper_enabled
     panel.ears.setCurrentIndex(0)
     panel.upper_slider.setValue(15000)
     assert panel.session.upper == {"L": 15000}
@@ -113,7 +121,7 @@ def test_upper_resonance_shown_locked_then_unlocked_per_side_and_reset(qtbot, pa
     panel.reset_upper.click()
     assert panel.session.upper == {}
     with qtbot.waitSignal(panel.eqChanged, timeout=5000):
-        panel.upper_lock.setChecked(False)
+        panel.upper_auto.setChecked(True)
     assert not panel.session.upper_enabled
 
 
@@ -176,7 +184,7 @@ def test_centre_plays_in_both_ears_and_moves_both(qtbot, panel):
     panel.peak_slider.setValue(8100)
     assert panel.session.primary == {"L": 7300, "R": 8100}
     panel.ears.setCurrentIndex(2)
-    panel.upper_lock.click()
+    panel.upper_manual.click()
     panel.upper_slider.setValue(14500)
     assert panel.session.upper == {"L": 14500, "R": 14500}
     panel.audio.stop_all()

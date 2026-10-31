@@ -268,24 +268,31 @@ class TuningPanel(QWidget):
                                   PERSONAL_TREBLE_RANGE, 50, 250)
         self.upper.valueChanged.connect(self._upper_moved)
         self.upper_slider, self.upper_spin = self.upper.slider, self.upper.spin
-        self.upper_lock = QPushButton()
-        self.upper_lock.setObjectName("lock")
-        self.upper_lock.setCheckable(True)  # checked = unlocked: the listener sets the upper treble
-        self.upper_lock.setAccessibleName(tr("Adjust the upper treble"))
-        self.upper_lock.setToolTip(tr("Locked keeps the upper treble as calibrated. Unlock it only if you hear "
-                                      "a second, higher peak that still bothers you, then find it the same way."))
-        self.upper_lock.toggled.connect(self._set_upper_enabled)
-        self.upper.extra.addWidget(self.upper_lock)
+        # Auto: the calibration's upper treble, which moves with the resonance; Manual: the listener sets it
+        self.upper_auto = QPushButton(tr("Auto"))
+        self.upper_auto.setToolTip(tr("The upper treble as your calibration predicts it for your resonance. "
+                                      "It moves with the resonance slider."))
+        self.upper_manual = QPushButton(tr("Manual"))
+        self.upper_manual.setAccessibleName(tr("Set the upper treble by hand"))
+        self.upper_manual.setToolTip(tr("Only if you hear a second, higher peak that still bothers you: set it "
+                                        "yourself, per ear, the same way as the resonance."))
+        self._upper_mode = QButtonGroup(self)
+        for button in (self.upper_auto, self.upper_manual):
+            button.setObjectName("segment")
+            button.setCheckable(True)
+            self._upper_mode.addButton(button)
+            self.upper.extra.addWidget(button)
+        self.upper.extra.setSpacing(0)  # the two read as one switch
+        self.upper_auto.setChecked(True)
+        self.upper_manual.toggled.connect(self._set_upper_enabled)
         self.reset_upper = QPushButton(tr("Reset"))
         self.reset_upper.setToolTip(tr("Put this ear's upper treble back as calibrated."))
         self.reset_upper.clicked.connect(self._reset_upper)
+        self.upper.extra.addSpacing(6)
         self.upper.extra.addWidget(self.reset_upper)
-        self._sync_lock_text(False)
-        self.upper_lock.setMinimumWidth(max(self.upper_lock.fontMetrics().horizontalAdvance(t)
-                                            for t in ("🔓 " + tr("Unlocked"), "🔒 " + tr("Locked"))) + 28)
         self._reset_space = QWidget()  # keeps both sliders the same length
-        self._reset_space.setFixedWidth(self.upper_lock.minimumWidth() + self.reset_upper.sizeHint().width()
-                                        + max(self.upper.extra.spacing(), 6))
+        self._reset_space.setFixedWidth(self.upper_auto.sizeHint().width() + self.upper_manual.sizeHint().width()
+                                        + 6 + self.reset_upper.sizeHint().width())
         self.primary.extra.addWidget(self._reset_space)
         rows.addWidget(self.upper)
 
@@ -379,9 +386,6 @@ class TuningPanel(QWidget):
             self.power_button.setChecked(on)
             self.power_button.blockSignals(False)
         self._power_toggled(on, emit=False)
-
-    def _sync_lock_text(self, unlocked: bool) -> None:
-        self.upper_lock.setText(("🔓 " + tr("Unlocked")) if unlocked else ("🔒 " + tr("Locked")))
 
     def set_other_eqs(self, found: list[str], apo_on: bool, app: str = "Equalizer APO") -> None:
         """Warn about other EQs: any EQ already running is heard on top of this one.
@@ -891,15 +895,22 @@ class TuningPanel(QWidget):
     def _sync_upper_controls(self) -> None:
         enabled = self.session.upper_enabled
         self._syncing = True
-        self.upper_lock.setChecked(enabled)
-        hz = int(round(self.session.upper.get(self.side) or self._predicted_upper()))
-        self.upper.set_value(hz)
+        (self.upper_manual if enabled else self.upper_auto).setChecked(True)
         self._syncing = False
-        self._sync_lock_text(enabled)
         for widget in (self.upper.slider, self.upper.spin, self.reset_upper):
             widget.setEnabled(enabled)
-        self.graph.set_upper_marker(hz if enabled else None)
+        self._sync_upper_value()
         self._sync_focus_widgets()
+
+    def _sync_upper_value(self) -> None:
+        """The upper slider shows the value in use: set by hand (Manual), else the calibration's, which
+        follows the resonance."""
+        enabled = self.session.upper_enabled
+        own = self.session.upper.get(self.side) if enabled else None
+        hz = int(round(own or self._predicted_upper()))
+        if hz != self.upper.value():
+            self.upper.set_value(hz)
+        self.graph.set_upper_marker(hz if enabled else None)
 
     # ── EQ and graph ───────────────────────────────────────────────────────
     def _regenerate_live(self) -> None:
@@ -971,6 +982,8 @@ class TuningPanel(QWidget):
         self.eqChanged.emit(self.channel_eq)
 
     def _show_iem_curve(self) -> None:
+        """Redrawn (coalesced) as the resonance moves; so is Auto's upper treble, which moves with it."""
+        self._sync_upper_value()
         model = self.model
         if self.session.target is not None:
             # same 1 kHz alignment as the matched curves

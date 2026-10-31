@@ -11,12 +11,13 @@ Each release's section is copied into its notes on the releases page. Add a
   - The calibration list matches your `Calibrations` folder: replaced or deleted files leave it.
     **Remove…** takes any calibration out of the app.
   - The target sits under the calibration at the top; its own panel is gone.
-  - The upper treble slider is always shown, locked as calibrated until you unlock it; its own panel
-    is gone.
+  - The upper treble slider is always shown. On **Auto** it shows your calibration's upper treble,
+    which moves with your resonance; **Manual** lets you set it. Its own panel is gone.
   - **Centre** next to Left and Right: sound in both ears, and the sliders move both together.
   - The EQ on/off switch is a **⏻ EQ** power button at the top right of Find your resonance.
   - **〰 Full sweep** joins the sound buttons; the Sound tools tab is gone. The "Where can I use my EQ?"
     tab is gone too: **Export for my EQ app…** shows the same apps.
+  - **Settings → Appearance**: System, Light or Dark.
   - One accent colour throughout (your system's accent colour no longer shows up, e.g. in History),
     and no more blue outlines around the focused control.
 

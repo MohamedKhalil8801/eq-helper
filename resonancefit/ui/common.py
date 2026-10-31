@@ -7,9 +7,9 @@ accent colours used for curves are chosen to stay readable on either.
 
 from __future__ import annotations
 
-from PySide6.QtCore import QCoreApplication, QObject, QThread, Signal
+from PySide6.QtCore import QCoreApplication, QObject, Qt, QThread, Signal
 from PySide6.QtGui import QColor, QPalette
-from PySide6.QtWidgets import QFrame, QLabel, QSizePolicy, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QApplication, QFrame, QLabel, QSizePolicy, QVBoxLayout, QWidget
 
 CONTEXT = "CustomerApp"
 
@@ -128,6 +128,18 @@ def brand_palette(palette: QPalette) -> QPalette:
 
 def is_branded(palette: QPalette) -> bool:
     return palette.color(QPalette.Highlight).name() == theme_colors(palette)["primary"].lower()
+
+
+THEMES = {"system": Qt.ColorScheme.Unknown, "light": Qt.ColorScheme.Light, "dark": Qt.ColorScheme.Dark}
+
+
+def apply_theme(name: str | None) -> None:
+    """Light, dark, or follow the system (``"system"``, the default), with the app's accent."""
+    app = QApplication.instance()
+    if app is None:
+        return
+    app.styleHints().setColorScheme(THEMES.get(name or "system", Qt.ColorScheme.Unknown))
+    app.setPalette(brand_palette(app.palette()))  # the scheme's colours, but our accent (not the old one)
 
 
 def build_style(palette: QPalette) -> str:

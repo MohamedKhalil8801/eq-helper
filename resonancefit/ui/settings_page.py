@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import QCheckBox, QHBoxLayout, QLabel, QMessageBox, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QButtonGroup, QCheckBox, QHBoxLayout, QLabel, QMessageBox, QPushButton, QVBoxLayout, QWidget,
+)
 
 from ..apo_apply import ApoUnwritable
 from ..easyeffects_apply import EasyEffectsProblem
 from ..version import app_version
-from .common import Card, hint, tr
+from .common import Card, apply_theme, hint, tr
 from .sound_bar import OutputPicker
 
 
@@ -32,6 +34,25 @@ class SettingsPage(QWidget):
         out.body.addWidget(self.output)
         out.body.addWidget(hint(tr("Choose the output your IEMs are plugged into. The app remembers it.")))
         layout.addWidget(out)
+
+        look = Card(tr("Appearance"))
+        row = QHBoxLayout()
+        self.theme_buttons: dict[str, QPushButton] = {}
+        group = QButtonGroup(self)
+        current = ctx.settings.get("theme") or "system"
+        for name, label in (("system", tr("System")), ("light", tr("Light")), ("dark", tr("Dark"))):
+            button = QPushButton(label)
+            button.setObjectName("segment")
+            button.setCheckable(True)
+            button.setChecked(name == current)
+            button.clicked.connect(lambda _=False, n=name: self.set_theme(n))
+            group.addButton(button)
+            row.addWidget(button)
+            self.theme_buttons[name] = button
+        row.addStretch(1)
+        look.body.addLayout(row)
+        look.body.addWidget(hint(tr("System follows your computer's light or dark mode.")))
+        layout.addWidget(look)
 
         apo_card = Card(tr(apo.name))
         self.apo_status = QLabel()
@@ -111,6 +132,11 @@ class SettingsPage(QWidget):
         layout.addStretch(1)
         self.refresh_devices()
         self.refresh_apo()
+
+    def set_theme(self, name: str) -> None:
+        self.ctx.settings.set("theme", name)
+        self.theme_buttons[name].setChecked(True)
+        apply_theme(name)
 
     # ── updates ────────────────────────────────────────────────────────────
     def set_checking(self) -> None:

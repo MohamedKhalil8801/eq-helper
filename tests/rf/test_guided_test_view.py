@@ -528,7 +528,7 @@ def test_optional_upper_treble_after_both_ears(qtbot, panel, view, clock):
     for side, hz in upper:
         assert abs(hz / (predicted[side] * UPPER_OFF) - 1) < 0.03
         assert panel.session.upper[side] == pytest.approx(round(hz))
-    assert panel.session.upper_enabled and panel.upper_lock.isChecked()
+    assert panel.session.upper_enabled and panel.upper_manual.isChecked()
     assert view.next_button.text() == "Done"
     view.next_button.click()
     assert not panel.guided_active
