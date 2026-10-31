@@ -58,6 +58,12 @@ if sys.platform.startswith("linux"):
         binaries.append((os.path.realpath(found[0]), "."))
     elif os.environ.get("RF_REQUIRE_AUDIO"):
         raise SystemExit("libportaudio.so.2 not found: install libportaudio2 before building")
+    # Qt's X11 plugin needs these; PyInstaller leaves them to the system, where minimal installs
+    # (WSL, some containers) lack them and the window can't open. Bundle them like the rest of xcb.
+    for lib in ("libxcb-icccm.so.4", "libxcb-keysyms.so.1", "libxcb-shape.so.0"):
+        found = sorted(glob.glob(f"/usr/lib/*/{lib}") + glob.glob(f"/usr/lib64/{lib}"))
+        if found:
+            binaries.append((os.path.realpath(found[0]), "."))
 
 icon = {"win32": "icon.ico", "darwin": "icon.icns"}.get(sys.platform)
 icon = str(ROOT / "resonancefit" / "assets" / icon) if icon else None

@@ -37,25 +37,31 @@ def test_checksums_cover_every_release_file(tmp_path):
     assert sums == [f"{hashlib.sha256(b'one').hexdigest()}  a.zip", f"{hashlib.sha256(b'two').hexdigest()}  b.dmg"]
 
 
-def _fake_appimage(path, compression_id):
-    """A 64-bit ELF header whose section table ends at 4096, then a squashfs superblock."""
-    import struct
-    head = bytearray(64)
-    head[:5] = b"\x7fELF\x02"
-    struct.pack_into("<Q", head, 0x28, 4096 - 64 * 3)
-    struct.pack_into("<HH", head, 0x3A, 64, 3)
-    data = bytes(head).ljust(4096, b"\0") + b"hsqs" + bytes(16) + struct.pack("<H", compression_id) + bytes(64)
-    path.write_bytes(data)
-    return path
-
-
-def test_appimage_compression_is_read_from_the_squashfs(tmp_path):
-    assert pr.appimage_compression(_fake_appimage(tmp_path / "a.AppImage", 1)) == "gzip"
-    assert pr.appimage_compression(_fake_appimage(tmp_path / "b.AppImage", 6)) == "zstd"
-    (tmp_path / "c.AppImage").write_bytes(b"not an elf" * 10)
+def test_appimage_marker_is_blanked_so_appimagelauncher_leaves_it_alone(tmp_path):
+    image = tmp_path / "a.AppImage"
+    image.write_bytes(b"\x7fELF\x02\x01\x01\x00AI\x02" + bytes(100))
+    pr.unmark_appimage(image)
+    data = image.read_bytes()
+    assert data[:8] == b"\x7fELF\x02\x01\x01\x00" and data[8:11] == b"\0\0\0" and len(data) == 111
+    pr.unmark_appimage(image)  # already blank: fine
+    (tmp_path / "b").write_bytes(b"not an elf" * 10)
     with pytest.raises(SystemExit):
-        pr.appimage_compression(tmp_path / "c.AppImage")
+        pr.unmark_appimage(tmp_path / "b")
 
+
+def test_appdir_is_made_readable_by_everyone(tmp_path):
+    import os
+    import stat
+    if os.name == "nt":
+        pytest.skip("POSIX modes")
+    private = tmp_path / "AppDir" / "usr"
+    private.mkdir(parents=True)
+    (private / "lib.so").write_text("x")
+    private.chmod(0o700)
+    (private / "lib.so").chmod(0o600)
+    pr.readable_by_everyone(tmp_path / "AppDir")
+    assert stat.S_IMODE(private.stat().st_mode) == 0o755
+    assert stat.S_IMODE((private / "lib.so").stat().st_mode) == 0o644
 
 def test_appimage_tells_appimagelauncher_not_to_move_it():
     from eq_helper.calibration.branding import load_branding

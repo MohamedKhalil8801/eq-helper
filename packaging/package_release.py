@@ -9,11 +9,14 @@ Release names (eq_helper/admin/build_cache.py relies on them):
 ``<Product>-<version>-macos.dmg`` (the .app plus an Applications link) and
 ``<Product>-<version>-linux.AppImage`` (with .desktop entry and .rescal MIME type).
 
-The AppImage's filesystem is gzip-compressed, not appimagetool's default zstd:
-AppImageLauncher (which many Linux users install, and which opens every
-AppImage itself) can't read zstd ("doesn't look like a squashfs image"). Its
-desktop entry also says ``X-AppImage-Integrate=false``, so AppImageLauncher
-doesn't move the file away from the Calibrations and Targets folders next to it.
+AppImageLauncher, which many Linux users install, takes over starting every
+file marked as an AppImage ("AI\\x02" at byte 8). Version 2.2.0, the last stable
+one, can't start AppImages built with today's runtime ("Can't open squashfs
+image: Bad address"). Its first-launch dialog also moves the file to
+~/Applications, away from the Calibrations and Targets folders next to it. So
+the marker is blanked: the system then starts the file like any other program,
+and its own runtime mounts it as usual. Its desktop entry also says
+``X-AppImage-Integrate=false``, for tools that look inside anyway.
 """
 
 from __future__ import annotations
@@ -24,7 +27,6 @@ import json
 import os
 import shutil
 import stat
-import struct
 import subprocess
 import sys
 import zipfile
@@ -83,24 +85,33 @@ def package_macos(dist: Path, out: Path, version: str) -> Path:
     return target
 
 
-SQUASHFS_COMPRESSION = {1: "gzip", 2: "lzma", 3: "lzo", 4: "xz", 5: "lz4", 6: "zstd"}
-APPIMAGE_COMPRESSION = "gzip"
+APPIMAGE_MARKER_OFFSET = 8
+APPIMAGE_MARKER = b"AI\x02"  # type 2 AppImage
 
 
-def appimage_compression(path: Path) -> str:
-    """How an AppImage's filesystem is compressed: the squashfs starts where the ELF runtime ends."""
-    with open(path, "rb") as f:
-        head = f.read(64)
-        if head[:4] != b"\x7fELF" or head[4] != 2:
-            raise SystemExit(f"{path} isn't a 64-bit AppImage")
-        shoff, = struct.unpack_from("<Q", head, 0x28)
-        shentsize, shnum = struct.unpack_from("<HH", head, 0x3A)
-        f.seek(shoff + shentsize * shnum)
-        superblock = f.read(22)
-    if superblock[:4] != b"hsqs":
-        raise SystemExit(f"{path} has no squashfs after its runtime")
-    compression, = struct.unpack_from("<H", superblock, 20)
-    return SQUASHFS_COMPRESSION.get(compression, str(compression))
+def unmark_appimage(path: Path) -> None:
+    """Blank the AppImage marker so AppImageLauncher leaves the file alone (see the top)."""
+    with open(path, "r+b") as f:
+        if f.read(4) != b"\x7fELF":
+            raise SystemExit(f"{path} isn't an AppImage")
+        f.seek(APPIMAGE_MARKER_OFFSET)
+        marker = f.read(len(APPIMAGE_MARKER))
+        if marker not in (APPIMAGE_MARKER, bytes(len(APPIMAGE_MARKER))):
+            raise SystemExit(f"{path} has an unexpected AppImage marker {marker!r}")
+        f.seek(APPIMAGE_MARKER_OFFSET)
+        f.write(bytes(len(APPIMAGE_MARKER)))
+
+
+def readable_by_everyone(folder: Path) -> None:
+    """chmod -R a+rX: appimagetool refuses folders other users couldn't open."""
+    for path in [folder, *folder.rglob("*")]:
+        if path.is_symlink():
+            continue
+        mode = path.stat().st_mode
+        extra = stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH
+        if path.is_dir() or mode & stat.S_IXUSR:
+            extra |= stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
+        path.chmod(mode | extra)
 
 
 def appimage_desktop_entry(branding, ident: str) -> str:
@@ -137,13 +148,11 @@ def package_linux(dist: Path, out: Path, version: str, appimagetool: str) -> Pat
     target = out / release_name("linux", version)
     target.unlink(missing_ok=True)
     env = {**os.environ, "ARCH": os.environ.get("ARCH", "x86_64")}
-    subprocess.run([appimagetool, "--appimage-extract-and-run", "--no-appstream", "--comp", APPIMAGE_COMPRESSION,
-                    str(appdir), str(target)], check=True, env=env)
+    readable_by_everyone(appdir)
+    subprocess.run([appimagetool, "--appimage-extract-and-run", "--no-appstream", str(appdir), str(target)],
+                   check=True, env=env)
     shutil.rmtree(appdir, ignore_errors=True)
-    found = appimage_compression(target)
-    if found != APPIMAGE_COMPRESSION:
-        raise SystemExit(f"{target.name} is {found}-compressed; AppImageLauncher can only open "
-                         f"{APPIMAGE_COMPRESSION}")
+    unmark_appimage(target)
     return target
 
 
