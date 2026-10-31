@@ -100,9 +100,9 @@ def test_space_stops_sound_but_types_in_text_fields(qtbot, tmp_path, shown):
     w.tuning.tone_button.setFocus()
     qtbot.keyClick(w.tuning.tone_button, Qt.Key_Space)
     assert w.audio.engine.state.snapshot().mode == Mode.IDLE
-    w.listen.note.setFocus()
-    qtbot.keyClicks(w.listen.note, "a b")
-    assert w.listen.note.text() == "a b"
+    w.tunings.note.setFocus()
+    qtbot.keyClicks(w.tunings.note, "a b")
+    assert w.tunings.note.text() == "a b"
 
 
 @pytest.mark.parametrize("dark", [False, True])
@@ -114,7 +114,11 @@ def test_hint_and_warning_text_meet_contrast(dark):
     pal.setColor(QPalette.Text, text)
     pal.setColor(QPalette.WindowText, text)
     colors = theme_colors(pal)
-    for key in ("hint", "warning", "primary_text_on_primary"):
-        fg = colors[key]
-        bg = colors["primary"] if key == "primary_text_on_primary" else base.name()
-        assert contrast_ratio(fg, bg) >= 4.5, (key, fg, bg)
+    assert colors["dark"] == dark
+    for surface in ("bg", "surface", "raised", "control"):  # text: 4.5:1 on every surface it sits on
+        for key in ("text", "hint", "accent", "warning"):
+            assert contrast_ratio(colors[key], colors[surface]) >= 4.5, (key, surface)
+    assert contrast_ratio(colors["on_accent"], colors["accent"]) >= 4.5
+    for key in ("border", "target", "corrected", "upper", "focus"):  # edges and graph lines: 3:1
+        for surface in ("bg", "surface", "control"):
+            assert contrast_ratio(colors[key], colors[surface]) >= 3.0, (key, surface)

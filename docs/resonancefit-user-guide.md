@@ -43,18 +43,22 @@ and asks you to turn your volume down before the first sound. **Press Space at a
 sound.** The bar at the bottom of the window always shows the **Output** you're playing on, the
 **Volume** and **Stop all sound**.
 
-## Calibration and target
+## The bar at the top
 
-The top of the window shows your IEM, who it was calibrated for and the accessories it was measured
-with. On the right:
+The bar at the top shows your IEM, who it was calibrated for and the accessories it was measured with
+(point at the IEM's name for the coupler it was measured on). Amber always means *your ear*: your
+resonance, the ear you're on, the card you chose.
 
-- **Calibration**: which of your calibrations you're tuning. The list is the calibrations in your
+- **Calibration** (next to the IEM's name): which of your calibrations you're tuning. The list is the calibrations in your
   `Calibrations` folder (plus any you opened from elsewhere): when your tuner sends a new calibration that
   replaces an old file, or you delete a file there, the old one leaves the list at the next launch.
-  **Remove…** takes the selected one out of the app; its file isn't touched, and opening it again
-  brings it back with its history.
+  **⋯ → Remove this calibration…** takes the selected one out of the app; its file isn't touched, and
+  opening it again brings it back with its tunings.
 - **Target**: the sound you want. The one marked **(default)** was chosen for you by your tuner. You can
-  try any other, or **Import…** a target curve (TXT or CSV, frequency and level) you found elsewhere.
+  try any other, or **⋯ → Import a target…** (TXT or CSV, frequency and level) you found elsewhere.
+- **EQ on / off** (the switch with the light, or **E**): switches the EQ in the app on and off so you can
+  compare. It's level-matched, so you compare tone, not loudness. It only changes what you hear in the
+  app, not Equalizer APO.
 
 ## Find your resonance
 
@@ -71,7 +75,7 @@ so switching it on or off in Equalizer APO itself shows here within a few second
 Press **Find it for me (a few minutes)**. A short screen reminds you to wear both IEMs as usual, keep
 the volume low and turn other EQs off; press **Start the test**. While the test runs it has the window to
 itself: only the output, volume and **Stop all sound** stay at the bottom; the calibration and target,
-the tabs, the **EQ** button, **Listen & save** and **History** come back when it ends. Then, for the left ear and then the
+the tabs and **Tunings** come back when it ends. Then, for the left ear and then the
 right (one ear only for a calibration made for both ears at once), a **smoothness check** in two parts.
 Every card plays the same sound through a slightly different EQ, each placing your resonance a little
 differently; you pick the one whose treble sounds smoothest.
@@ -135,7 +139,7 @@ at about twice that frequency). For each ear:
 
 A found upper treble switches the **Upper treble** slider to **Manual** with that value.
 
-Keys: **1**–**8** pick and play a card, **P** play/pause, **Enter** answers for the selected card, **S**
+Keys: **1**–**8** pick and play a card, **P** play/pause, **Enter** always confirms the selected card (whatever has focus), **S**
 is *About the same* / *Can't tell them apart*, **X** rules the selected card out (in the overview),
 **N** / **G** / **F** / **W** pink, grey or focused noise, or the sweep in the smoothness check,
 **Backspace** goes back, **Space** stops all sound.
@@ -169,9 +173,10 @@ The graph shows **Your IEM** (what the calibration predicts for your setting), t
 tone at that frequency. If you land outside what was measured for your IEMs, the app
 tells you so: the EQ there is an estimate, which is fine if it sounds right.
 
-**⏻ EQ on / off** (top right of the panel) switches the EQ in the app on and off so you can compare. It's
-level-matched, so you compare tone, not loudness. Use a tone, a sweep or something you know well (see
-*Test audio*). It only changes what you hear in the app, not Equalizer APO.
+Both ears' results are always at the top of the panel: the ear you're on in amber, the other beside it.
+Switch ears with **Left**, **Right** and **Centre** next to them (or **L**, **R**, **C**). Every sound
+has a key: **T** tone, **S** sweep around it, **F** full sweep, **P** pink noise, **G** grey noise; the
+list is under the sliders.
 
 **Upper treble (advanced, optional).** The **Upper treble** slider under the resonance slider starts on
 **Auto**: it shows where your calibration puts the upper peak for your resonance, so it moves as you move
@@ -181,32 +186,33 @@ same sound buttons play at whichever one you last moved (or pick **Resonance** o
 to them). Move it to where you hear the peak, per ear. **Reset** puts the selected ear back; **Auto**
 puts both back as calibrated.
 
-## Listen & save
+## Tunings
 
-- **Save tuning:** keeps your current choices in **History**, with an optional name (for example
-  “Bright tips”). Saving a tuning that's already there just renames it (if you typed a name).
+The panel on the right lists your saved tunings, each on two lines you can read at a glance: its name,
+then `L 8.0k · R 7.4k · PEQdB Diamond` (the resonances and target). The tuning applied to Equalizer APO
+is tagged **in use**. Point at one for everything else (when it was saved, its files).
+
+- **Click a tuning to switch to it**: every control goes back exactly as it was, even if its target file
+  is gone.
+- Moving anything never changes a saved tuning. What you have instead appears at the top in amber,
+  **Current · unsaved**. While you try saved tunings it stays there as **Last unsaved**: click it to go
+  back.
+- **Save** keeps the tuning you're hearing, with a name if you type one (for example “Bright tips”);
+  without one it's named from its target. Saving a tuning that's already there just renames it.
+- Right-click a saved tuning (or press F2 / Delete) to rename or delete it.
 - **Export for my EQ app…:** makes the files for the app you listen with (below).
 - **Apply to Equalizer APO** (Windows, when Equalizer APO is installed): makes this tuning your
   computer's EQ for everything you play. Choose your headphone output once. The app keeps one entry,
   “Resonance EQ – your IEM”, in Equalizer APO and replaces it each time you apply. It's a convolution
   filter with a file for each sample rate, so it keeps working if your device's rate changes (any
-  unusual rate gets the same EQ as GraphicEQ). **Switch to:** applies any saved tuning, listed by name; the one applied now is marked
-  **✓ in use**. Switching never adds entries. To turn it off,
+  unusual rate gets the same EQ as GraphicEQ). To put a saved tuning there, click it, then Apply; the one
+  applied is tagged **in use**, and applying or exporting keeps it in the list. To turn it off,
   use **Settings → Turn the EQ off in Equalizer APO**. If Peace is installed, turn its EQ off: it's a
   front-end for Equalizer APO and you'd hear both.
 - **Apply to EasyEffects** (Linux, when EasyEffects is installed): the same for EasyEffects. The app
   writes the preset “Resonance EQ - your IEM” (one Convolver) and loads it. Loading a preset replaces
   the effects running in EasyEffects; pick your own preset there to go back. If EasyEffects isn't
   running, start it and choose that preset. **Settings → Turn the EQ off in EasyEffects** bypasses it.
-
-### History
-
-Every tuning you save, export or apply is listed once, most recently used first: its name, when you
-last saved, exported or applied it, and (for a named one) its target and resonances, plus the app and
-files. Using a tuning again doesn't add a copy; it moves to the top. A tuning you didn't name is
-named from its settings, like “PEQdB Diamond · 7400 / 8300 Hz” (left / right). **Rename** gives it a
-name of your own. **Reapply** puts every control back exactly as it was, even if the target file is
-gone. Older versions listed every export and apply separately; those copies are merged once.
 
 ## Using your EQ elsewhere
 

@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import pytest
+from PySide6.QtCore import Qt
 
 from eq_helper.apo.errors import ApoWriteError
 from eq_helper.apo.presets import PresetLibrary
@@ -131,39 +132,37 @@ def win(qtbot, tmp_path):
 
 
 def test_apply_button_applies_and_records_history(win):
-    assert win.listen.apply_button.isVisibleTo(win)
-    win.listen.apply_button.click()
+    assert win.tunings.apply_button.isVisibleTo(win)
+    win.tunings.apply_button.click()
     entry = win.history.entries()[0]
     assert entry.reason == "apply" and entry.app == "equalizer-apo"
     assert win.apo.is_on()
-    assert "Headphones DAWN" in win.listen.status.text()
+    assert "Headphones DAWN" in win.tunings.status.text()
 
 
-def test_switch_between_saved_tunings_applies_them(win, qtbot):
+def test_switch_between_saved_tunings_then_apply(win, qtbot):
     t = win.tuning
     t.set_primary_hz(7200)
     t.regenerate()
-    win.listen.save_button.click()
+    win.tunings.save_button.click()
     t.set_primary_hz(8300)
     t.regenerate()
-    win.listen.save_button.click()
-    combo = win.listen.switch_combo
-    assert combo.isVisibleTo(win) and combo.count() >= 2
-    older = next(i for i in range(combo.count()) if "7200" in combo.itemText(i))
-    assert len(combo.itemText(older)) < 50 and not combo.itemText(older)[0].isdigit()  # name, not a date
-    combo.setCurrentIndex(older)
-    combo.activated.emit(older)
+    win.tunings.save_button.click()
+
+    def row(khz):
+        return next(i for i in range(win.tunings.list.count())
+                    if f"{t.side} {khz}" in win.tunings.list.item(i).text())
+    win.tunings.open_row(row("7.2k"))
     assert t.session.primary[t.side] == 7200
-    eq_file = Path(win.apo.eq_path)
-    assert "7200" in eq_file.read_text(encoding="utf-8")
+    win.tunings.apply_button.click()
+    assert "7200" in Path(win.apo.eq_path).read_text(encoding="utf-8")
     for _ in range(3):  # switching back and forth adds no entries
-        for hz in ("8300", "7200"):
-            index = next(i for i in range(combo.count()) if hz in combo.itemText(i))
-            combo.activated.emit(index)
-    assert len(win.history.entries()) == 2 and combo.count() == 2
-    in_use = [combo.itemText(i) for i in range(combo.count()) if "in use" in combo.itemText(i)]
-    assert len(in_use) == 1 and "7200" in in_use[0]
-    assert "in use" in win.history_panel.list.item(0).text().splitlines()[0]
+        for khz in ("8.3k", "7.2k"):
+            win.tunings.open_row(row(khz))
+    assert len(win.history.entries()) == 2 and win.tunings.list.count() == 2
+    tagged = [win.tunings.list.item(i) for i in range(win.tunings.list.count())
+              if win.tunings.list.item(i).data(Qt.UserRole + 3) == "in use"]
+    assert len(tagged) == 1 and "7.2k" in tagged[0].text()
 
 
 def test_unwritable_apo_shows_explanation(win, monkeypatch):
@@ -173,6 +172,6 @@ def test_unwritable_apo_shows_explanation(win, monkeypatch):
     def fail(*_a, **_k):
         raise ApoUnwritable("denied", "Give Users permission")
     monkeypatch.setattr(win.apo, "apply", fail)
-    win.listen.apply_button.click()
+    win.tunings.apply_button.click()
     assert shown and shown[0].fix == "Give Users permission"
     assert win.history.entries() == []

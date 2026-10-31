@@ -18,8 +18,20 @@ Each release's section is copied into its notes on the releases page. Add a
   - **〰 Full sweep** joins the sound buttons; the Sound tools tab is gone. The "Where can I use my EQ?"
     tab is gone too: **Export for my EQ app…** shows the same apps.
   - **Settings → Appearance**: System, Light or Dark.
-  - One accent colour throughout (your system's accent colour no longer shows up, e.g. in History),
-    and no more blue outlines around the focused control.
+- A new look, "studio gear": a near-black instrument (or a warm light version), where amber always
+  means *your ear*. Every colour meets WCAG contrast, and the guided test uses the same colours as the
+  rest of the app (your system's accent colour no longer shows up anywhere).
+- A slim bar at the top: your IEM and calibration, the target, an **EQ on/off** switch with a status
+  light, and a ⋯ menu (import a target, remove a calibration).
+- Both ears' results are always visible at the top of Find your resonance, with Left / Right / Centre
+  beside them.
+- **Tunings** replaces Listen & save and History: click a saved tuning to switch to it; moving
+  anything never changes it, but becomes **Current · unsaved**, which you can save or go back to.
+- Keys on the Tune page: T tone, S sweep around, F full sweep, P pink, G grey, E EQ on/off, L / R / C
+  ear.
+- Guided test: **Enter** always confirms the selected card, and each card shows where it sits from low
+  to high.
+- Keyboard focus shows as a neutral ring only when you use the keyboard.
 
 ## 0.3.0
 

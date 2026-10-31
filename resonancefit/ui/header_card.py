@@ -1,12 +1,18 @@
-"""Header: whose calibration this is, the IEM and accessories it was measured with."""
+"""Header: a slim bar with the IEM and its calibration, the target, the EQ switch and a ⋯ menu.
+
+One caption line under the IEM says whose calibration it is and the accessories it was measured with
+(use the same ones when you listen); the coupler and notes are in the IEM name's tooltip.
+"""
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QPixmap
-from PySide6.QtWidgets import QComboBox, QGridLayout, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtCore import QRectF, QSize, Qt, Signal
+from PySide6.QtGui import QColor, QPainter
+from PySide6.QtWidgets import (
+    QAbstractButton, QComboBox, QFrame, QHBoxLayout, QLabel, QMenu, QToolButton, QVBoxLayout, QWidget,
+)
 
-from .common import Card, chip, heading, hint, tr
+from .common import theme_colors, tr
 
 ACCESSORY_KINDS = {
     "tips": "Ear tips", "dac": "DAC / amp", "amp": "Amp", "cable": "Cable",
@@ -30,67 +36,101 @@ def calibration_label(entry) -> str:
     return f"{m.customer.name} – {m.iem.display_name} ({m.created})"
 
 
-class HeaderCard(Card):
+class PowerSwitch(QAbstractButton):
+    """The EQ's power switch, like on a piece of studio gear: a pill with a status light (amber when the EQ
+    is on) and its state in words."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setCheckable(True)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFocusPolicy(Qt.StrongFocus)
+        self.toggled.connect(lambda _on: self.update())
+
+    def sizeHint(self) -> QSize:  # noqa: N802 - Qt API
+        fm = self.fontMetrics()
+        width = max(fm.horizontalAdvance(t) for t in (tr("EQ on"), tr("EQ off"), self.text()))
+        return QSize(width + 44, max(30, fm.height() + 14))
+
+    def paintEvent(self, _event) -> None:  # noqa: N802 - Qt API
+        c = theme_colors(self.palette())
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        rect = QRectF(self.rect()).adjusted(1, 1, -1, -1)
+        radius = rect.height() / 2
+        hover = self.underMouse()
+        p.setPen(QColor(c["focus"]) if self.property("kbfocus") else Qt.NoPen)
+        p.setBrush(QColor(c["hover"] if hover else c["control"]))
+        p.drawRoundedRect(rect, radius, radius)
+        on = self.isChecked()
+        cx, cy = rect.left() + radius, rect.center().y()
+        if on:  # the light, with a soft halo
+            halo = QColor(c["accent"])
+            halo.setAlpha(60)
+            p.setPen(Qt.NoPen)
+            p.setBrush(halo)
+            p.drawEllipse(QRectF(cx - 7, cy - 7, 14, 14))
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(c["accent"] if on else c["border"]))
+        p.drawEllipse(QRectF(cx - 4, cy - 4, 8, 8))
+        p.setPen(QColor(c["text"] if on else c["hint"]))
+        font = self.font()
+        font.setWeight(font.Weight.DemiBold)
+        p.setFont(font)
+        p.drawText(rect.adjusted(radius + 12, 0, -10, 0), Qt.AlignVCenter | Qt.AlignLeft, self.text())
+
+
+class HeaderCard(QFrame):
     calibrationChosen = Signal(str)
     removeRequested = Signal(str)  # calibration id
 
     def __init__(self, branding, parent=None):
-        super().__init__(parent=parent)
-        top = QHBoxLayout()
-        left = QVBoxLayout()
-        self.iem = heading("", 1)
-        self.iem.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        left.addWidget(self.iem)
-        self.customer = QLabel()
-        self.customer.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        left.addWidget(self.customer)
-        top.addLayout(left, 1)
+        super().__init__(parent)
+        self.setObjectName("bar")
+        outer = QHBoxLayout(self)
+        outer.setContentsMargins(16, 10, 10, 10)
+        outer.setSpacing(10)
 
-        right = QVBoxLayout()
-        right.setAlignment(Qt.AlignRight | Qt.AlignTop)
-        brand_row = QHBoxLayout()
-        brand_row.addStretch(1)
-        logo = branding.logo_path
-        if logo is not None and logo.is_file():
-            pix = QPixmap(str(logo))
-            if not pix.isNull():
-                image = QLabel()
-                image.setPixmap(pix.scaledToHeight(32, Qt.SmoothTransformation))
-                brand_row.addWidget(image)
-        self.brand = QLabel(f"<b>{branding.product_name}</b> <span>{branding.byline}</span>")
-        self.brand.setTextFormat(Qt.RichText)
-        brand_row.addWidget(self.brand)
-        right.addLayout(brand_row)
-        # calibration and target, one under the other: label, choice, its button
-        self.choices = QGridLayout()
-        self.choices.setHorizontalSpacing(8)
-        self.choices.setColumnStretch(1, 1)
-        self.switcher_label = QLabel(tr("Calibration"))
-        self.choices.addWidget(self.switcher_label, 0, 0, Qt.AlignRight)
+        who = QVBoxLayout()
+        who.setSpacing(2)
+        first = QHBoxLayout()
+        first.setSpacing(10)
+        self.iem = QLabel()
+        self.iem.setObjectName("iem")
+        self.iem.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        first.addWidget(self.iem)
         self.switcher = QComboBox()
         self.switcher.setAccessibleName(tr("Choose calibration"))
-        self.switcher.setMinimumContentsLength(28)
-        self.switcher_label.setBuddy(self.switcher)
+        self.switcher.setToolTip(tr("Which of your calibrations you're tuning"))
+        self.switcher.setSizeAdjustPolicy(QComboBox.AdjustToContents)
         self.switcher.currentIndexChanged.connect(self._chosen)
-        self.choices.addWidget(self.switcher, 0, 1)
-        self.remove_button = QPushButton(tr("Remove…"))
-        self.remove_button.setToolTip(tr("Remove this calibration from the app. Its file stays where it is."))
-        self.remove_button.clicked.connect(self._remove)
-        self.choices.addWidget(self.remove_button, 0, 2)
-        choices_box = QWidget()
-        choices_box.setLayout(self.choices)
-        self.choices.setContentsMargins(0, 0, 0, 0)
-        right.addWidget(choices_box)
-        top.addLayout(right)
-        self.body.addLayout(top)
+        first.addWidget(self.switcher)
+        first.addStretch(1)
+        who.addLayout(first)
+        self.customer = QLabel()
+        self.customer.setObjectName("caption")
+        self.customer.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        who.addWidget(self.customer)
+        outer.addLayout(who, 1)
 
-        self.accessory_row = QHBoxLayout()
-        self.accessory_row.setSpacing(6)
-        self.body.addLayout(self.accessory_row)
-        self.details = hint("")
-        self.body.addWidget(self.details)
+        self.trailing = QHBoxLayout()  # target, EQ switch: added by the main window
+        self.trailing.setSpacing(8)
+        outer.addLayout(self.trailing)
+        self.more = QToolButton()
+        self.more.setText("⋯")
+        font = self.more.font()
+        font.setPointSizeF(font.pointSizeF() * 1.4)
+        self.more.setFont(font)
+        self.more.setAccessibleName(tr("More"))
+        self.more.setToolTip(tr("Import a target, remove this calibration"))
+        self.more.setPopupMode(QToolButton.InstantPopup)
+        self.menu = QMenu(self.more)
+        self.more.setMenu(self.menu)
+        outer.addWidget(self.more, 0, Qt.AlignVCenter)
+        self.remove_action = self.menu.addAction(tr("Remove this calibration…"), self._remove)
+        self.byline = f"{branding.product_name} {branding.byline}".strip()
+        self._summary: list[str] = []
         self._updating = False
-        self._chips: list[QLabel] = []
 
     # ── content ────────────────────────────────────────────────────────────
     def set_entries(self, entries, selected_id: str | None) -> None:
@@ -103,45 +143,37 @@ class HeaderCard(Card):
         self.switcher.setEnabled(len(entries) > 1)
         self._updating = False
 
-    def add_choice(self, label: QLabel, widget: QWidget, button: QWidget | None = None) -> None:
-        """Another row under the calibration (the target), in the same columns."""
-        row = self.choices.rowCount()
-        self.choices.addWidget(label, row, 0, Qt.AlignRight)
-        self.choices.addWidget(widget, row, 1)
-        if button is not None:
-            self.choices.addWidget(button, row, 2)
+    def add_trailing(self, widget: QWidget) -> None:
+        self.trailing.addWidget(widget, 0, Qt.AlignVCenter)
+
+    def add_action(self, text: str, slot):
+        """An entry in the ⋯ menu, above Remove."""
+        action = self.menu.addAction(text, slot)
+        self.menu.removeAction(action)
+        self.menu.insertAction(self.remove_action, action)
+        return action
 
     def set_manifest(self, manifest) -> None:
         self.iem.setText(manifest.iem.display_name)
         serial = f", {tr('serial')} {manifest.iem.serial}" if manifest.iem.serial else ""
-        self.customer.setText(tr("Calibrated for {name} on {date}").format(
-            name=manifest.customer.name, date=manifest.created) + serial)
-        for widget in self._chips:
-            self.accessory_row.removeWidget(widget)
-            widget.deleteLater()
-        self._chips = []
-        for acc in manifest.accessories:
-            kind = "yours" if acc.supplied_by == "customer" else "operator"
-            label = chip(f"{accessory_label(acc.kind)}: {acc.description} ({supplied_label(acc, manifest)})", kind)
-            label.setToolTip(tr("Use the same accessories when you listen: the calibration was measured with them."))
-            self.accessory_row.addWidget(label)
-            self._chips.append(label)
-        stretch = QLabel()
-        self.accessory_row.addWidget(stretch, 1)
-        self._chips.append(stretch)
-        extra = []
+        who = tr("Calibrated for {name} on {date}").format(name=manifest.customer.name,
+                                                           date=manifest.created) + serial
+        gear = [f"{accessory_label(a.kind)}: {a.description} ({supplied_label(a, manifest)})"
+                for a in manifest.accessories]
+        self.customer.setText("  ·  ".join([who, *gear]))
+        details = []
         if manifest.coupler:
-            extra.append(tr("Measured on: {coupler}").format(coupler=manifest.coupler))
+            details.append(tr("Measured on: {coupler}").format(coupler=manifest.coupler))
         if manifest.notes:
-            extra.append(manifest.notes)
-        self.details.setText("\n".join(extra))
-        self.details.setVisible(bool(extra))
+            details.append(manifest.notes)
+        tip = [tr("Use the same accessories when you listen: the calibration was measured with them."), *details]
+        self.iem.setToolTip("\n".join(tip))
+        self.customer.setToolTip("\n".join(tip))
+        self._summary = [manifest.iem.display_name, who, *gear, *details]
 
     def text_summary(self) -> str:
-        """Everything the header shows, as plain text (tests, screen readers)."""
-        parts = [self.iem.text(), self.customer.text(), self.details.text()]
-        parts += [c.text() for c in self._chips]
-        return "\n".join(p for p in parts if p)
+        """Everything the header says, as plain text (tests, screen readers)."""
+        return "\n".join(p for p in self._summary if p)
 
     def _remove(self) -> None:
         cid = self.switcher.currentData()

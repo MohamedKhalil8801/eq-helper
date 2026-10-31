@@ -123,12 +123,12 @@ def test_linux_window_applies_to_easyeffects(qtbot, tmp_path):
     w = MainWindow(ctx, start_audio=False, apo=applier)
     qtbot.addWidget(w)
     qtbot.waitUntil(lambda: w.current is not None and w.tuning.channel_eq is not None, timeout=20000)
-    assert w.listen.apply_button.isVisibleTo(w) and w.listen.apply_button.text() == "Apply to EasyEffects"
+    assert w.tunings.apply_button.isVisibleTo(w) and w.tunings.apply_button.text() == "Apply to EasyEffects"
     assert not w.settings_page.apo_change.isVisibleTo(w)        # no output to choose
-    w.listen.apply_button.click()
+    w.tunings.apply_button.click()
     entry = w.history.entries()[0]
     assert entry.reason == "apply" and entry.app == "easyeffects"
-    assert "Applied in EasyEffects" in w.listen.status.text()
+    assert "Applied in EasyEffects" in w.tunings.status.text()
     assert "twice" in w.tuning.apo_text.text() and "EasyEffects" in w.tuning.apo_title.text()
     w.tuning.apo_pause.click()
     assert not applier.is_on()

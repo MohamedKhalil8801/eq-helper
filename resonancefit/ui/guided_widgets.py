@@ -1,8 +1,8 @@
 """Painted pieces of the guided test: the stage, transport bar, option cards, answer buttons, progress.
 
-Everything is drawn with QPainter from :func:`stage_colors`, which follows
-the palette (dark stage on a dark palette, light stage on a light one), so
-a theme change only needs a repaint.
+Everything is drawn with QPainter from :func:`stage_colors`, which reads the
+app's Studio tokens (:func:`~.common.theme_colors`, dark or light), so a
+theme change only needs a repaint.
 
 The card's "playing" animation is deliberately blind: :func:`visualizer_shape`
 depends only on the overall output level and the time, never on the option,
@@ -18,14 +18,14 @@ from PySide6.QtCore import QEasingCurve, QPointF, QRectF, QSize, Qt, QVariantAni
 from PySide6.QtGui import QColor, QLinearGradient, QPainter, QPainterPath, QPalette, QPen
 from PySide6.QtWidgets import QAbstractButton, QSizePolicy, QWidget
 
+from .common import theme_colors
+
 GRID_STEP = 120
 CARD_MARGIN = 10          # room around a card for its glow; two margins make the gap between cards
 CARD_HEIGHT = 146
 CARD_RADIUS = 16
 GLOW = 10
 BARS = 56
-ACCENT_OFFSETS = {2: (0.0, 165.0), 3: (0.0, 120.0, 240.0)}  # violet-blue / amber / teal at the start
-ROUND_ROTATION = 137.5
 SELECT_MS = 200
 
 
@@ -34,27 +34,26 @@ def is_dark(palette: QPalette) -> bool:
 
 
 def stage_colors(palette: QPalette) -> dict[str, QColor]:
-    if is_dark(palette):
-        return {"bg": QColor("#080808"), "grid": QColor(255, 255, 255, 11), "card_top": QColor("#1a1a1a"),
-                "card_bottom": QColor("#141414"), "border": QColor(255, 255, 255, 26),
-                "text": QColor("#f2f2f2"), "muted": QColor("#8f8f8f"), "idle": QColor(255, 255, 255, 38),
-                "track": QColor(255, 255, 255, 30), "fill": QColor(255, 255, 255, 140),
-                "inner": QColor(0, 0, 0, 70), "focus": QColor("#f2f2f2"), "glow": 1.0}
-    return {"bg": QColor("#eceef1"), "grid": QColor(0, 0, 0, 12), "card_top": QColor("#ffffff"),
-            "card_bottom": QColor("#f7f7f8"), "border": QColor(0, 0, 0, 34),
-            "text": QColor("#141414"), "muted": QColor("#5c5f66"), "idle": QColor(0, 0, 0, 40),
-            "track": QColor(0, 0, 0, 22), "fill": QColor(0, 0, 0, 120),
-            "inner": QColor(0, 0, 0, 10), "focus": QColor("#141414"), "glow": 0.45}
+    """The stage's colours from the app's tokens: the page colour behind, cards one step up, amber for the
+    card you've chosen."""
+    c = theme_colors(palette)
+    dark = c["dark"]
+    ink = QColor(c["text"])
+
+    def wash(alpha: int) -> QColor:
+        return QColor(ink.red(), ink.green(), ink.blue(), alpha)
+
+    return {"bg": QColor(c["bg"]), "grid": wash(10 if dark else 14), "card_top": QColor(c["raised"]),
+            "card_bottom": QColor(c["surface"]), "border": QColor(c["line"]), "text": ink,
+            "muted": QColor(c["hint"]), "idle": wash(40), "track": wash(30 if dark else 24),
+            "fill": wash(140 if dark else 120), "inner": QColor(0, 0, 0, 70 if dark else 10),
+            "focus": QColor(c["focus"]), "accent": QColor(c["accent"]), "warning": QColor(c["warning"]),
+            "glow": 1.0 if dark else 0.45}
 
 
-def accent_colors(start_hue: float, round_index: int, count: int, dark: bool) -> list[QColor]:
-    """A distinct saturated hue per option; the palette turns 137.5° every round."""
-    base = start_hue + round_index * ROUND_ROTATION
-    colors = []
-    for offset in ACCENT_OFFSETS.get(count, tuple(i * 360.0 / count for i in range(count))):
-        hue = ((base + offset) % 360.0) / 360.0
-        colors.append(QColor.fromHslF(hue, 0.85, 0.64) if dark else QColor.fromHslF(hue, 0.80, 0.42))
-    return colors
+def accent_colors(palette: QPalette, count: int) -> list[QColor]:
+    """Every card shares the one accent: amber marks the card you've chosen, nothing tells them apart."""
+    return [QColor(theme_colors(palette)["accent"]) for _ in range(count)]
 
 
 def visualizer_shape(level: float, t: float) -> tuple[np.ndarray, np.ndarray]:
@@ -176,7 +175,7 @@ class TransportBar(_SpaceIgnoring):
         painter.setFont(font)
         painter.setPen(color)
         painter.drawText(QRectF(x + icon + 8, rect.top(), text_w + 2, rect.height()), Qt.AlignVCenter, self.text())
-        if self.hasFocus():
+        if self.hasFocus() and self.property("kbfocus"):  # keyboard focus only
             _focus_ring(painter, rect.adjusted(3, 3, -3, -3), 6, colors["focus"])
 
 
@@ -188,11 +187,12 @@ class OptionCard(_SpaceIgnoring):
         self.letter = letter
         self.setText(label)
         self.setAccessibleName(label)
-        self.accent = QColor("#7c6cff")
+        self.accent = stage_colors(self.palette())["accent"]
         self.selected = False
         self.playing = False
         self.heard = False
         self.ruled_out = False
+        self.position: float | None = None  # where the card sits in its row, low (0) to high (1)
         self.shape: tuple[np.ndarray, np.ndarray] | None = None
         self._emphasis = 0.0
         self._anim = QVariantAnimation(self)
@@ -213,6 +213,11 @@ class OptionCard(_SpaceIgnoring):
 
     def set_accent(self, color: QColor) -> None:
         self.accent = QColor(color)
+        self.update()
+
+    def set_position(self, position: float | None) -> None:
+        """Shown as a dot on a short track at the bottom: the cards' order (low to high) at a glance."""
+        self.position = position
         self.update()
 
     def set_selected(self, selected: bool, animate: bool = True) -> None:
@@ -294,7 +299,7 @@ class OptionCard(_SpaceIgnoring):
         painter.setBrush(Qt.NoBrush)
         painter.drawRoundedRect(rect.adjusted(0.5, 0.5, -0.5, -0.5), CARD_RADIUS, CARD_RADIUS)
 
-        painter.setPen(colors["text"] if self.isEnabled() else colors["muted"])
+        painter.setPen(self.accent if e > 0.5 else colors["text"] if self.isEnabled() else colors["muted"])
         font = self.font()
         if len(self.text()) <= 2:  # a card number, which is also its key: big enough to read at a glance
             font.setPointSizeF(font.pointSizeF() * 1.8)
@@ -307,7 +312,16 @@ class OptionCard(_SpaceIgnoring):
             painter.drawText(rect.adjusted(16, 14, -16, -14), Qt.AlignRight | Qt.AlignTop,
                              "✕" if self.ruled_out else "✓")
 
-        area = rect.adjusted(16, rect.height() * 0.38, -16, -16)
+        if self.position is not None:
+            track_y = rect.bottom() - 14
+            painter.setPen(QPen(colors["idle"], 2.0, Qt.SolidLine, Qt.RoundCap))
+            painter.drawLine(QPointF(rect.left() + 16, track_y), QPointF(rect.right() - 16, track_y))
+            x = rect.left() + 16 + self.position * (rect.width() - 32)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(self.accent if e > 0.5 else colors["muted"])
+            painter.drawEllipse(QPointF(x, track_y), 3.5, 3.5)
+
+        area = rect.adjusted(16, rect.height() * 0.38, -16, -24)
         baseline = area.top() + area.height() * 0.62
         if self.shape is None or e < 0.01:
             painter.setPen(QPen(colors["idle"], 1.0))
@@ -315,7 +329,7 @@ class OptionCard(_SpaceIgnoring):
         else:
             self._paint_visualizer(painter, area, baseline, e * (1.0 if live else 0.55))
 
-        if self.hasFocus():
+        if self.hasFocus() and self.property("kbfocus"):  # keyboard focus only
             _focus_ring(painter, rect, CARD_RADIUS, colors["focus"])
 
     def _paint_visualizer(self, painter: QPainter, area: QRectF, baseline: float, strength: float) -> None:
@@ -390,7 +404,7 @@ class AnswerButton(_SpaceIgnoring):
         painter.setPen(colors["text"])
         painter.setFont(self.font())
         painter.drawText(rect, Qt.AlignCenter, self.text())
-        if self.hasFocus():
+        if self.hasFocus() and self.property("kbfocus"):  # keyboard focus only
             painter.setOpacity(1.0)
             _focus_ring(painter, rect.adjusted(3, 3, -3, -3), 9, colors["focus"])
 

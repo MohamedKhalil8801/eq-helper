@@ -17,7 +17,7 @@ from PySide6.QtCore import QEvent, Qt, Signal
 from PySide6.QtGui import QPalette
 from PySide6.QtWidgets import QVBoxLayout, QWidget
 
-from .common import COLOR_IEM, COLOR_MARKER, COLOR_TARGET, COLOR_UPPER, COLOR_WITH_EQ, tr
+from .common import curve_colors, theme_colors, tr
 
 _TICKS = [20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000]
 F_MIN, F_MAX = 20.0, 20000.0
@@ -80,14 +80,9 @@ class ResponseGraph(QWidget):
         self.plot.getAxis("bottom").setTicks([[(math.log10(t), hz_label(t)) for t in _TICKS]])
         self.legend = self.plot.addLegend(offset=(10, -10))
         self._curves: dict[str, pg.PlotDataItem] = {}
-        for key, name, color, width, style in (
-                ("iem", tr("Your IEM"), COLOR_IEM, 2, None),
-                ("target", tr("Target"), COLOR_TARGET, 2, "dash"),
-                ("with_eq", tr("With your EQ"), COLOR_WITH_EQ, 2.5, None)):
-            pen = pg.mkPen(color, width=width)
-            if style == "dash":
-                pen.setStyle(Qt.DashLine)
-            self._curves[key] = self.plot.plot([], [], pen=pen, name=name)
+        self._styles = {"iem": (2, None), "target": (1.6, Qt.DashLine), "with_eq": (2.5, None)}
+        for key, name in (("iem", tr("Your IEM")), ("target", tr("Target")), ("with_eq", tr("With your EQ"))):
+            self._curves[key] = self.plot.plot([], [], name=name)  # pens: _apply_palette
         self._curves["target"].setZValue(5)  # dashed target stays visible over a matching EQ curve
 
         # hover readout: a thin line under the mouse and its frequency at the top
@@ -110,11 +105,12 @@ class ResponseGraph(QWidget):
         self.plot.addItem(self.playing_line, ignoreBounds=True)
         self.playing_hz: float | None = None
 
-        self.marker = _marker(COLOR_MARKER, tr("Resonance"))
+        colors = curve_colors(self.palette())
+        self.marker = _marker(colors["marker"], tr("Resonance"))
         self.plot.addItem(self.marker)
         self.marker.sigPositionChanged.connect(lambda line: self.markerMoved.emit(10 ** line.value()))
         self.marker.sigPositionChangeFinished.connect(lambda line: self.markerReleased.emit(10 ** line.value()))
-        self.upper_marker = _marker(COLOR_UPPER, tr("Upper"), label_left=True, height=0.87)
+        self.upper_marker = _marker(colors["upper"], tr("Upper"), label_left=True, height=0.87)
         self.plot.addItem(self.upper_marker)
         self.upper_marker.sigPositionChanged.connect(lambda line: self.upperMoved.emit(10 ** line.value()))
         self._apply_palette()
@@ -132,11 +128,21 @@ class ResponseGraph(QWidget):
         """Follow the system light/dark palette instead of pyqtgraph's black."""
         pal = self.palette()
         base, text = pal.color(QPalette.Base), pal.color(QPalette.Text)
+        tokens, colors = theme_colors(pal), curve_colors(pal)
         self.plot.setBackground(base)
         for name in ("left", "bottom"):
             axis = self.plot.getAxis(name)
-            axis.setPen(pg.mkPen(text))
-            axis.setTextPen(pg.mkPen(text))
+            axis.setPen(pg.mkPen(tokens["line"]))
+            axis.setTextPen(pg.mkPen(tokens["hint"]))
+        for key, (width, style) in self._styles.items():
+            pen = pg.mkPen(colors[key], width=width)
+            if style is not None:
+                pen.setStyle(style)
+            self._curves[key].setPen(pen)
+        for line, key in ((self.marker, "marker"), (self.upper_marker, "upper")):
+            line.setPen(pg.mkPen(colors[key], width=2))
+            line.setHoverPen(pg.mkPen(colors[key], width=4))
+            line.label.setColor(colors[key])
         self.legend.setLabelTextColor(text)
         for _sample, label in self.legend.items:
             label.setText(label.text, color=text)

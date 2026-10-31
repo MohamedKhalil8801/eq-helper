@@ -46,9 +46,10 @@ def _song(path, rate=44100):
 def test_tabs_present(win):
     names = [win.tabs.tabText(i) for i in range(win.tabs.count())]
     assert names == ["Tune", "Test audio", "Settings", "About"]
-    labels = [win.header.choices.itemAtPosition(row, 0).widget().text() for row in range(2)]
-    assert labels == ["Calibration", "Target"]  # the target sits under the calibration
-    assert win.header.choices.itemAtPosition(1, 1).widget() is win.tuning.target_combo
+    bar = [win.header.trailing.itemAt(i).widget() for i in range(win.header.trailing.count())]
+    assert bar == [win.tuning.target_label, win.tuning.target_combo, win.tuning.power_button]  # in the header
+    menu = [a.text() for a in win.header.menu.actions()]
+    assert menu == ["Import a target…", "Remove this calibration…"]
 
 
 def test_empty_test_audio_shows_large_centred_buttons(qtbot, tmp_path, opened):

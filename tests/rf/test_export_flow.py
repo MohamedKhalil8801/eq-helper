@@ -169,7 +169,7 @@ def test_export_button_on_main_window_opens_flow(qtbot, win, monkeypatch):
     from resonancefit.ui import main_window as module
     shown = []
     monkeypatch.setattr(module.ExportFlow, "exec", lambda self: shown.append(self) or 0)
-    win.listen.export_button.click()
+    win.tunings.export_button.click()
     assert shown and shown[0].job.channel_eq is win.tuning.channel_eq
 
 

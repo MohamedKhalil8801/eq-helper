@@ -16,15 +16,17 @@ from pathlib import Path
 
 import numpy as np
 from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QButtonGroup, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QPushButton,
-    QSizePolicy, QSlider, QSpinBox, QStackedWidget, QTabBar, QVBoxLayout, QWidget,
+    QSizePolicy, QSlider, QSpinBox, QStackedWidget, QVBoxLayout, QWidget,
 )
 
 from eq_helper.calibration.tuning import TuningSession, target_hash
 from eq_helper.dsp.resonance import CONTROL_RANGE, PERSONAL_TREBLE_RANGE, detect_high_treble_peak
 
-from .common import Card, Worker, heading, hint, side_name, tr
+from .common import Card, Segments, Worker, heading, hint, side_name, tr
+from .header_card import PowerSwitch
 from .guided_test_view import GuidedTestView
 from .response_graph import ResponseGraph
 
@@ -97,6 +99,7 @@ SOUNDS = (("tone", "▶ Play tone", "■ Stop tone"),
           ("pink", "≈ Pink noise + EQ", "■ Stop noise"),
           ("grey", "≈ Grey noise + EQ", "■ Stop noise"))
 NOISES = ("pink", "grey")
+SOUND_KEYS = {"tone": "T", "focus": "S", "sweep": "F", "pink": "P", "grey": "G"}
 
 
 class _TargetItem:
@@ -155,22 +158,26 @@ class TuningPanel(QWidget):
         title_row = QHBoxLayout()
         self.title = heading(tr("Find your resonance"))
         title_row.addWidget(self.title, 1)
-        self.power_button = QPushButton()
-        self.power_button.setObjectName("power")
-        self.power_button.setCheckable(True)
+        self.find_button = QPushButton(tr("Find it for me (a few minutes)"))
+        self.find_button.setObjectName("primary")
+        self.find_button.setToolTip(tr("A short listening test: which version of the same noise sounds "
+                                       "smoothest, for each ear."))
+        self.find_button.clicked.connect(self.start_guided_test)
+        title_row.addWidget(self.find_button, 0, Qt.AlignVCenter)
+        card.body.addLayout(title_row)
+        # the EQ's power switch: the main window shows it in the header
+        self.power_button = PowerSwitch()
         self.power_button.setAccessibleName(tr("EQ on or off"))
-        self.power_button.setToolTip(tr("Hear your EQ, or switch it off to compare. Only in this app: "
+        self.power_button.setToolTip(tr("Hear your EQ, or switch it off to compare (E). Only in this app: "
                                         "Equalizer APO isn't changed."))
         self.power_button.toggled.connect(self._power_toggled)
         self._power_toggled(False, emit=False)
-        title_row.addWidget(self.power_button, 0, Qt.AlignTop)
-        card.body.addLayout(title_row)
         self.step1_stack = QStackedWidget()
         card.body.addWidget(self.step1_stack, 1)
         self.manual_page = QWidget()
         body = QVBoxLayout(self.manual_page)
         body.setContentsMargins(0, 0, 0, 0)
-        body.setSpacing(8)
+        body.setSpacing(10)
         self.step1_stack.addWidget(self.manual_page)
         self._table_cache: dict = {}  # id(model) → (model, RoughnessTable)
         self.guided = GuidedTestView(self.audio, self._option_eqs, self._upper_prediction, self._scorecard_tables)
@@ -181,27 +188,20 @@ class TuningPanel(QWidget):
         self.guided.apoPauseRequested.connect(self.apoOffRequested)
         self.step1_stack.addWidget(self.guided)
 
-        start = QHBoxLayout()
-        self.find_button = QPushButton(tr("Find it for me (a few minutes)"))
-        self.find_button.setObjectName("primary")
-        self.find_button.setToolTip(tr("A short listening test: which version of the same noise sounds "
-                                       "smoothest, for each ear."))
-        self.find_button.clicked.connect(self.start_guided_test)
-        start.addWidget(self.find_button)
-        start.addStretch(1)
-        body.addLayout(start)
-        top = QHBoxLayout()
-        self.ears = QTabBar()
-        self.ears.setExpanding(False)
+        # the result, always in view: the selected ear in amber, the other beside it, the ear switch
+        rail = QHBoxLayout()
+        rail.setSpacing(28)
+        self.readout_side, self.readout = self._readout(rail, "bigReadout")
+        self.other_side, self.other_readout = self._readout(rail, "otherReadout")
+        rail.addStretch(1)
+        self.ears = Segments()
         self.ears.setAccessibleName(tr("Ear"))
         self.ears.currentChanged.connect(self._ear_changed)
-        top.addWidget(self.ears)
-        top.addStretch(1)
-        body.addLayout(top)
-        self.hint = hint(tr(
-            "Press Play tone, then move the slider (or drag the orange line) until the tone sounds loudest "
-            "or most piercing in this ear — that's your resonance. Do the same for the other ear. Click or "
-            "drag on the graph to hear any frequency. Keep the volume low."))
+        rail.addWidget(self.ears, 0, Qt.AlignBottom)
+        body.addLayout(rail)
+        self.hint = hint(tr("Play the tone and move the slider (or drag the amber line) to where it sounds loudest "
+                            "or most piercing in this ear. Click the graph to hear any frequency. Keep the volume "
+                            "low."))
         self.other_eq = QLabel()  # general advice: turn other EQs off
         self.other_eq.setObjectName("hint")
         self.other_eq.setWordWrap(True)
@@ -240,26 +240,50 @@ class TuningPanel(QWidget):
         self.graph.frequencyClicked.connect(self._graph_clicked)
         body.addWidget(self.graph, 1)
 
-        row = QHBoxLayout()
-        readout = QVBoxLayout()
-        readout.setSpacing(0)
-        self.readout_side = QLabel()
-        self.readout_side.setObjectName("hint")
-        readout.addWidget(self.readout_side)
-        self.readout = QLabel()
-        self.readout.setObjectName("bigReadout")
-        font = self.readout.font()
-        font.setPointSizeF(font.pointSizeF() * 2.2)
-        font.setBold(True)
-        self.readout.setFont(font)
-        self.readout.setMinimumWidth(self.readout.fontMetrics().horizontalAdvance("00,000 Hz") + 8)
-        readout.addWidget(self.readout)
-        readout.addStretch(1)
-        row.addLayout(readout)
-        self.manual_box = QWidget()  # finding it by hand: the slider and its sounds
+        self.manual_box = QWidget()  # finding it by hand: the sliders and their sounds
         rows = QVBoxLayout(self.manual_box)
         rows.setContentsMargins(0, 0, 0, 0)
-        rows.addWidget(self.hint)
+        rows.setSpacing(8)
+        # one set of sound buttons for whichever resonance is selected; each starts and stops its sound
+        listen = QHBoxLayout()
+        listen.setSpacing(6)
+        self.sound_buttons: dict[str, QPushButton] = {}
+        for kind, idle, _playing in SOUNDS:
+            button = QPushButton(tr(idle))
+            button.setCheckable(True)
+            button.clicked.connect(lambda _=False, k=kind: self._toggle(k))
+            listen.addWidget(button)
+            self.sound_buttons[kind] = button
+        self.tone_button = self.sound_buttons["tone"]
+        self.sweep_button = self.sound_buttons["focus"]
+        self.pink_button = self.sound_buttons["pink"]
+        self.grey_button = self.sound_buttons["grey"]
+        self.tone_button.setObjectName("primary")
+        tips = {"tone": tr("A steady tone at the selected frequency: the resonance is where it sounds loudest."),
+                "focus": tr("A slow sweep around the selected frequency: the resonance is where it sounds "
+                            "loudest."),
+                "sweep": tr("A slow sweep through everything, 20 Hz to 20 kHz."),
+                "pink": tr("Pink noise through your EQ. Move the slider while it plays until the treble sounds "
+                           "smooth, with no harsh or hissy spot."),
+                "grey": tr("Grey noise through your EQ: like pink noise, with the treble lifted the way your "
+                           "hearing needs it, so the high treble is easier to judge.")}
+        for kind, *texts in SOUNDS:  # wide enough for either of its labels: no jumping
+            button = self.sound_buttons[kind]
+            button.setToolTip(f"{tips[kind]} ({SOUND_KEYS[kind]})")
+            button.setMinimumWidth(max(button.fontMetrics().horizontalAdvance(tr(t)) for t in texts) + 32)
+        listen.addSpacing(8)
+        self.focus_label = QLabel(tr("at"))
+        self.focus_label.setObjectName("hint")
+        listen.addWidget(self.focus_label)
+        self.focus_primary = QPushButton(tr("Resonance"))
+        self.focus_upper = QPushButton(tr("Upper treble"))
+        self._focus_group = QButtonGroup(self)
+        self.focus_switch = self._segments((self.focus_primary, self.focus_upper), self._focus_group)
+        for button, which in ((self.focus_primary, "primary"), (self.focus_upper, "upper")):
+            button.clicked.connect(lambda _=False, w=which: self.set_focus(w))
+        listen.addWidget(self.focus_switch)
+        listen.addStretch(1)
+        rows.addLayout(listen)
         self.primary = ResonanceRow(tr("Resonance"), tr("Resonance frequency"), CONTROL_RANGE, 10, 100)
         self.primary.valueChanged.connect(self.set_primary_hz)
         self.peak_slider, self.peak_spin = self.primary.slider, self.primary.spin
@@ -277,65 +301,35 @@ class TuningPanel(QWidget):
         self.upper_manual.setToolTip(tr("Only if you hear a second, higher peak that still bothers you: set it "
                                         "yourself, per ear, the same way as the resonance."))
         self._upper_mode = QButtonGroup(self)
-        for button in (self.upper_auto, self.upper_manual):
-            button.setObjectName("segment")
-            button.setCheckable(True)
-            self._upper_mode.addButton(button)
-            self.upper.extra.addWidget(button)
-        self.upper.extra.setSpacing(0)  # the two read as one switch
+        self.upper_switch = self._segments((self.upper_auto, self.upper_manual), self._upper_mode)
+        self.upper.extra.addWidget(self.upper_switch)
         self.upper_auto.setChecked(True)
         self.upper_manual.toggled.connect(self._set_upper_enabled)
         self.reset_upper = QPushButton(tr("Reset"))
         self.reset_upper.setToolTip(tr("Put this ear's upper treble back as calibrated."))
         self.reset_upper.clicked.connect(self._reset_upper)
-        self.upper.extra.addSpacing(6)
         self.upper.extra.addWidget(self.reset_upper)
         self._reset_space = QWidget()  # keeps both sliders the same length
-        self._reset_space.setFixedWidth(self.upper_auto.sizeHint().width() + self.upper_manual.sizeHint().width()
-                                        + 6 + self.reset_upper.sizeHint().width())
+        self._reset_space.setFixedWidth(self.upper_switch.sizeHint().width() + self.reset_upper.sizeHint().width()
+                                        + self.upper.extra.spacing())
         self.primary.extra.addWidget(self._reset_space)
         rows.addWidget(self.upper)
-
-        # one set of sound buttons for whichever resonance is selected; each starts and stops its sound
-        listen = QHBoxLayout()
-        self.sound_buttons: dict[str, QPushButton] = {}
-        for kind, idle, _playing in SOUNDS:
-            button = QPushButton(tr(idle))
-            button.setCheckable(True)
-            button.clicked.connect(lambda _=False, k=kind: self._toggle(k))
-            listen.addWidget(button)
-            self.sound_buttons[kind] = button
-        self.tone_button = self.sound_buttons["tone"]
-        self.sweep_button = self.sound_buttons["focus"]
-        self.pink_button = self.sound_buttons["pink"]
-        self.grey_button = self.sound_buttons["grey"]
-        self.tone_button.setObjectName("primary")
-        self.sweep_button.setToolTip(tr("A slow sweep around the selected frequency: the resonance is where "
-                                        "it sounds loudest."))
-        self.pink_button.setToolTip(tr("Pink noise through your EQ. Move the slider while it plays until the "
-                                       "treble sounds smooth, with no harsh or hissy spot."))
-        self.grey_button.setToolTip(tr("Grey noise through your EQ: like pink noise, with the treble lifted the way "
-                                       "your hearing needs it, so the high treble is easier to judge."))
-        for kind, *texts in SOUNDS:  # wide enough for either of its labels: no jumping
-            button = self.sound_buttons[kind]
-            button.setMinimumWidth(max(button.fontMetrics().horizontalAdvance(tr(t)) for t in texts) + 28)
-        listen.addSpacing(8)
-        self.focus_label = QLabel(tr("at"))
-        self.focus_label.setObjectName("hint")
-        listen.addWidget(self.focus_label)
-        self.focus_primary = QPushButton(tr("Resonance"))
-        self.focus_upper = QPushButton(tr("Upper treble"))
-        self._focus_group = QButtonGroup(self)
-        for button, which in ((self.focus_primary, "primary"), (self.focus_upper, "upper")):
-            button.setCheckable(True)
-            button.setObjectName("segment")
-            self._focus_group.addButton(button)
-            button.clicked.connect(lambda _=False, w=which: self.set_focus(w))
-            listen.addWidget(button)
-        listen.addStretch(1)
-        rows.addLayout(listen)
-        row.addWidget(self.manual_box, 1)
-        body.addLayout(row)
+        rows.addWidget(self.hint)
+        self.keys_hint = QLabel(tr("Keys: T tone · S sweep around · F full sweep · P pink · G grey · E EQ on/off · "
+                                   "L / R / C ear · Space stop"))
+        self.keys_hint.setObjectName("caption")
+        rows.addWidget(self.keys_hint)
+        body.addWidget(self.manual_box)
+        self._shortcuts = []
+        for key, slot in ((Qt.Key_T, lambda: self._toggle("tone")), (Qt.Key_S, lambda: self._toggle("focus")),
+                          (Qt.Key_F, lambda: self._toggle("sweep")), (Qt.Key_P, lambda: self._toggle("pink")),
+                          (Qt.Key_G, lambda: self._toggle("grey")), (Qt.Key_E, self.power_button.click),
+                          (Qt.Key_L, lambda: self._select_ear("L")), (Qt.Key_R, lambda: self._select_ear("R")),
+                          (Qt.Key_C, lambda: self._select_ear(CENTRE))):
+            shortcut = QShortcut(QKeySequence(key), self.manual_page)
+            shortcut.setContext(Qt.WindowShortcut)  # only while the manual page shows; text fields keep keys
+            shortcut.activated.connect(slot)
+            self._shortcuts.append(shortcut)
         self.focus = "primary"
         self._sync_focus_widgets()
         self.pink_hint = hint(tr(
@@ -352,6 +346,41 @@ class TuningPanel(QWidget):
         body.addWidget(self.target_problem)
         return card
 
+    def _readout(self, rail, name: str):
+        """A caption over a big Hz value, added to ``rail``."""
+        box = QVBoxLayout()
+        box.setSpacing(0)
+        caption = QLabel()
+        caption.setObjectName("caption")
+        box.addWidget(caption)
+        value = QLabel()
+        value.setObjectName(name)
+        font = value.font()
+        font.setPointSizeF(font.pointSizeF() * 2.0)
+        value.setFont(font)
+        value.setMinimumWidth(value.fontMetrics().horizontalAdvance("00,000 Hz") + 8)
+        box.addWidget(value)
+        rail.addLayout(box)
+        return caption, value
+
+    def _segments(self, buttons, group) -> QFrame:
+        """Buttons drawn as one switch (see ``QFrame#segments`` in the style)."""
+        frame = QFrame()
+        frame.setObjectName("segments")
+        row = QHBoxLayout(frame)
+        row.setContentsMargins(2, 2, 2, 2)
+        row.setSpacing(0)
+        for button in buttons:
+            button.setCheckable(True)
+            group.addButton(button)
+            row.addWidget(button)
+        return frame
+
+    def _select_ear(self, ear: str) -> None:
+        index = next((i for i in range(self.ears.count()) if self.ears.tabData(i) == ear), None)
+        if index is not None:
+            self.ears.setCurrentIndex(index)
+
     def _build_target(self) -> None:
         """The target's label, list and Import button; the main window shows them in the header, under
         the calibration (:meth:`target_widgets`)."""
@@ -360,22 +389,19 @@ class TuningPanel(QWidget):
         self.target_combo = QComboBox()
         self.target_combo.setAccessibleName(tr("Target"))
         self.target_combo.setToolTip(self.target_label.toolTip())
-        self.target_combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.target_combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)  # the whole name, in the header
         self.target_combo.currentIndexChanged.connect(self._target_chosen)
         self.target_label.setBuddy(self.target_combo)
-        self.import_target_button = QPushButton(tr("Import…"))
-        self.import_target_button.setToolTip(tr("Use a target curve file of your own (.txt or .csv)."))
-        self.import_target_button.clicked.connect(self._browse_target)
         self.target_problem = QLabel()
         self.target_problem.setObjectName("warning")
         self.target_problem.setWordWrap(True)
 
     def target_widgets(self):
-        """(label, list, Import button) for the header."""
-        return self.target_label, self.target_combo, self.import_target_button
+        """(label, list) for the header; its ⋯ menu offers :meth:`browse_target`."""
+        return self.target_label, self.target_combo
 
     def _power_toggled(self, on: bool, emit: bool = True) -> None:
-        self.power_button.setText("⏻  " + (tr("EQ on") if on else tr("EQ off")))
+        self.power_button.setText(tr("EQ on") if on else tr("EQ off"))
         if emit:
             self.eqToggled.emit(on)
 
@@ -684,7 +710,7 @@ class TuningPanel(QWidget):
         upper_on = self.session is not None and self.session.upper_enabled
         if not upper_on:
             self.focus = "primary"
-        for widget in (self.focus_label, self.focus_primary, self.focus_upper):
+        for widget in (self.focus_label, self.focus_switch):
             widget.setVisible(upper_on)
         self.focus_primary.setChecked(self.focus == "primary")
         self.focus_upper.setChecked(self.focus == "upper")
@@ -693,16 +719,34 @@ class TuningPanel(QWidget):
         self._sync_readout()
 
     def _sync_readout(self) -> None:
-        """The big number shows the selected resonance."""
+        """The big numbers: the selected ear's resonance (or upper treble) in amber, the other ear's beside it."""
         if self.session is None or self.side is None:
             return
         side = side_name("M") if self.ear == CENTRE else side_name(self.side)
-        if self.focus == "upper":
-            self.readout_side.setText(tr("{side} upper treble").format(side=side))
-            self.readout.setText(f"{self.upper_slider.value():,} Hz")
-        else:
-            self.readout_side.setText(tr("{side} resonance").format(side=side))
-            self.readout.setText(f"{int(round(self.session.primary[self.side])):,} Hz")
+        upper = self.focus == "upper"
+        what = tr("{side} upper treble") if upper else tr("{side} resonance")
+        self.readout_side.setText(what.format(side=side))
+        self.readout.setText(f"{self._shown_hz(self.side, upper):,} Hz")
+        others = [s for s in self.session.sides if s != self.side]
+        show_other = bool(others) and self.ear != CENTRE
+        for widget in (self.other_side, self.other_readout):
+            widget.setVisible(show_other)
+        if show_other:
+            self.other_side.setText(what.format(side=side_name(others[0])))
+            self.other_readout.setText(f"{self._shown_hz(others[0], upper):,} Hz")
+
+    def _shown_hz(self, side: str, upper: bool) -> int:
+        """A side's resonance, or its upper treble as in use (set by hand, else the calibration's)."""
+        if not upper:
+            return int(round(self.session.primary[side]))
+        if side == self.side:
+            return self.upper_slider.value()
+        own = self.session.upper.get(side) if self.session.upper_enabled else None
+        if own:
+            return int(round(own))
+        hz = self._upper_prediction(side, self.session.primary[side])
+        lo, hi = PERSONAL_TREBLE_RANGE
+        return int(round(min(max(hz or DEFAULT_UPPER_HZ, lo), hi)))
 
     def _follow(self, which: str, hz: float) -> None:
         """Touching a slider or line selects it; a playing tone follows it."""
@@ -785,7 +829,7 @@ class TuningPanel(QWidget):
             return
         self.regenerate()
 
-    def _browse_target(self) -> None:
+    def browse_target(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, tr("Import a target"), "",
                                               tr("Target curves (*.txt *.csv);;All files (*)"))
         if path:

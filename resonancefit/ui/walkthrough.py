@@ -18,7 +18,7 @@ STEPS = (
      "compare."),
     ("Step 3 of 3: save it and use it everywhere",
      "Export the EQ for the app you listen with — or apply it directly with Equalizer APO (Windows) or EasyEffects (Linux). "
-     "Every tuning you save, export or apply is kept in History, so you can always go back."),
+     "Every tuning you save, export or apply is kept in Tunings: click one to switch back to it."),
 )
 
 

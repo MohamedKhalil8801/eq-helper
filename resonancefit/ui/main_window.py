@@ -38,12 +38,13 @@ from ..library import LibraryEntry
 from ..os_integration import FileAssociation
 from ..paths import is_translocated
 from .about_page import AboutPage
-from .common import Worker, apply_theme, brand_palette, build_style, is_branded, side_name, tr
+from .common import (
+    Worker, apply_theme, brand_palette, build_style, install_keyboard_focus, is_branded, side_name, tr,
+)
 from .export_flow import PREDICTED_APP_ID, ExportFlow, ExportJob
 from .header_card import HeaderCard, calibration_label
-from .history_panel import HistoryPanel, describe_entry, entry_name
 from .import_screen import ImportScreen
-from .listen_save import ListenSaveCard
+from .tunings_panel import CURRENT, TuningsPanel, describe_entry, entry_name, tuning_detail
 from .settings_page import SettingsPage
 from .sound_bar import SoundBar
 from .test_songs import TestSongsPage
@@ -124,6 +125,10 @@ class MainWindow(QMainWindow):
         self.setAcceptDrops(True)
         apply_theme(ctx.settings.get("theme"))
         self._brand()
+        app = QApplication.instance()
+        if app is not None:  # "System" follows the computer switching between light and dark
+            app.styleHints().colorSchemeChanged.connect(self._system_scheme_changed)
+            self._focus_watch = install_keyboard_focus(app)  # focus rings for keyboard users only
         self.resize(1180, 860)
 
         central = QWidget()
@@ -176,6 +181,10 @@ class MainWindow(QMainWindow):
         self._run(lambda: detect_installed(self.catalog, ctx.paths.platform), self._apps_detected)
         self.refresh()
         self._launch_update_check()
+
+    def _system_scheme_changed(self, _scheme) -> None:
+        if (self.ctx.settings.get("theme") or "system") == "system":
+            apply_theme("system")
 
     def _brand(self) -> None:
         """One palette everywhere: the app's accent instead of the system's (again after a light/dark
@@ -255,7 +264,10 @@ class MainWindow(QMainWindow):
         self.tuning.eqChanged.connect(self.audio.set_eq)
         self.tuning.apoOffRequested.connect(self.turn_off_apo)
         self.tuning.eqToggled.connect(self.audio.set_eq_enabled)
-        self.header.add_choice(*self.tuning.target_widgets())
+        for widget in (*self.tuning.target_widgets(), self.tuning.power_button):
+            self.header.add_trailing(widget)
+        self.header.add_action(tr("Import a target…"), self.tuning.browse_target)
+        self.tuning.eqChanged.connect(lambda _eq: self._sync_tunings())
         self._eq_watch = QTimer(self)  # Equalizer APO can be switched on or off outside the app at any time
         self._eq_watch.setInterval(EQ_WATCH_MS)
         self._eq_watch.timeout.connect(lambda: self.sync_other_eqs() if self.isActiveWindow() else None)
@@ -263,28 +275,23 @@ class MainWindow(QMainWindow):
         self.calibrationLoaded.connect(self.tuning.set_calibration)
         tune.addWidget(self.tuning, 1)
 
-        side = QVBoxLayout()
-        self.listen = ListenSaveCard()
-        self.listen.saveRequested.connect(lambda note: self.record_history("manual", note))
-        side.addWidget(self.listen)
-        self.history_panel = HistoryPanel()
-        self.history_panel.reapplyRequested.connect(self.reapply)
-        side.addWidget(self.history_panel, 1)
-        self.sidebar = QWidget()
-        self.sidebar.setLayout(side)
-        side.setContentsMargins(0, 0, 0, 0)
+        self.tunings = TuningsPanel()
+        self.tunings.saveRequested.connect(lambda note: self.record_history("manual", note))
+        self.tunings.switchRequested.connect(self.reapply)
+        self.tunings.currentRequested.connect(self.back_to_unsaved)
+        self.tunings.exportRequested.connect(self.open_export)
+        self.tunings.applyRequested.connect(self.apply_to_apo)
+        self.tunings.changed.connect(self._sync_tunings)
+        self.tunings.set_apply_target(self.apo.name)
+        self.tunings.set_apply_available(self.apo.available())
+        self.app_names = {app.id: app.name for app in self.catalog.apps}
+        self.app_names[PREDICTED_APP_ID] = tr("Predicted response")
+        self._unsaved = None  # (Tuning, target) of the last tuning that matched no saved one
+        self.sidebar = self.tunings
         self.sidebar.setFixedWidth(330)
         tune.addWidget(self.sidebar)
         self.tuning.guidedActiveChanged.connect(self._guided_focus)
         self.calibrationLoaded.connect(self._calibration_ready)
-        self.listen.exportRequested.connect(self.open_export)
-        self.listen.applyRequested.connect(self.apply_to_apo)
-        self.listen.switchRequested.connect(self.switch_apo_tuning)
-        self.listen.set_apply_target(self.apo.name)
-        self.listen.set_apply_available(self.apo.available())
-        self.history_panel.changed.connect(self._sync_saved_tunings)
-        self.history_panel.app_names = {app.id: app.name for app in self.catalog.apps}
-        self.history_panel.app_names[PREDICTED_APP_ID] = tr("Predicted response")
         tune_scroll = QScrollArea()
         tune_scroll.setWidgetResizable(True)
         tune_scroll.setFrameShape(QScrollArea.NoFrame)
@@ -387,12 +394,37 @@ class MainWindow(QMainWindow):
         self.sync_other_eqs()
 
     # ── Equalizer APO ──────────────────────────────────────────────────────
-    def _sync_saved_tunings(self) -> None:
-        entries = self.history.entries() if self.history is not None else []
-        in_use = self.history.in_use if self.history is not None else None
-        items = [(e.id, entry_name(e) + ("  ✓ " + tr("in use") if e.id == in_use else ""),
-                  describe_entry(e, self.history_panel.app_names, e.id == in_use)) for e in entries]
-        self.listen.set_saved_tunings(items)
+    def _sync_tunings(self) -> None:
+        """The Tunings list: the unsaved tuning (if any) on top, then the saved ones, the one you hear
+        selected."""
+        session = self.tuning.session
+        if self.history is None or session is None or session.target is None:
+            self.tunings.set_rows(None, [], None)
+            return
+        snapshot = session.snapshot()
+        found = self.history.find(snapshot, session.target)
+        if found is None:
+            self._unsaved = (snapshot, session.target)
+        elif self._unsaved is not None and self.history.find(*self._unsaved) is not None:
+            self._unsaved = None  # it's been saved since
+        current = None
+        if self._unsaved is not None:
+            title = tr("Current · unsaved") if found is None else tr("Last unsaved")
+            current = (title, tuning_detail(self._unsaved[0]))
+        in_use = self.history.in_use
+        saved = [(e.id, e.note or e.target_name or tr("Tuning"), tuning_detail(e.tuning),
+                  tr("in use") if e.id == in_use else "", describe_entry(e, self.app_names, e.id == in_use))
+                 for e in self.history.entries()]
+        self.tunings.set_rows(current, saved, CURRENT if found is None else found.id)
+
+    def back_to_unsaved(self) -> None:
+        if self._unsaved is None:
+            return
+        tuning, target = self._unsaved
+        try:
+            self.tuning.apply_tuning(tuning, target)
+        except ValueError as exc:
+            self.statusBar().showMessage(tr("Couldn't go back to it: {reason}").format(reason=exc), 15000)
 
     def choose_apo_device(self, devices: list[str]) -> str | None:
         device, ok = QInputDialog.getItem(
@@ -425,13 +457,13 @@ class MainWindow(QMainWindow):
         self.settings_page.refresh_apo()
         self.sync_other_eqs()
         if self.apo.uses_devices:
-            self.listen.show_status(tr("Applied to {app} on {device}. Everything you play there now uses this "
+            self.tunings.show_status(tr("Applied to {app} on {device}. Everything you play there now uses this "
                                        "tuning.").format(app=self.apo.name, device=self.apo.device))
         elif getattr(self.apo, "loaded", True):
-            self.listen.show_status(tr("Applied in {app}. Everything you play now uses this tuning.").format(
+            self.tunings.show_status(tr("Applied in {app}. Everything you play now uses this tuning.").format(
                 app=self.apo.name))
         else:
-            self.listen.show_status(tr("Saved as the {app} preset “{preset}”. {app} isn't running: start it and "
+            self.tunings.show_status(tr("Saved as the {app} preset “{preset}”. {app} isn't running: start it and "
                                        "choose that preset.").format(app=self.apo.name, preset=self.apo.preset))
         return True
 
@@ -447,10 +479,6 @@ class MainWindow(QMainWindow):
 
     def _sync_eq_toggle(self) -> None:
         self.tuning.set_eq_on(self.audio.eq_enabled)
-
-    def switch_apo_tuning(self, entry_id: str) -> None:
-        self.reapply(entry_id)
-        self.apply_to_apo()
 
     # ── export ─────────────────────────────────────────────────────────────
     def export_job(self) -> ExportJob | None:
@@ -481,7 +509,9 @@ class MainWindow(QMainWindow):
     # ── history ────────────────────────────────────────────────────────────
     def _calibration_ready(self, loaded) -> None:
         self.history = HistoryStore(self.ctx.paths.history_dir, loaded.calibration_id)
-        self.history_panel.set_store(self.history)
+        self.tunings.set_store(self.history)
+        self._unsaved = None
+        self._sync_tunings()
 
     def record_history(self, reason: str, note: str = "", files=(), app=None):
         """Save the current tuning to history (export / apply / manual)."""
@@ -491,13 +521,12 @@ class MainWindow(QMainWindow):
         snapshot = session.snapshot()
         known = self.history.find(snapshot, session.target) is not None
         entry = self.history.save(snapshot, session.target, reason, note, files, app)
-        self.history_panel.refresh()
+        self._sync_tunings()
         if reason == "manual":
             if known:
-                self.listen.show_status(tr("Already saved as “{name}”: it's at the top of History.").format(
-                    name=entry_name(entry)))
+                self.tunings.show_status(tr("Already saved as “{name}”.").format(name=entry_name(entry)))
             else:
-                self.listen.show_status(tr("Saved as “{name}”. You can come back to it from History.").format(
+                self.tunings.show_status(tr("Saved as “{name}”. Click it any time to come back to it.").format(
                     name=entry_name(entry)))
         return entry
 
@@ -506,9 +535,7 @@ class MainWindow(QMainWindow):
         try:
             self.tuning.apply_tuning(tuning, target)
         except ValueError as exc:
-            self.statusBar().showMessage(tr("Couldn't reapply this tuning: {reason}").format(reason=exc), 15000)
-            return
-        self.statusBar().showMessage(tr("Tuning reapplied."), 5000)
+            self.statusBar().showMessage(tr("Couldn't switch to this tuning: {reason}").format(reason=exc), 15000)
 
     def _on_audio_ready(self, ok: bool) -> None:
         if ok:

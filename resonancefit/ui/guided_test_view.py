@@ -44,7 +44,7 @@ from ..loudness import card_curve, level_offsets
 from .common import Worker, side_name, tr
 from .guided_widgets import (
     CARD_MARGIN, AnswerButton, OptionCard, ProgressLine, StageBackground, TransportBar, accent_colors,
-    is_dark, level_from_samples, stage_colors,
+    level_from_samples, stage_colors,
 )
 
 HEARD_SECONDS = 0.5   # an option counts as heard after this long selected while playing
@@ -118,7 +118,6 @@ class GuidedTestView(StageBackground):
         self.rng = random.Random()
         self._clock = time.monotonic
         self._t0 = self._clock()
-        self._hue = 0.0
         self._round_index = 0
         self._round = None
         self.selected: int | None = None
@@ -331,7 +330,7 @@ class GuidedTestView(StageBackground):
         footer.addWidget(self.stop_button)
         layout.addLayout(footer)
         layout.addSpacing(10)
-        self.keys_hint = self._label(tr("Keys: 1–8 choose · X rule out · P play/pause · Enter answer · S same · "
+        self.keys_hint = self._label(tr("Keys: 1–8 choose · Enter confirms the selected card · X rule out · P play/pause · S same · "
                                         "N pink · G grey · F focused · W sweep · Space stop"),
                                      "gtMuted")
         self.keys_hint.setAlignment(Qt.AlignCenter)
@@ -341,7 +340,7 @@ class GuidedTestView(StageBackground):
             self._shortcut(page, (Qt.Key_1 + index,), lambda i=index: self.select(i))
         self._shortcut(page, (Qt.Key_X,), lambda: self.toggle_rule_out(self.selected))
         self._shortcut(page, (Qt.Key_P,), self.toggle_play)
-        self._shortcut(page, (Qt.Key_Return, Qt.Key_Enter), lambda: self._enter(self.answer_selected))
+        self._shortcut(page, (Qt.Key_Return, Qt.Key_Enter), self.answer_selected)  # always the selected card
         self._shortcut(page, (Qt.Key_S,), self.answer_same)
         self._shortcut(page, (Qt.Key_N,), lambda: self.set_stage2_sound("pink"))
         self._shortcut(page, (Qt.Key_G,), lambda: self.set_stage2_sound("grey"))
@@ -482,7 +481,7 @@ class GuidedTestView(StageBackground):
         self.setStyleSheet(
             f"QLabel#gtTitle, QLabel#gtText, QLabel#gtResult {{ color: {c['text']}; }}"
             f"QLabel#gtMuted {{ color: {c['muted']}; }}"
-            f"QLabel#gtWarning {{ color: {'#FFB366' if is_dark(self.palette()) else '#8A3E00'}; }}"
+            f"QLabel#gtWarning {{ color: {c['warning']}; }}"
             f"QFrame#gtDivider {{ background: rgba({border.red()},{border.green()},{border.blue()},"
             f"{border.alpha()}); border: none; }}")
 
@@ -503,7 +502,6 @@ class GuidedTestView(StageBackground):
         self._sides, self._defaults = tuple(sides), dict(default_hz or {})
         self.test = self._new_test({})
         self._prepare_tables()
-        self._hue = self.rng.uniform(0.0, 360.0)
         self._round_index = 0
         self._saved_eq_enabled = None
         self.pages.setCurrentWidget(self.intro_page)
@@ -724,9 +722,11 @@ class GuidedTestView(StageBackground):
     def _paint_accents(self) -> None:
         if self._round is None:
             return
-        colors = accent_colors(self._hue, self._round_index, len(self._round.options), is_dark(self.palette()))
-        for card, color in zip(self.cards, colors):
+        count = len(self._round.options)
+        colors = accent_colors(self.palette(), count)
+        for i, (card, color) in enumerate(zip(self.cards, colors)):
             card.set_accent(color)
+            card.set_position(i / (count - 1) if count > 1 else None)
         self._sync_answers()
 
     def _enter_louder_stage(self) -> None:

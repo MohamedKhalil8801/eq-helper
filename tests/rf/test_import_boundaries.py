@@ -16,7 +16,7 @@ PROBE = """
 import json, sys
 import resonancefit.app, resonancefit.ui.main_window, resonancefit.selftest, resonancefit.guided_test
 for name in ("export_flow", "app_cards", "test_songs", "sound_tools", "settings_page", "about_page",
-             "walkthrough", "tuning_panel", "history_panel", "listen_save", "header_card", "import_screen",
+             "walkthrough", "tuning_panel", "tunings_panel", "header_card", "import_screen",
              "guided_test_view", "guided_widgets"):
     __import__("resonancefit.ui." + name)
 print(json.dumps(sorted(m for m in sys.modules if m.startswith("eq_helper"))))
