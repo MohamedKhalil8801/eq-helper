@@ -9,7 +9,7 @@ from pathlib import Path
 from PySide6.QtCore import QEvent, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
-    QFrame, QHBoxLayout, QInputDialog, QLabel, QMainWindow, QPushButton, QMessageBox, QScrollArea, QStackedWidget, QTabWidget, QVBoxLayout, QWidget,
+    QApplication, QFrame, QHBoxLayout, QInputDialog, QLabel, QMainWindow, QPushButton, QMessageBox, QScrollArea, QStackedWidget, QTabWidget, QVBoxLayout, QWidget,
 )
 
 from eq_helper.calibration.model_cache import load_measurements
@@ -38,15 +38,13 @@ from ..library import LibraryEntry
 from ..os_integration import FileAssociation
 from ..paths import is_translocated
 from .about_page import AboutPage
-from .app_catalog_page import AppCatalogPage
-from .common import Worker, build_style, side_name, tr
+from .common import Worker, brand_palette, build_style, is_branded, side_name, tr
 from .export_flow import PREDICTED_APP_ID, ExportFlow, ExportJob
-from .header_card import HeaderCard
+from .header_card import HeaderCard, calibration_label
 from .history_panel import HistoryPanel, describe_entry, entry_name
 from .import_screen import ImportScreen
 from .listen_save import ListenSaveCard
 from .settings_page import SettingsPage
-from .sound_tools import SoundToolsPage
 from .sound_bar import SoundBar
 from .test_songs import TestSongsPage
 from .walkthrough import Walkthrough
@@ -124,7 +122,7 @@ class MainWindow(QMainWindow):
             ctx.paths.platform, ctx.branding, ICON)
         self.setWindowTitle(ctx.branding.title)
         self.setAcceptDrops(True)
-        self.setStyleSheet(build_style(self.palette()))
+        self._brand()
         self.resize(1180, 860)
 
         central = QWidget()
@@ -153,6 +151,7 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(12, 12, 12, 12)
         self.header = HeaderCard(ctx.branding)
         self.header.calibrationChosen.connect(self.select_calibration)
+        self.header.removeRequested.connect(self.remove_calibration)
         layout.addWidget(self.header)
         self.tabs = QTabWidget()
         self.tabs.setDocumentMode(True)
@@ -176,6 +175,14 @@ class MainWindow(QMainWindow):
         self._run(lambda: detect_installed(self.catalog, ctx.paths.platform), self._apps_detected)
         self.refresh()
         self._launch_update_check()
+
+    def _brand(self) -> None:
+        """One palette everywhere: the app's accent instead of the system's (again after a light/dark
+        switch, which brings the system's back)."""
+        app = QApplication.instance()
+        if app is not None and not is_branded(app.palette()):
+            app.setPalette(brand_palette(app.palette()))
+        self.setStyleSheet(build_style(self.palette()))
 
     def _run(self, fn, on_done) -> Worker:
         worker = Worker(fn, self)
@@ -246,6 +253,8 @@ class MainWindow(QMainWindow):
         self.tuning = TuningPanel(self.ctx, self.audio)
         self.tuning.eqChanged.connect(self.audio.set_eq)
         self.tuning.apoOffRequested.connect(self.turn_off_apo)
+        self.tuning.eqToggled.connect(self.audio.set_eq_enabled)
+        self.header.add_choice(*self.tuning.target_widgets())
         self._eq_watch = QTimer(self)  # Equalizer APO can be switched on or off outside the app at any time
         self._eq_watch.setInterval(EQ_WATCH_MS)
         self._eq_watch.timeout.connect(lambda: self.sync_other_eqs() if self.isActiveWindow() else None)
@@ -255,7 +264,6 @@ class MainWindow(QMainWindow):
 
         side = QVBoxLayout()
         self.listen = ListenSaveCard()
-        self.listen.eqToggled.connect(self.audio.set_eq_enabled)
         self.listen.saveRequested.connect(lambda note: self.record_history("manual", note))
         side.addWidget(self.listen)
         self.history_panel = HistoryPanel()
@@ -286,12 +294,6 @@ class MainWindow(QMainWindow):
         self.songs_page = TestSongsPage(self.ctx, self.audio)
         self.calibrationLoaded.connect(self.songs_page.set_calibration)
         self.tabs.addTab(self.songs_page, tr("Test audio"))
-        self.sound_tools = SoundToolsPage(self.audio)
-        self.tabs.addTab(self.sound_tools, tr("Sound tools"))
-
-        self.catalog_page = AppCatalogPage(self.catalog, self.ctx.paths.platform)
-        self.catalog_page.exportRequested.connect(self.open_export)
-        self.tabs.addTab(self.catalog_page, tr("Where can I use my EQ?"))
 
         self.settings_page = SettingsPage(self.ctx, self.audio, self.apo, self.updates)
         self.settings_page.updateCheckRequested.connect(lambda: self.check_for_updates(manual=True))
@@ -356,14 +358,13 @@ class MainWindow(QMainWindow):
 
     def changeEvent(self, event) -> None:
         if event.type() in (QEvent.PaletteChange, QEvent.ApplicationPaletteChange):
-            self.setStyleSheet(build_style(self.palette()))
+            self._brand()
         elif event.type() == QEvent.ActivationChange and self.isActiveWindow():
             self.sync_other_eqs()  # back from Equalizer APO's own window, say
         super().changeEvent(event)
 
     def _apps_detected(self, installed) -> None:
         self.installed = set(installed)
-        self.catalog_page.set_installed(self.installed)
         self.sync_other_eqs()
 
     def sync_other_eqs(self) -> None:
@@ -444,12 +445,7 @@ class MainWindow(QMainWindow):
         self.settings_page.refresh_apo()
 
     def _sync_eq_toggle(self) -> None:
-        on = self.audio.eq_enabled
-        if self.listen.eq_toggle.isChecked() != on:
-            self.listen.eq_toggle.blockSignals(True)
-            self.listen.eq_toggle.setChecked(on)
-            self.listen.eq_toggle.blockSignals(False)
-            self.listen._toggled_text(on)
+        self.tuning.set_eq_on(self.audio.eq_enabled)
 
     def switch_apo_tuning(self, entry_id: str) -> None:
         self.reapply(entry_id)
@@ -565,6 +561,22 @@ class MainWindow(QMainWindow):
 
     def select_calibration(self, calibration_id: str) -> None:
         self.ctx.library.select(calibration_id)
+        self.refresh()
+
+    def confirm_remove(self, label: str) -> bool:
+        answer = QMessageBox.question(
+            self, tr("Remove this calibration?"),
+            tr("Remove “{name}” from {product}? The calibration file itself isn't deleted: open it again "
+               "to bring it back, with its history.").format(
+                name=label, product=self.ctx.branding.product_name))
+        return answer == QMessageBox.Yes
+
+    def remove_calibration(self, calibration_id: str) -> None:
+        entry = next((e for e in self.ctx.library.list() if e.calibration_id == calibration_id), None)
+        if entry is None or not self.confirm_remove(calibration_label(entry)):
+            return
+        self.audio.stop_all()
+        self.ctx.library.remove(calibration_id)
         self.refresh()
 
     def _load(self, entry: LibraryEntry) -> None:

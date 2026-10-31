@@ -6,7 +6,7 @@ from eq_helper.calibration.rescal import write_rescal
 from eq_helper.exports.catalog import load_catalog
 from resonancefit.context import AppContext
 from resonancefit.paths import AppPaths
-from resonancefit.ui.app_catalog_page import AppCatalogPage
+from resonancefit.ui.app_cards import AppCard
 from resonancefit.ui.export_flow import ExportFlow, ExportJob, listening_label
 from resonancefit.ui.main_window import MainWindow
 
@@ -150,23 +150,19 @@ def test_other_advanced_opens_full_convolution_dialog(qtbot, win, tmp_path, monk
     assert win.history.entries()[0].app == "other"
 
 
-def test_catalog_page_browses_same_cards_without_export(qtbot, tmp_path):
-    page = AppCatalogPage(load_catalog(), platform="linux", installed=set())
-    qtbot.addWidget(page)
-    page.choose("phone", "android")
-    assert "wavelet" in page.card_ids()
-    card = page.cards["wavelet"]
-    assert not card.export_buttons
-    assert card.download_button is not None and card.website_button is None
+def _card(qtbot, app_id, installed=frozenset()):
+    app = next(a for a in load_catalog().apps if a.id == app_id)
+    card = AppCard(app, app_id in installed, can_export=False, others_installed=installed)
+    qtbot.addWidget(card)
+    return card
 
 
 def test_installed_apps_show_website_instead_of_download(qtbot):
-    page = AppCatalogPage(load_catalog(), platform="windows", installed={"equalizer-apo"})
-    qtbot.addWidget(page)
-    page.choose("this_computer", "windows")
-    installed, other = page.cards["equalizer-apo"], page.cards["foobar2000"]
+    installed = _card(qtbot, "equalizer-apo", {"equalizer-apo"})
+    other = _card(qtbot, "foobar2000", {"equalizer-apo"})
     assert installed.download_button is None and installed.website_button is not None
     assert other.download_button is not None and other.website_button is None
+    assert not other.export_buttons
 
 
 def test_export_button_on_main_window_opens_flow(qtbot, win, monkeypatch):
@@ -180,8 +176,5 @@ def test_export_button_on_main_window_opens_flow(qtbot, win, monkeypatch):
 def test_peace_is_not_offered_but_its_presence_is_flagged_on_the_apo_card(qtbot):
     catalog = load_catalog()
     assert "peace" not in [a.id for a in catalog.for_listening("this_computer", "windows")]
-    page = AppCatalogPage(catalog, platform="windows", installed={"equalizer-apo", "peace"})
-    qtbot.addWidget(page)
-    page.choose("this_computer", "windows")
-    assert "peace" not in page.card_ids()
-    assert any("Peace" in note for note in page.cards["equalizer-apo"].conflict_notes)
+    card = _card(qtbot, "equalizer-apo", {"equalizer-apo", "peace"})
+    assert any("Peace" in note for note in card.conflict_notes)

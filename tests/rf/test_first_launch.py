@@ -77,7 +77,7 @@ def test_quiet_warning_once_before_first_sound(qtbot, tmp_path, shown):
     assert asked == [1, 2]
     assert w.audio.engine.state.snapshot().mode == Mode.SINE
     w.audio.stop_all()
-    w.sound_tools.pink_button.click()
+    w.tuning.pink_button.click()
     assert asked == [1, 2]  # accepted once: never asked again
     assert w.ctx.settings.get("quiet_warning_seen") is True
 

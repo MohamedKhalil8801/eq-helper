@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QPixmap
-from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QComboBox, QGridLayout, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from .common import Card, chip, heading, hint, tr
 
@@ -32,6 +32,7 @@ def calibration_label(entry) -> str:
 
 class HeaderCard(Card):
     calibrationChosen = Signal(str)
+    removeRequested = Signal(str)  # calibration id
 
     def __init__(self, branding, parent=None):
         super().__init__(parent=parent)
@@ -60,17 +61,26 @@ class HeaderCard(Card):
         self.brand.setTextFormat(Qt.RichText)
         brand_row.addWidget(self.brand)
         right.addLayout(brand_row)
-        switch_row = QHBoxLayout()
-        switch_row.addStretch(1)
-        self.switcher_label = QLabel(tr("Calibration:"))
-        switch_row.addWidget(self.switcher_label)
+        # calibration and target, one under the other: label, choice, its button
+        self.choices = QGridLayout()
+        self.choices.setHorizontalSpacing(8)
+        self.choices.setColumnStretch(1, 1)
+        self.switcher_label = QLabel(tr("Calibration"))
+        self.choices.addWidget(self.switcher_label, 0, 0, Qt.AlignRight)
         self.switcher = QComboBox()
         self.switcher.setAccessibleName(tr("Choose calibration"))
-        self.switcher.setSizeAdjustPolicy(QComboBox.AdjustToContents)
+        self.switcher.setMinimumContentsLength(28)
         self.switcher_label.setBuddy(self.switcher)
         self.switcher.currentIndexChanged.connect(self._chosen)
-        switch_row.addWidget(self.switcher)
-        right.addLayout(switch_row)
+        self.choices.addWidget(self.switcher, 0, 1)
+        self.remove_button = QPushButton(tr("Remove…"))
+        self.remove_button.setToolTip(tr("Remove this calibration from the app. Its file stays where it is."))
+        self.remove_button.clicked.connect(self._remove)
+        self.choices.addWidget(self.remove_button, 0, 2)
+        choices_box = QWidget()
+        choices_box.setLayout(self.choices)
+        self.choices.setContentsMargins(0, 0, 0, 0)
+        right.addWidget(choices_box)
         top.addLayout(right)
         self.body.addLayout(top)
 
@@ -90,10 +100,16 @@ class HeaderCard(Card):
             self.switcher.addItem(calibration_label(entry), entry.calibration_id)
         index = self.switcher.findData(selected_id)
         self.switcher.setCurrentIndex(max(index, 0))
-        visible = len(entries) > 1
-        self.switcher.setVisible(visible)
-        self.switcher_label.setVisible(visible)
+        self.switcher.setEnabled(len(entries) > 1)
         self._updating = False
+
+    def add_choice(self, label: QLabel, widget: QWidget, button: QWidget | None = None) -> None:
+        """Another row under the calibration (the target), in the same columns."""
+        row = self.choices.rowCount()
+        self.choices.addWidget(label, row, 0, Qt.AlignRight)
+        self.choices.addWidget(widget, row, 1)
+        if button is not None:
+            self.choices.addWidget(button, row, 2)
 
     def set_manifest(self, manifest) -> None:
         self.iem.setText(manifest.iem.display_name)
@@ -126,6 +142,11 @@ class HeaderCard(Card):
         parts = [self.iem.text(), self.customer.text(), self.details.text()]
         parts += [c.text() for c in self._chips]
         return "\n".join(p for p in parts if p)
+
+    def _remove(self) -> None:
+        cid = self.switcher.currentData()
+        if cid:
+            self.removeRequested.emit(cid)
 
     def _chosen(self, index: int) -> None:
         if self._updating or index < 0:

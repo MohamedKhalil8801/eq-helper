@@ -67,15 +67,14 @@ def test_reapply_restores_all_controls(win, qtbot):
     t.set_primary_hz(7400)
     t.ears.setCurrentIndex(1)
     t.set_primary_hz(8200)
-    t.advanced_toggle.click()
-    t.upper_enabled.setChecked(True)
+    t.upper_lock.setChecked(True)
     t.upper_slider.setValue(14000)
     t.regenerate()
     win.listen.save_button.click()
     saved_target = t.session.target_name
     # change everything
     t.set_primary_hz(6600)
-    t.upper_enabled.setChecked(False)
+    t.upper_lock.setChecked(False)
     other = next(i for i in range(t.target_combo.count()) if t.target_combo.itemText(i).startswith("Harman IE 2019"))
     t.target_combo.setCurrentIndex(other)
     win.history_panel.list.setCurrentRow(0)
@@ -83,7 +82,7 @@ def test_reapply_restores_all_controls(win, qtbot):
         win.history_panel.reapply_button.click()
     assert t.session.primary == {"L": 7400, "R": 8200}
     assert t.session.upper == {"R": 14000} and t.session.upper_enabled
-    assert t.upper_enabled.isChecked()
+    assert t.upper_lock.isChecked()
     assert t.session.target_name == saved_target
     assert t.target_combo.currentText().startswith(saved_target)
     assert t.peak_slider.value() in (7400, 8200)
@@ -108,12 +107,12 @@ def test_reapply_after_target_file_is_gone_uses_stored_curve(win, tmp_path, qtbo
 
 def test_eq_toggle_previews_in_app(win):
     assert not win.audio.eq_enabled
-    win.listen.eq_toggle.click()
+    win.tuning.power_button.click()
     assert win.audio.eq_enabled
     on, off = win.audio.preview_firs()
     assert set(on) == {"L", "R"} and set(off) == {"L", "R"}
     assert len(on["L"]) > 100 and len(off["L"]) == 1
-    win.listen.eq_toggle.click()
+    win.tuning.power_button.click()
     assert not win.audio.eq_enabled
 
 

@@ -34,7 +34,7 @@ The app isn't code-signed yet, so your system asks once.
   run it, with the `Calibrations` and `Targets` folders next to it.
 
 The app opens with your calibration already loaded. If it shows **Open the calibration file you
-received**, open or drop your `.rescal` file. A short walkthrough explains the three steps. You can
+received**, open or drop your `.rescal` file. A short walkthrough explains the steps. You can
 reopen it from **Settings → Show the walkthrough again**. On Windows and Linux the app may also offer to
 open `.rescal` files when you double-click them.
 
@@ -43,7 +43,20 @@ and asks you to turn your volume down before the first sound. **Press Space at a
 sound.** The bar at the bottom of the window always shows the **Output** you're playing on, the
 **Volume** and **Stop all sound**.
 
-## ① Find your resonance
+## Calibration and target
+
+The top of the window shows your IEM, who it was calibrated for and the accessories it was measured
+with. On the right:
+
+- **Calibration**: which of your calibrations you're tuning. The list is the calibrations in your
+  `Calibrations` folder (plus any you opened from elsewhere): when your tuner sends a new calibration that
+  replaces an old file, or you delete a file there, the old one leaves the list at the next launch.
+  **Remove…** takes the selected one out of the app; its file isn't touched, and opening it again
+  brings it back with its history.
+- **Target**: the sound you want. The one marked **(default)** was chosen for you by your tuner. You can
+  try any other, or **Import…** a target curve (TXT or CSV, frequency and level) you found elsewhere.
+
+## Find your resonance
 
 **Turn off any other EQ first:** your music app's EQ, sound enhancements (Dolby, Windows or Realtek
 effects…), Equalizer APO or Peace, and your dongle's EQ. Otherwise you hear it on top of this one and
@@ -57,8 +70,8 @@ so switching it on or off in Equalizer APO itself shows here within a few second
 
 Press **Find it for me (a few minutes)**. A short screen reminds you to wear both IEMs as usual, keep
 the volume low and turn other EQs off; press **Start the test**. While the test runs it has the window to
-itself: only the output, volume and **Stop all sound** stay at the bottom; the tabs, steps ② and ③,
-**Listen & save** and **History** come back when it ends. Then, for the left ear and then the
+itself: only the output, volume and **Stop all sound** stay at the bottom; the calibration and target,
+the tabs, the **EQ** button, **Listen & save** and **History** come back when it ends. Then, for the left ear and then the
 right (one ear only for a calibration made for both ears at once), a **smoothness check** in two parts.
 Every card plays the same sound through a slightly different EQ, each placing your resonance a little
 differently; you pick the one whose treble sounds smoothest.
@@ -120,7 +133,7 @@ at about twice that frequency). For each ear:
    That's common and nothing is lost: what you can barely hear matters little for your EQ.
 2. **Smoothness check**, a few rounds of three cards around your pick, closer together each time.
 
-A found upper treble turns on **Adjust the upper treble** (step ③) with that value.
+A found upper treble unlocks the **Upper treble** slider with that value.
 
 Keys: **1**–**8** pick and play a card, **P** play/pause, **Enter** answers for the selected card, **S**
 is *About the same* / *Can't tell them apart*, **X** rules the selected card out (in the overview),
@@ -134,15 +147,17 @@ yourself, or to fine-tune what the test found:
 
 1. Put both IEMs in as you normally wear them, with your usual tips.
 2. On the **Left** tab, press **▶ Play tone**. The tone plays in your left ear only, and a dotted line on
-   the graph shows the frequency that's playing.
+   the graph shows the frequency that's playing. **Centre** plays in both ears, and moving the slider
+   there moves both ears' resonance together (the graph shows the left ear).
 3. Move the slider, type a frequency or drag the orange **Resonance** line on the graph until the tone
    sounds **loudest or most piercing**. That's your left resonance. **Sweep around it** plays a slow
    sweep around that frequency if that's easier to judge (the dotted line follows the sweep). The
    resonance is where the sweep gets loudest.
 4. Do the same on the **Right** tab.
 
-Each sound button starts its sound and stops it when you press it again (it reads **■ Stop tone** while
-playing). Space, or **Stop all sound** at the bottom, stops everything.
+**〰 Full sweep** plays a slow sweep from 20 Hz to 20 kHz. Each sound button starts its sound and stops
+it when you press it again (it reads **■ Stop tone** while playing). Space, or **Stop all sound** at the
+bottom, stops everything.
 
 To check by ear, press **≈ Pink noise + EQ** or **≈ Grey noise + EQ**: the noise plays through your EQ
 (the EQ switches on). Move
@@ -154,23 +169,19 @@ The graph shows **Your IEM** (what the calibration predicts for your setting), t
 tone at that frequency. If you land outside what was measured for your IEMs, the app
 tells you so: the EQ there is an estimate, which is fine if it sounds right.
 
-## ② Choose your target
+**⏻ EQ on / off** (top right of the panel) switches the EQ in the app on and off so you can compare. It's
+level-matched, so you compare tone, not loudness. Use a tone, a sweep or something you know well (see
+*Test audio*). It only changes what you hear in the app, not Equalizer APO.
 
-The target is the sound you want. The one marked **default** was chosen for you by your tuner. You can
-try any other, or **Import…** a target curve (TXT or CSV, frequency and level) you found elsewhere.
+**Upper treble (advanced, optional).** The **Upper treble** slider under the resonance slider is
+**🔒 Locked** at first: it shows your calibration's value and the EQ keeps it as calibrated. Unlock it
+only if you hear a second, higher peak (above about 10.5 kHz) that still bothers you: a pink **Upper**
+line appears on the graph, and the same sound buttons play at whichever one you last moved (or pick
+**Resonance** or **Upper treble** next to them). Move it to where you hear the peak, per ear. **Reset**
+puts the selected ear back; locking it again puts both back as calibrated.
 
-## ③ Fine-tune upper treble (advanced, optional)
+## Listen & save
 
-Only if you hear a second, higher peak (above about 10.5 kHz) that still bothers you. Turn on **Adjust
-the upper treble**: an **Upper treble** slider appears under the resonance slider in step ①, with a pink
-**Upper** line on the graph. The same sound buttons play at whichever one you last moved (or pick
-**Resonance** or **Upper treble** next to them). Move it to where you hear the peak, per ear. **Reset** puts the selected ear back. Leave it off otherwise: off
-keeps the EQ as calibrated.
-
-## ④ Listen & save
-
-- **EQ off / on:** switches the EQ in the app on and off so you can compare. It's level-matched, so you
-  compare tone, not loudness. Use a tone, a sweep or something you know well (see *Test audio*).
 - **Save tuning:** keeps your current choices in **History**, with an optional name (for example
   “Bright tips”). Saving a tuning that's already there just renames it (if you typed a name).
 - **Export for my EQ app…:** makes the files for the app you listen with (below).
@@ -213,17 +224,14 @@ the file for the rate your device runs at (GraphicEQ is still there as an option
 over first (USB, a cloud drive or email). For convolution files, the only setting is the sample rate,
 pre-filled with the rate your output device runs at.
 
-The same cards are on the **Where can I use my EQ?** tab. **Predicted response** exports your IEM's
-predicted curves (left and right, optionally with the EQ) for squig.link or PEQdB studio.
+**Predicted response** exports your IEM's predicted curves (left and right, optionally with the EQ) for squig.link or PEQdB studio.
 
 ## Other tabs
 
 - **Test audio:** your tuner's suggested links plus whatever you add: audio files from your computer
   (any recording you know well) or web links. **+ Add audio files…** and **Add link…** sit in the middle
   of the list while it's empty. Files play in the app
-  through your EQ with the EQ on/off switch. Formats the app can't play open in your system's player.
-- **Sound tools:** tone, sweep, full sweep, pink and grey noise, volume, and Left/Both/Right. As on the
-  Tune tab, each button starts its sound and stops it when pressed again.
+  through your EQ with the **⏻ EQ** switch. Formats the app can't play open in your system's player.
 - **Settings:** output device, Equalizer APO, the calibrations and data folders, the walkthrough, and
   **Version and updates** (below).
 - **About:** your calibration sheet, contact and licences.
@@ -248,13 +256,13 @@ next to it on Windows and Linux). Your calibrations, history and settings are ke
 - **No sound:** check **Output** at the bottom of the window and your system volume. Press Space and
   try again.
 - **The EQ sounds wrong:** check you're wearing the tips listed on your calibration sheet, then find your
-  resonance again. Fit matters: re-seat the IEMs and repeat step ①.
+  resonance again. Fit matters: re-seat the IEMs and find it again.
 - **One side louder in a shared-only app:** set that app's balance as shown after exporting.
 - **“Equalizer APO couldn't be changed”:** follow the steps shown, which give the Users group permission
   to change Equalizer APO's config folder, then apply again.
 - **A new calibration from your tuner:** double-click the new `.rescal` file, drop it on the window, or put
   it in the calibrations folder (**Settings → Open calibrations folder**). With several calibrations, pick
-  one at the top right.
+  one at the top right; **Remove…** takes one out.
 
 ## Your data
 

@@ -1,8 +1,9 @@
-"""Steps ①–③: find your resonance, choose a target, optional upper treble.
+"""Find your resonance: the graph, the resonance and upper-treble sliders, their sounds, the EQ's power
+button, and the target (shown in the header, :meth:`TuningPanel.target_widgets`).
 
-Driven by :class:`~eq_helper.calibration.tuning.TuningSession`. Step ① starts
+Driven by :class:`~eq_helper.calibration.tuning.TuningSession`. It starts
 with the guided test ("Find it for me", :mod:`.guided_test_view`), which
-takes the place of step ①'s contents while it runs. The slider under it ports
+takes the place of the panel's contents while it runs. The slider under it ports
 the behaviour of EQ Helper's ResonanceDialog in plain language: moving the
 slider (or dragging the marker) updates the "Your IEM" curve at once and
 regenerates the EQ after a short pause; a playing tone follows the slider.
@@ -16,14 +17,14 @@ from pathlib import Path
 import numpy as np
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
-    QButtonGroup, QCheckBox, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QMessageBox, QPushButton,
-    QSizePolicy, QSlider, QSpinBox, QStackedWidget, QTabBar, QToolButton, QVBoxLayout, QWidget,
+    QButtonGroup, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QPushButton,
+    QSizePolicy, QSlider, QSpinBox, QStackedWidget, QTabBar, QVBoxLayout, QWidget,
 )
 
 from eq_helper.calibration.tuning import TuningSession, target_hash
 from eq_helper.dsp.resonance import CONTROL_RANGE, PERSONAL_TREBLE_RANGE, detect_high_treble_peak
 
-from .common import Card, Worker, chip, hint, side_name, tr
+from .common import Card, Worker, heading, hint, side_name, tr
 from .guided_test_view import GuidedTestView
 from .response_graph import ResponseGraph
 
@@ -40,6 +41,7 @@ REGENERATE_DELAY_MS = 250
 CURVE_REDRAW_MS = 15  # coalesce "Your IEM" redraws while a slider or line is dragged
 LIVE_REGENERATE_DELAY_MS = 60   # while pink noise plays through the EQ: follow the slider closely
 DEFAULT_UPPER_HZ = 15500
+CENTRE = "C"  # the ear tab for both ears at once: sound in both, the sliders move both
 
 
 class ResonanceRow(QWidget):
@@ -91,6 +93,7 @@ class ResonanceRow(QWidget):
 # (kind, idle label, playing label)
 SOUNDS = (("tone", "▶ Play tone", "■ Stop tone"),
           ("focus", "〰 Sweep around it", "■ Stop sweep"),
+          ("sweep", "〰 Full sweep", "■ Stop sweep"),
           ("pink", "≈ Pink noise + EQ", "■ Stop noise"),
           ("grey", "≈ Grey noise + EQ", "■ Stop noise"))
 NOISES = ("pink", "grey")
@@ -111,6 +114,7 @@ class _TargetItem:
 class TuningPanel(QWidget):
     eqChanged = Signal(object)  # ChannelEQ
     apoOffRequested = Signal()
+    eqToggled = Signal(bool)  # the power button: hear the EQ or not
     guidedActiveChanged = Signal(bool)  # the guided test opened (True) or closed (False)
 
     def __init__(self, ctx, audio, parent=None):
@@ -141,18 +145,26 @@ class TuningPanel(QWidget):
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
+        self._build_target()
         outer.addWidget(self._build_step1(), 1)
-        lower = QHBoxLayout()
-        self.step2 = self._build_step2()
-        self.step3 = self._build_step3()
-        lower.addWidget(self.step2, 1)
-        lower.addWidget(self.step3, 1)
-        outer.addLayout(lower)
         audio.on_change(self._sync_play_buttons)
 
     # ── layout ─────────────────────────────────────────────────────────────
     def _build_step1(self) -> Card:
-        card = Card(tr("① Find your resonance"))
+        card = Card()
+        title_row = QHBoxLayout()
+        self.title = heading(tr("Find your resonance"))
+        title_row.addWidget(self.title, 1)
+        self.power_button = QPushButton()
+        self.power_button.setObjectName("power")
+        self.power_button.setCheckable(True)
+        self.power_button.setAccessibleName(tr("EQ on or off"))
+        self.power_button.setToolTip(tr("Hear your EQ, or switch it off to compare. Only in this app: "
+                                        "Equalizer APO isn't changed."))
+        self.power_button.toggled.connect(self._power_toggled)
+        self._power_toggled(False, emit=False)
+        title_row.addWidget(self.power_button, 0, Qt.AlignTop)
+        card.body.addLayout(title_row)
         self.step1_stack = QStackedWidget()
         card.body.addWidget(self.step1_stack, 1)
         self.manual_page = QWidget()
@@ -185,10 +197,6 @@ class TuningPanel(QWidget):
         self.ears.currentChanged.connect(self._ear_changed)
         top.addWidget(self.ears)
         top.addStretch(1)
-        self.details_button = QPushButton(tr("Details…"))
-        self.details_button.setFlat(True)
-        self.details_button.clicked.connect(self.show_details)
-        top.addWidget(self.details_button)
         body.addLayout(top)
         self.hint = hint(tr(
             "Press Play tone, then move the slider (or drag the orange line) until the tone sounds loudest "
@@ -260,14 +268,25 @@ class TuningPanel(QWidget):
                                   PERSONAL_TREBLE_RANGE, 50, 250)
         self.upper.valueChanged.connect(self._upper_moved)
         self.upper_slider, self.upper_spin = self.upper.slider, self.upper.spin
+        self.upper_lock = QPushButton()
+        self.upper_lock.setObjectName("lock")
+        self.upper_lock.setCheckable(True)  # checked = unlocked: the listener sets the upper treble
+        self.upper_lock.setAccessibleName(tr("Adjust the upper treble"))
+        self.upper_lock.setToolTip(tr("Locked keeps the upper treble as calibrated. Unlock it only if you hear "
+                                      "a second, higher peak that still bothers you, then find it the same way."))
+        self.upper_lock.toggled.connect(self._set_upper_enabled)
+        self.upper.extra.addWidget(self.upper_lock)
         self.reset_upper = QPushButton(tr("Reset"))
         self.reset_upper.setToolTip(tr("Put this ear's upper treble back as calibrated."))
         self.reset_upper.clicked.connect(self._reset_upper)
         self.upper.extra.addWidget(self.reset_upper)
+        self._sync_lock_text(False)
+        self.upper_lock.setMinimumWidth(max(self.upper_lock.fontMetrics().horizontalAdvance(t)
+                                            for t in ("🔓 " + tr("Unlocked"), "🔒 " + tr("Locked"))) + 28)
         self._reset_space = QWidget()  # keeps both sliders the same length
-        self._reset_space.setFixedWidth(self.reset_upper.sizeHint().width())
+        self._reset_space.setFixedWidth(self.upper_lock.minimumWidth() + self.reset_upper.sizeHint().width()
+                                        + max(self.upper.extra.spacing(), 6))
         self.primary.extra.addWidget(self._reset_space)
-        self.upper.hide()
         rows.addWidget(self.upper)
 
         # one set of sound buttons for whichever resonance is selected; each starts and stops its sound
@@ -323,57 +342,46 @@ class TuningPanel(QWidget):
         self.range_warning.setWordWrap(True)
         self.range_warning.hide()
         body.addWidget(self.range_warning)
+        body.addWidget(self.target_problem)
         return card
 
-    def _build_step2(self) -> Card:
-        card = Card(tr("② Choose your target"))
-        card.body.addWidget(hint(tr("The sound you want. The one marked default was chosen for you.")))
-        row = QHBoxLayout()
+    def _build_target(self) -> None:
+        """The target's label, list and Import button; the main window shows them in the header, under
+        the calibration (:meth:`target_widgets`)."""
+        self.target_label = QLabel(tr("Target"))
+        self.target_label.setToolTip(tr("The sound you want. The one marked default was chosen for you."))
         self.target_combo = QComboBox()
         self.target_combo.setAccessibleName(tr("Target"))
+        self.target_combo.setToolTip(self.target_label.toolTip())
         self.target_combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.target_combo.currentIndexChanged.connect(self._target_chosen)
-        row.addWidget(self.target_combo, 1)
+        self.target_label.setBuddy(self.target_combo)
         self.import_target_button = QPushButton(tr("Import…"))
+        self.import_target_button.setToolTip(tr("Use a target curve file of your own (.txt or .csv)."))
         self.import_target_button.clicked.connect(self._browse_target)
-        row.addWidget(self.import_target_button)
-        card.body.addLayout(row)
-        self.default_chip = chip(tr("default"), "default")
-        self.default_chip.hide()
-        card.body.addWidget(self.default_chip, 0, Qt.AlignLeft)
         self.target_problem = QLabel()
         self.target_problem.setObjectName("warning")
         self.target_problem.setWordWrap(True)
-        card.body.addWidget(self.target_problem)
-        card.body.addStretch(1)
-        return card
 
-    def _build_step3(self) -> Card:
-        card = Card()
-        self.advanced_toggle = QToolButton()
-        self.advanced_toggle.setText(tr("③ Fine-tune upper treble (advanced, optional)"))
-        self.advanced_toggle.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
-        self.advanced_toggle.setArrowType(Qt.RightArrow)
-        self.advanced_toggle.setCheckable(True)
-        self.advanced_toggle.setAutoRaise(True)
-        font = self.advanced_toggle.font()
-        font.setBold(True)
-        self.advanced_toggle.setFont(font)
-        self.advanced_toggle.toggled.connect(self._toggle_advanced)
-        card.body.addWidget(self.advanced_toggle)
-        self.advanced_body = QWidget()
-        body = QVBoxLayout(self.advanced_body)
-        body.setContentsMargins(0, 0, 0, 0)
-        body.addWidget(hint(tr("Only if you hear a second, higher peak that still bothers you. Turn this on: "
-                               "an Upper treble slider and a pink line appear in step ①. Find the peak the "
-                               "same way, per ear. Off keeps the EQ as calibrated.")))
-        self.upper_enabled = QCheckBox(tr("Adjust the upper treble"))
-        self.upper_enabled.toggled.connect(self._set_upper_enabled)
-        body.addWidget(self.upper_enabled)
-        self.advanced_body.hide()
-        card.body.addWidget(self.advanced_body)
-        card.body.addStretch(1)
-        return card
+    def target_widgets(self):
+        """(label, list, Import button) for the header."""
+        return self.target_label, self.target_combo, self.import_target_button
+
+    def _power_toggled(self, on: bool, emit: bool = True) -> None:
+        self.power_button.setText("⏻  " + (tr("EQ on") if on else tr("EQ off")))
+        if emit:
+            self.eqToggled.emit(on)
+
+    def set_eq_on(self, on: bool) -> None:
+        """Follow the EQ preview's state (it can change elsewhere, e.g. Test audio)."""
+        if self.power_button.isChecked() != on:
+            self.power_button.blockSignals(True)
+            self.power_button.setChecked(on)
+            self.power_button.blockSignals(False)
+        self._power_toggled(on, emit=False)
+
+    def _sync_lock_text(self, unlocked: bool) -> None:
+        self.upper_lock.setText(("🔓 " + tr("Unlocked")) if unlocked else ("🔒 " + tr("Locked")))
 
     def set_other_eqs(self, found: list[str], apo_on: bool, app: str = "Equalizer APO") -> None:
         """Warn about other EQs: any EQ already running is heard on top of this one.
@@ -422,10 +430,27 @@ class TuningPanel(QWidget):
 
     # ── state ──────────────────────────────────────────────────────────────
     @property
-    def side(self) -> str | None:
+    def ear(self) -> str | None:
+        """The selected ear tab: a side, or ``CENTRE`` (both at once)."""
         if self.ears.count() == 0:
             return None
         return self.ears.tabData(self.ears.currentIndex())
+
+    @property
+    def side(self) -> str | None:
+        """The side whose curves and values are shown (Centre: the first)."""
+        ear = self.ear
+        return self.session.sides[0] if ear == CENTRE and self.session is not None else ear
+
+    @property
+    def edit_sides(self) -> tuple:
+        """The sides the sliders change: Centre moves both."""
+        return tuple(self.session.sides) if self.ear == CENTRE else (self.side,)
+
+    @property
+    def play_side(self):
+        """Where the sounds play: the selected ear, or both for Centre."""
+        return "both" if self.ear == CENTRE else self.side
 
     @property
     def model(self):
@@ -456,6 +481,11 @@ class TuningPanel(QWidget):
         for side in self.session.sides:
             index = self.ears.addTab(side_name(side))
             self.ears.setTabData(index, side)
+        if len(self.session.sides) > 1:
+            index = self.ears.addTab(tr("Centre"))
+            self.ears.setTabData(index, CENTRE)
+            self.ears.setTabToolTip(index, tr("Both ears at once: the sound plays in both, and moving a slider "
+                                              "moves both ears' value together."))
         self.ears.setCurrentIndex(0)
         self._syncing = False
 
@@ -497,11 +527,6 @@ class TuningPanel(QWidget):
         if chosen is not None:
             self.target_combo.setCurrentIndex(chosen)
         self._syncing = False
-        self._sync_default_chip()
-
-    def _sync_default_chip(self) -> None:
-        index = self.target_combo.currentIndex()
-        self.default_chip.setVisible(0 <= index < len(self._targets) and self._targets[index].is_default)
 
     def remember(self) -> None:
         """Keep the current choices for the next launch (not a history entry)."""
@@ -518,7 +543,8 @@ class TuningPanel(QWidget):
     def set_primary_hz(self, hz) -> None:
         if self._syncing or self.session is None:
             return
-        value = self.session.set_primary(self.side, round(float(hz)))
+        for side in self.edit_sides:
+            value = self.session.set_primary(side, round(float(hz)))
         self._follow("primary", value)       # sound first: it must not wait for drawing
         self._sync_peak_controls()
         self._iem_redraw.start()
@@ -530,7 +556,7 @@ class TuningPanel(QWidget):
         return self.step1_stack.currentWidget() is self.guided
 
     def start_guided_test(self, rng=None) -> None:
-        """Show the guided test in place of step ①'s contents (intro first)."""
+        """Show the guided test in place of the panel's contents (intro first)."""
         if self.session is None or self.session.target is None:
             return
         self.audio.stop_all()
@@ -541,8 +567,7 @@ class TuningPanel(QWidget):
         self._guided_eq = False
         self.guided.start(self.session.sides, defaults, rng)
         self.step1_stack.setCurrentWidget(self.guided)
-        for card in (self.step2, self.step3):
-            card.hide()  # the test has the window to itself (its EQs use today's target and upper treble)
+        self.power_button.hide()  # the test has the window to itself (its EQs use today's target and upper treble)
         self.guidedActiveChanged.emit(True)
 
     def _option_eqs(self, side: str, hz_list, which: str = "primary"):
@@ -612,8 +637,7 @@ class TuningPanel(QWidget):
             return
         self.guided.stop()
         self.step1_stack.setCurrentWidget(self.manual_page)
-        for card in (self.step2, self.step3):
-            card.show()
+        self.power_button.show()
         if self.channel_eq is not None:
             self.audio.set_eq(self.channel_eq)  # the test previewed its own EQs
             if self._guided_eq:
@@ -637,7 +661,7 @@ class TuningPanel(QWidget):
             self.audio.set_tone(hz)
             self._show_playing()
         else:
-            self.audio.play_tone(hz, self.side)
+            self.audio.play_tone(hz, self.play_side)
             self._graph_tone = True
             self._sync_play_buttons()
 
@@ -662,14 +686,13 @@ class TuningPanel(QWidget):
         self.focus_upper.setChecked(self.focus == "upper")
         self.primary.set_focused(upper_on and self.focus == "primary")
         self.upper.set_focused(upper_on and self.focus == "upper")
-        self._reset_space.setVisible(upper_on)
         self._sync_readout()
 
     def _sync_readout(self) -> None:
         """The big number shows the selected resonance."""
         if self.session is None or self.side is None:
             return
-        side = side_name(self.side)
+        side = side_name("M") if self.ear == CENTRE else side_name(self.side)
         if self.focus == "upper":
             self.readout_side.setText(tr("{side} upper treble").format(side=side))
             self.readout.setText(f"{self.upper_slider.value():,} Hz")
@@ -698,12 +721,14 @@ class TuningPanel(QWidget):
 
     def _start(self, kind: str) -> None:
         if kind == "tone":
-            self.audio.play_tone(self._focus_hz(), self.side)
+            self.audio.play_tone(self._focus_hz(), self.play_side)
         elif kind == "focus":
-            self.audio.play_focus_sweep(self._focus_hz(), self.side)
+            self.audio.play_focus_sweep(self._focus_hz(), self.play_side)
+        elif kind == "sweep":
+            self.audio.play_full_sweep(self.play_side)
         else:
             self.audio.set_eq_enabled(True)  # the point is to hear the EQ while moving the resonance
-            self.audio.play_noise(kind, self.side)
+            self.audio.play_noise(kind, self.play_side)
         self._graph_tone = False
 
     def _toggle(self, kind: str) -> None:
@@ -720,10 +745,10 @@ class TuningPanel(QWidget):
         self._sync_controls()
         self._show_eq_curves()
         playing = self.audio.playing
-        if playing in ("tone", "focus", *NOISES) and not self._graph_tone:
+        if playing in ("tone", "focus", "sweep", *NOISES) and not self._graph_tone:
             self._start(playing)
         elif playing == "tone":
-            self.audio.route(self.side)
+            self.audio.route(self.play_side)
 
     def _sync_play_buttons(self) -> None:
         playing = self.audio.playing
@@ -744,17 +769,7 @@ class TuningPanel(QWidget):
     def _show_playing(self) -> None:
         self.graph.set_playing(self.audio.playing_frequency())
 
-    def show_details(self) -> None:
-        if self.session is None:
-            return
-        lines = []
-        for side in self.session.sides:
-            model = self.session.measurements.models[side]
-            lines.append(f"{side_name(side)}: {model.describe(self.session.primary[side])}")
-        lines += list(self.session.measurements.warnings)
-        QMessageBox.information(self, tr("Details"), "\n".join(lines))
-
-    # ── ② target ───────────────────────────────────────────────────────────
+    # ── target ─────────────────────────────────────────────────────────────
     def _target_chosen(self, index: int) -> None:
         if self._syncing or self.session is None or not 0 <= index < len(self._targets):
             return
@@ -764,7 +779,6 @@ class TuningPanel(QWidget):
         except ValueError as exc:
             self.target_problem.setText(tr("This target can't be used: {reason}").format(reason=exc))
             return
-        self._sync_default_chip()
         self.regenerate()
 
     def _browse_target(self) -> None:
@@ -790,11 +804,7 @@ class TuningPanel(QWidget):
         self.target_combo.setCurrentIndex(index)  # selects and regenerates
         return True
 
-    # ── ③ upper resonance ──────────────────────────────────────────────────
-    def _toggle_advanced(self, open_: bool) -> None:
-        self.advanced_body.setVisible(open_)
-        self.advanced_toggle.setArrowType(Qt.DownArrow if open_ else Qt.RightArrow)
-
+    # ── upper resonance ────────────────────────────────────────────────────
     def _set_upper_enabled(self, enabled: bool) -> None:
         if self._syncing or self.session is None:
             return
@@ -810,7 +820,8 @@ class TuningPanel(QWidget):
         self.graph.set_upper_marker(hz if self.session.upper_enabled else None)
         if not self.session.upper_enabled:
             return
-        self.session.set_upper(self.side, hz)
+        for side in self.edit_sides:
+            self.session.set_upper(side, hz)
         self._follow("upper", hz)
         self._sync_readout()
         self._schedule_regen()
@@ -818,7 +829,8 @@ class TuningPanel(QWidget):
     def _reset_upper(self) -> None:
         if self.session is None:
             return
-        self.session.clear_upper(self.side)
+        for side in self.edit_sides:
+            self.session.clear_upper(side)
         self._sync_upper_controls()
         self.regenerate()
 
@@ -879,11 +891,13 @@ class TuningPanel(QWidget):
     def _sync_upper_controls(self) -> None:
         enabled = self.session.upper_enabled
         self._syncing = True
-        self.upper_enabled.setChecked(enabled)
+        self.upper_lock.setChecked(enabled)
         hz = int(round(self.session.upper.get(self.side) or self._predicted_upper()))
         self.upper.set_value(hz)
         self._syncing = False
-        self.upper.setVisible(enabled)
+        self._sync_lock_text(enabled)
+        for widget in (self.upper.slider, self.upper.spin, self.reset_upper):
+            widget.setEnabled(enabled)
         self.graph.set_upper_marker(hz if enabled else None)
         self._sync_focus_widgets()
 

@@ -1,5 +1,5 @@
 """EQ app cards and the "Where will you listen?" picker, shared by the export
-flow and the "Where can I use my EQ?" page."""
+flow."""
 
 from __future__ import annotations
 

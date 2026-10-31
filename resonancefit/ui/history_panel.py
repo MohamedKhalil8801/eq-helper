@@ -66,8 +66,7 @@ class HistoryPanel(Card):
         self.body.addWidget(self.empty)
         self.list = QListWidget()
         self.list.setWordWrap(True)
-        self.list.setStyleSheet("QListWidget::item { padding: 6px 4px; border-bottom: 1px solid palette(midlight); }"
-                                "QListWidget::item:selected { background: palette(highlight); color: palette(highlighted-text); }")
+        self.list.setObjectName("history")  # styled in common.build_style
         self.list.setAccessibleName(tr("Saved tunings"))
         self.list.itemDoubleClicked.connect(lambda _item: self._reapply())
         self.list.currentRowChanged.connect(self._sync_buttons)

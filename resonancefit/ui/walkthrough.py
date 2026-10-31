@@ -13,8 +13,9 @@ STEPS = (
      "Press Find it for me: a short listening test (a few minutes) plays the same noise through "
      "different EQs and asks which sounds smoothest, for each ear. Or adjust by hand with a tone and the slider."),
     ("Step 2 of 3: pick a target and listen",
-     "The target is the sound you want; the one marked default was chosen for you. Play something you "
-     "know well and switch the EQ on and off to compare."),
+     "The target, at the top under your calibration, is the sound you want; the one marked default was "
+     "chosen for you. Play something you know well and switch the EQ on and off with the ⏻ EQ button to "
+     "compare."),
     ("Step 3 of 3: save it and use it everywhere",
      "Export the EQ for the app you listen with — or apply it directly with Equalizer APO (Windows) or EasyEffects (Linux). "
      "Every tuning you save, export or apply is kept in History, so you can always go back."),

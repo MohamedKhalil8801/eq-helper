@@ -113,8 +113,26 @@ def theme_colors(palette: QPalette) -> dict[str, str]:
             "primary_text_on_primary": on_primary, "border": _mix(text, base, 0.78), "dark": dark}
 
 
+def brand_palette(palette: QPalette) -> QPalette:
+    """``palette`` with the app's own accent: selections, sliders, focus and links use it instead of the
+    system's accent colour (which can be anything, e.g. a bright red), so every screen shares one look."""
+    c = theme_colors(palette)
+    branded = QPalette(palette)
+    for group in (QPalette.Active, QPalette.Inactive):
+        for role, color in ((QPalette.Highlight, c["primary"]), (QPalette.Accent, c["primary"]),
+                            (QPalette.Link, c["primary"]),
+                            (QPalette.HighlightedText, c["primary_text_on_primary"])):
+            branded.setColor(group, role, QColor(color))
+    return branded
+
+
+def is_branded(palette: QPalette) -> bool:
+    return palette.color(QPalette.Highlight).name() == theme_colors(palette)["primary"].lower()
+
+
 def build_style(palette: QPalette) -> str:
     c = theme_colors(palette)
+    tint = _mix(QColor(c['primary']), QColor(c['base']), 0.86)  # a selected row: the accent, faintly
     return f"""
 QFrame#card {{ border: 1px solid {c['border']}; border-radius: 10px; background: {c['base']}; }}
 QLabel#hint {{ color: {c['hint']}; }}
@@ -125,9 +143,6 @@ QFrame#notice[kind="ok"] {{ border-color: {c['border']}; background: {c['base']}
 QFrame#notice QLabel {{ background: transparent; }}
 QLabel#noticeTitle {{ font-weight: bold; }}
 QLabel#chip {{ border: 1px solid {c['border']}; border-radius: 9px; padding: 1px 8px; }}
-QLabel#chip[kind="yours"] {{ border-color: {COLOR_TARGET}; }}
-QLabel#chip[kind="operator"] {{ border-color: {COLOR_WITH_EQ}; }}
-QLabel#chip[kind="default"] {{ border-color: {COLOR_IEM}; }}
 QLabel#bigReadout {{ color: {c['text']}; }}
 QPushButton#primary {{ background: {c['primary']}; color: {c['primary_text_on_primary']}; font-weight: bold;
     border: 1px solid {c['primary']}; border-radius: 6px; padding: 6px 14px; }}
@@ -140,10 +155,16 @@ QPushButton[large="true"]:disabled {{ color: {c['hint']}; }}
 QPushButton#primary[large="true"] {{ background: {c['primary']}; color: {c['primary_text_on_primary']};
     border-color: {c['primary']}; }}
 QLabel#emptyTitle {{ font-size: 13pt; font-weight: bold; }}
-QPushButton:focus, QToolButton:focus, QComboBox:focus, QSlider:focus, QSpinBox:focus,
-QLineEdit:focus, QListWidget:focus, QRadioButton:focus, QCheckBox:focus, QTabBar:focus {{
-    outline: 2px solid {c['primary']}; }}
-QPushButton:focus {{ border: 2px solid {c['primary']}; }}
+QPushButton#power {{ border: 1px solid {c['border']}; border-radius: 15px; padding: 5px 14px; min-height: 18px;
+    background: {c['base']}; color: {c['hint']}; font-weight: bold; }}
+QPushButton#power:hover {{ border-color: {c['primary']}; }}
+QPushButton#power:checked {{ background: {c['primary']}; color: {c['primary_text_on_primary']};
+    border-color: {c['primary']}; }}
+QListWidget#history {{ border: 1px solid {c['border']}; border-radius: 6px; outline: none; }}
+QListWidget#history::item {{ padding: 8px 6px; border-bottom: 1px solid {c['border']}; color: {c['text']}; }}
+QListWidget#history::item:selected {{ background: {tint}; color: {c['text']};
+    border-left: 3px solid {c['primary']}; }}
+QListWidget#history::item:hover:!selected {{ background: {_mix(QColor(c['primary']), QColor(c['base']), 0.94)}; }}
 """
 
 

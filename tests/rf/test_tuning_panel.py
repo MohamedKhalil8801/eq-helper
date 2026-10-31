@@ -1,4 +1,4 @@
-"""Tuning panel: ① find your resonance, ② choose target, ③ advanced upper resonance."""
+"""Tuning panel: find your resonance (ears and Centre, sliders, upper treble lock, power button), target."""
 
 import math
 
@@ -38,7 +38,7 @@ def panel(qtbot, ctx, tmp_path):
 
 
 def test_sides_default_target_and_first_eq(panel):
-    assert [panel.ears.tabText(i) for i in range(panel.ears.count())] == ["Left", "Right"]
+    assert [panel.ears.tabText(i) for i in range(panel.ears.count())] == ["Left", "Right", "Centre"]
     assert panel.session.target_name == "PEQdB Diamond"
     assert "default" in panel.target_combo.currentText().lower()
     eq = panel.channel_eq
@@ -98,12 +98,14 @@ def test_plain_warning_outside_measured_range(panel):
     assert "estimate" in panel.range_warning.text().lower()
 
 
-def test_upper_resonance_collapsed_off_per_side_and_reset(qtbot, panel):
-    assert not panel.advanced_body.isVisibleTo(panel)
-    assert not panel.upper_enabled.isChecked() and not panel.session.upper_enabled
-    panel.advanced_toggle.click()
-    assert panel.advanced_body.isVisibleTo(panel)
-    panel.upper_enabled.setChecked(True)
+def test_upper_resonance_shown_locked_then_unlocked_per_side_and_reset(qtbot, panel):
+    """The upper treble row is always there, locked (as calibrated) until unlocked."""
+    assert panel.upper.isVisibleTo(panel) and not panel.upper_slider.isEnabled()
+    assert not panel.upper_lock.isChecked() and not panel.session.upper_enabled
+    assert "Locked" in panel.upper_lock.text() and not panel.reset_upper.isEnabled()
+    assert not panel.graph.upper_marker.isVisible()
+    panel.upper_lock.click()
+    assert panel.upper_slider.isEnabled() and "Unlocked" in panel.upper_lock.text()
     panel.ears.setCurrentIndex(0)
     panel.upper_slider.setValue(15000)
     assert panel.session.upper == {"L": 15000}
@@ -111,7 +113,7 @@ def test_upper_resonance_collapsed_off_per_side_and_reset(qtbot, panel):
     panel.reset_upper.click()
     assert panel.session.upper == {}
     with qtbot.waitSignal(panel.eqChanged, timeout=5000):
-        panel.upper_enabled.setChecked(False)
+        panel.upper_lock.setChecked(False)
     assert not panel.session.upper_enabled
 
 
@@ -157,3 +159,45 @@ def test_shared_calibration_has_one_both_ears_tab(qtbot, ctx, tmp_path):
     with qtbot.waitSignal(p.eqChanged, timeout=10000):
         p.set_calibration(LoadedCalibration(entry, cal, cal.measurements()))
     assert p.ears.count() == 1 and p.ears.tabText(0) == "Both ears"
+
+
+def test_centre_plays_in_both_ears_and_moves_both(qtbot, panel):
+    engine = panel.audio.engine
+    panel.ears.setCurrentIndex(2)
+    assert panel.ear == "C" and panel.side == "L"
+    panel.peak_slider.setValue(7300)
+    assert panel.session.primary == {"L": 7300, "R": 7300}
+    assert panel.readout_side.text() == "Both ears resonance"
+    panel.tone_button.click()
+    snap = engine.state.snapshot()
+    assert snap.mode == Mode.SINE and snap.channel_mode == ChannelMode.BOTH
+    panel.ears.setCurrentIndex(1)  # a playing tone moves to the ear
+    assert engine.state.snapshot().channel_mode == ChannelMode.RIGHT
+    panel.peak_slider.setValue(8100)
+    assert panel.session.primary == {"L": 7300, "R": 8100}
+    panel.ears.setCurrentIndex(2)
+    panel.upper_lock.click()
+    panel.upper_slider.setValue(14500)
+    assert panel.session.upper == {"L": 14500, "R": 14500}
+    panel.audio.stop_all()
+
+
+def test_full_sweep_button(panel):
+    panel.ears.setCurrentIndex(1)
+    button = panel.sound_buttons["sweep"]
+    button.click()
+    snap = panel.audio.engine.state.snapshot()
+    assert snap.mode == Mode.SWEEP and snap.channel_mode == ChannelMode.RIGHT and panel.audio.playing == "sweep"
+    assert button.isChecked() and button.text() == "■ Stop sweep"
+    button.click()
+    assert panel.audio.playing is None and button.text() == "〰 Full sweep"
+
+
+def test_power_button_switches_the_eq_preview(panel):
+    seen = []
+    panel.eqToggled.connect(seen.append)
+    assert "EQ off" in panel.power_button.text()
+    panel.power_button.click()
+    assert seen == [True] and "EQ on" in panel.power_button.text()
+    panel.set_eq_on(False)  # follows changes made elsewhere, without echoing them back
+    assert seen == [True] and not panel.power_button.isChecked() and "EQ off" in panel.power_button.text()

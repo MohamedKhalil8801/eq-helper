@@ -73,8 +73,7 @@ def test_single_press_plays_and_drag_follows(qtbot, panel):
 def test_upper_resonance_has_its_own_line_like_the_primary(qtbot, panel):
     graph = panel.graph
     assert graph.marker.isVisible() and not graph.upper_marker.isVisible()
-    panel.advanced_toggle.click()
-    panel.upper_enabled.setChecked(True)
+    panel.upper_lock.setChecked(True)
     assert graph.upper_marker.isVisible()
     assert graph.upper_marker_hz() == pytest.approx(panel.upper_slider.value(), rel=1e-6)
     panel.ears.setCurrentIndex(0)
@@ -97,7 +96,7 @@ def test_upper_resonance_has_its_own_line_like_the_primary(qtbot, panel):
     panel.sweep_button.click()
     assert panel.audio.engine.state.snapshot().mode == Mode.SWEEP
     panel.audio.stop_all()
-    panel.upper_enabled.setChecked(False)
+    panel.upper_lock.setChecked(False)
     assert not graph.upper_marker.isVisible()
 
 

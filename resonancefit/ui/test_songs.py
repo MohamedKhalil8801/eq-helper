@@ -101,9 +101,9 @@ class TestSongsPage(QWidget):
         self.time_label = QLabel("0:00 / 0:00")
         row.addWidget(self.time_label)
         transport.body.addLayout(row)
-        self.eq_toggle = QPushButton(tr("EQ off: click to turn it on"))
+        self.eq_toggle = QPushButton("⏻  " + tr("EQ off"))
+        self.eq_toggle.setObjectName("power")  # the same switch as in Find your resonance
         self.eq_toggle.setCheckable(True)
-        self.eq_toggle.setMinimumHeight(34)
         self.eq_toggle.clicked.connect(lambda on: self.audio.set_eq_enabled(on))
         transport.body.addWidget(self.eq_toggle)
         self.external_button = QPushButton(tr("Open in system player"))
@@ -265,5 +265,4 @@ class TestSongsPage(QWidget):
         self.play_button.setText(tr("❚❚ Pause") if playing else tr("▶ Play"))
         on = self.audio.eq_enabled
         self.eq_toggle.setChecked(on)
-        self.eq_toggle.setText(tr("EQ on: click to hear without it") if on
-                               else tr("EQ off: click to turn it on"))
+        self.eq_toggle.setText("⏻  " + (tr("EQ on") if on else tr("EQ off")))

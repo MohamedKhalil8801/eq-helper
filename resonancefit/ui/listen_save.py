@@ -1,4 +1,5 @@
-"""④ Listen & save: in-app EQ on/off, save a tuning, export, apply to APO."""
+"""Listen & save: save a tuning, apply it to the system-wide EQ, export it. (The EQ's power button is
+in Find your resonance.)"""
 
 from __future__ import annotations
 
@@ -13,18 +14,9 @@ class ListenSaveCard(Card):
     exportRequested = Signal()
     applyRequested = Signal()
     switchRequested = Signal(str)  # history entry id to apply
-    eqToggled = Signal(bool)
 
     def __init__(self, parent=None):
-        super().__init__(tr("④ Listen & save"), parent)
-        self.body.addWidget(hint(tr(
-            "Play a tone, a sweep or something from Test audio and switch the EQ on and off to compare.")))
-        self.eq_toggle = QPushButton(tr("EQ off: click to turn it on"))
-        self.eq_toggle.setCheckable(True)
-        self.eq_toggle.setMinimumHeight(34)
-        self.eq_toggle.toggled.connect(self._toggled)
-        self.body.addWidget(self.eq_toggle)
-
+        super().__init__(tr("Listen & save"), parent)
         row = QHBoxLayout()
         self.note = QLineEdit()
         self.note.setPlaceholderText(tr("Name (optional), e.g. “Bright tips”"))
@@ -88,17 +80,6 @@ class ListenSaveCard(Card):
         entry_id = self.switch_combo.itemData(index)
         if entry_id:
             self.switchRequested.emit(entry_id)
-
-    def set_eq_on(self, on: bool) -> None:
-        self.eq_toggle.setChecked(on)
-
-    def _toggled(self, on: bool) -> None:
-        self._toggled_text(on)
-        self.eqToggled.emit(on)
-
-    def _toggled_text(self, on: bool) -> None:
-        self.eq_toggle.setText(tr("EQ on: click to hear without it") if on
-                               else tr("EQ off: click to turn it on"))
 
     def _save(self) -> None:
         self.saveRequested.emit(self.note.text().strip())

@@ -1,4 +1,4 @@
-"""The guided "Find my resonance" test, shown in place of step ①'s contents.
+"""The guided "Find my resonance" test, shown in place of Find your resonance's contents.
 
 Drives a :class:`~resonancefit.guided_test.GuidedTest`. One Play/Pause bar
 plays the selected option continuously; clicking a card switches the sound
@@ -487,7 +487,7 @@ class GuidedTestView(StageBackground):
             f"{border.alpha()}); border: none; }}")
 
     def set_other_eq_text(self, text: str, warning: bool, can_pause: bool = False) -> None:
-        """The same "turn off other EQs" warning step ① shows; ``can_pause``: our own EQ is on
+        """The same "turn off other EQs" warning Find your resonance shows; ``can_pause``: our own EQ is on
         system-wide, so the intro offers to pause it right there."""
         self._other_eq = (text, warning)
         self.intro_pause.setVisible(can_pause)

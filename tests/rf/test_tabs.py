@@ -45,7 +45,10 @@ def _song(path, rate=44100):
 
 def test_tabs_present(win):
     names = [win.tabs.tabText(i) for i in range(win.tabs.count())]
-    assert names == ["Tune", "Test audio", "Sound tools", "Where can I use my EQ?", "Settings", "About"]
+    assert names == ["Tune", "Test audio", "Settings", "About"]
+    labels = [win.header.choices.itemAtPosition(row, 0).widget().text() for row in range(2)]
+    assert labels == ["Calibration", "Target"]  # the target sits under the calibration
+    assert win.header.choices.itemAtPosition(1, 1).widget() is win.tuning.target_combo
 
 
 def test_empty_test_audio_shows_large_centred_buttons(qtbot, tmp_path, opened):
@@ -90,9 +93,9 @@ def test_customer_song_plays_in_app_with_eq_ab(qtbot, win, tmp_path):
     assert engine.state.snapshot().mode == Mode.MUSIC
     assert engine.state.snapshot().channel_mode == ChannelMode.BOTH
     songs.eq_toggle.click()
-    assert win.audio.eq_enabled and win.listen.eq_toggle.isChecked()
+    assert win.audio.eq_enabled and win.tuning.power_button.isChecked()
     songs.eq_toggle.click()
-    assert not win.audio.eq_enabled and not win.listen.eq_toggle.isChecked()
+    assert not win.audio.eq_enabled and not win.tuning.power_button.isChecked()
     win.audio.stop_all()
     assert not songs.player.playing
     assert engine.state.snapshot().mode == Mode.IDLE
@@ -108,36 +111,6 @@ def test_unsupported_format_opens_system_player(win, tmp_path):
     songs.list.setCurrentRow(songs.list.count() - 1)
     songs.activate_selected()
     assert calls == [m4a]
-
-
-def test_sound_tools(win):
-    tools = win.sound_tools
-    engine = win.audio.engine
-    tools.route_buttons["R"].click()
-    assert engine.state.snapshot().channel_mode == ChannelMode.RIGHT
-    tools.freq_spin.setValue(3000)
-    tools.sine_button.click()
-    snap = engine.state.snapshot()
-    assert snap.mode == Mode.SINE and snap.freq == pytest.approx(3000)
-    tools.focus_button.click()
-    assert engine.state.snapshot().mode == Mode.SWEEP
-    tools.sweep_button.click()
-    assert engine.state.snapshot().mode == Mode.SWEEP
-    tools.pink_button.click()
-    assert engine.state.snapshot().mode == Mode.PINK
-    assert tools.pink_button.isChecked() and tools.pink_button.text() == "■ Stop noise"
-    assert not tools.sweep_button.isChecked() and tools.sweep_button.text().startswith("〰 Full sweep")
-    tools.volume.setValue(-20)
-    assert engine.state.snapshot().amp == pytest.approx(0.1, rel=1e-3)
-    tools.grey_button.click()  # another sound replaces it
-    assert engine.state.snapshot().mode == Mode.GREY and win.audio.playing == "grey"
-    assert tools.grey_button.isChecked() and not tools.pink_button.isChecked()
-    tools.grey_button.click()  # pressing again stops: there's no separate Stop button
-    assert engine.state.snapshot().mode == Mode.IDLE and not tools.grey_button.isChecked()
-    assert not hasattr(tools, "stop_button")
-    tools.sine_button.click()
-    win.audio.stop_all()  # Space / Stop all sound elsewhere: the button follows
-    assert not tools.sine_button.isChecked() and tools.sine_button.text() == "▶ Tone"
 
 
 def test_settings_page(win, opened):
@@ -166,11 +139,11 @@ def test_about_page_branding_licences_and_sheet(win, qtbot, tmp_path, opened):
 
 
 def test_the_guided_test_has_the_window_to_itself(win):
-    others = (win.sidebar, win.header, win.tabs.tabBar(), win.tuning.step2, win.tuning.step3)
+    others = (win.sidebar, win.header, win.tabs.tabBar(), win.tuning.power_button)
     assert all(w.isVisibleTo(win) for w in others)
     win.tuning.start_guided_test()
     assert win.tuning.guided_active
-    assert not any(w.isVisibleTo(win) for w in others)  # no EQ switch, saving, history, tabs or steps 2-3
+    assert not any(w.isVisibleTo(win) for w in others)  # no EQ switch, saving, history, target or tabs
     assert win.sound_bar.isVisibleTo(win)  # output, volume and Stop all sound stay
     win.tuning.guided.leave_for_manual()
     assert not win.tuning.guided_active and all(w.isVisibleTo(win) for w in others)
