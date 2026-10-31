@@ -153,3 +153,43 @@ def test_corrupt_index_rebuilds_from_store(win_paths, write_calibration):
     win_paths.library_index.write_text("{broken")
     lib = CalibrationLibrary(win_paths)
     assert len(lib.list()) == 1
+
+
+def test_library_mirrors_the_calibrations_folder(win_paths, write_calibration, tmp_path):
+    """A calibration replaced or deleted in the folder is forgotten at the next launch; explicit
+    imports from elsewhere stay; an emptied folder forgets nothing."""
+    cal = win_paths.app_dir / "Calibrations"
+    write_calibration(cal / "Nova.rescal", customer="Old Nova")
+    write_calibration(cal / "Aria.rescal", customer="Aria")
+    write_calibration(cal / "Kato.rescal", customer="Kato")
+    CalibrationLibrary(win_paths).scan()
+    elsewhere = CalibrationLibrary(win_paths).import_file(write_calibration(tmp_path / "x.rescal", customer="Mail"))
+    write_calibration(cal / "Nova.rescal", customer="New Nova")  # re-issued: a new calibration id
+    (cal / "Kato.rescal").unlink()
+    lib = CalibrationLibrary(win_paths)
+    lib.scan()
+    assert {e.manifest.customer.name for e in lib.list()} == {"New Nova", "Aria", "Mail"}
+    assert len(list(win_paths.library_dir.glob("*.rescal"))) == 3
+    assert elsewhere.calibration_id in {e.calibration_id for e in lib.list()}
+    for f in cal.iterdir():
+        f.unlink()
+    lib = CalibrationLibrary(win_paths)
+    lib.scan()
+    assert len(lib.list()) == 3  # the download may just have been emptied or moved
+
+
+def test_libraries_from_before_sources_were_kept_are_tidied(win_paths, write_calibration):
+    import json
+    cal = win_paths.app_dir / "Calibrations"
+    write_calibration(cal / "a.rescal", customer="Kept")
+    write_calibration(cal / "b.rescal", customer="Gone")
+    CalibrationLibrary(win_paths).scan()
+    index = json.loads(win_paths.library_index.read_text(encoding="utf-8"))
+    index.pop("sources")
+    for info in index["imported"].values():
+        info.pop("source", None)
+    win_paths.library_index.write_text(json.dumps(index), encoding="utf-8")
+    (cal / "b.rescal").unlink()
+    lib = CalibrationLibrary(win_paths)
+    lib.scan()
+    assert [e.manifest.customer.name for e in lib.list()] == ["Kept"]
