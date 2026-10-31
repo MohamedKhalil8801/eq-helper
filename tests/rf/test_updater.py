@@ -298,12 +298,13 @@ def test_tidy_removes_leftovers_but_keeps_a_pending_update(tmp_path):
 
 
 def test_new_processes_get_a_clean_environment():
-    bundle = os.path.join("C:", "RF", "_internal")
-    env = {"PATH": os.pathsep.join([bundle, os.path.join(bundle, "PySide6"), "C:/Windows"]),
+    bundle = os.path.join(os.sep, "RF", "_internal")
+    system = os.path.join(os.sep, "usr", "bin")
+    env = {"PATH": os.pathsep.join([bundle, os.path.join(bundle, "PySide6"), system]),
            "_PYI_APPLICATION_HOME_DIR": bundle, "_MEIPASS2": bundle, "LD_LIBRARY_PATH": bundle,
            "LD_LIBRARY_PATH_ORIG": "/usr/lib", "APPIMAGE": "/x.AppImage", "QT_PLUGIN_PATH": bundle, "HOME": "/h"}
     clean = clean_env(env, bundle=bundle)
-    assert clean["PATH"] == "C:/Windows" and clean["LD_LIBRARY_PATH"] == "/usr/lib"
+    assert clean["PATH"] == system and clean["LD_LIBRARY_PATH"] == "/usr/lib"
     assert not {"_PYI_APPLICATION_HOME_DIR", "_MEIPASS2", "APPIMAGE", "QT_PLUGIN_PATH"} & set(clean)
     assert clean["HOME"] == "/h" and clean["PYINSTALLER_RESET_ENVIRONMENT"] == "1"
 
