@@ -84,7 +84,7 @@ def test_reapply_restores_all_controls(win, qtbot):
     with qtbot.waitSignal(t.eqChanged, timeout=5000):
         win.tunings.open_row(saved)  # one click switches to it
     assert t.session.primary == {"L": 7400, "R": 8200}
-    assert t.session.upper == {"R": 14000} and t.session.upper_enabled
+    assert t.session.upper["R"] == 14000 and set(t.session.upper) == {"L", "R"} and t.session.upper_enabled
     assert t.upper_manual.isChecked()
     assert t.session.target_name == saved_target
     assert t.target_combo.currentText().startswith(saved_target)

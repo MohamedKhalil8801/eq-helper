@@ -170,7 +170,7 @@ class MainWindow(QMainWindow):
 
         self.stop_shortcut = QShortcut(QKeySequence(Qt.Key_Space), self)
         self.stop_shortcut.setContext(Qt.WindowShortcut)
-        self.stop_shortcut.activated.connect(self.audio.stop_all)
+        self.stop_shortcut.activated.connect(self.toggle_sound)
 
         self.audioReady.connect(self._on_audio_ready)
         if start_audio:
@@ -181,6 +181,19 @@ class MainWindow(QMainWindow):
         self._run(lambda: detect_installed(self.catalog, ctx.paths.platform), self._apps_detected)
         self.refresh()
         self._launch_update_check()
+
+    def toggle_sound(self) -> None:
+        """Space, as in EQ Helper: stops whatever plays; when nothing does, plays again (the Tune page's last
+        sound, or the guided test's card)."""
+        if self.audio.playing is not None:
+            self.audio.stop_all()
+            return
+        if self.stack.currentWidget() is not self.main_view or self.tabs.currentIndex() != 0:
+            return
+        if self.tuning.guided_active:
+            self.tuning.guided.toggle_play()
+        else:
+            self.tuning.replay()
 
     def _system_scheme_changed(self, _scheme) -> None:
         if (self.ctx.settings.get("theme") or "system") == "system":

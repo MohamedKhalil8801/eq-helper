@@ -161,3 +161,18 @@ def test_appearance_light_dark_or_system(win):
     assert is_branded(QApplication.instance().palette())  # the app's accent, in either scheme
     page.theme_buttons["system"].click()
     assert win.ctx.settings.get("theme") == "system"
+
+
+def test_space_plays_and_stops_like_eq_helper(win):
+    from eq_helper.audio.shared_state import Mode
+    engine = win.audio.engine
+    win.toggle_sound()  # nothing played yet: a tone
+    assert win.audio.playing == "tone" and engine.state.snapshot().mode == Mode.SINE
+    win.toggle_sound()
+    assert win.audio.playing is None
+    win.tuning.pink_button.click()
+    win.toggle_sound()
+    assert win.audio.playing is None
+    win.toggle_sound()  # the last sound again
+    assert win.audio.playing == "pink"
+    win.toggle_sound()

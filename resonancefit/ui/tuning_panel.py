@@ -18,7 +18,7 @@ import numpy as np
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
-    QButtonGroup, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QPushButton,
+    QButtonGroup, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QMessageBox, QPushButton,
     QSizePolicy, QSlider, QSpinBox, QStackedWidget, QVBoxLayout, QWidget,
 )
 
@@ -73,9 +73,12 @@ class ResonanceRow(QWidget):
         self.spin.setSuffix(" Hz")
         self.spin.setAccessibleName(tr("{name} in hertz").format(name=accessible))
         self.spin.valueChanged.connect(self.valueChanged)
+        self.spin.setFixedWidth(self.spin.fontMetrics().horizontalAdvance("20,000 Hz") + 34)
         row.addWidget(self.spin)
-        self.extra = QHBoxLayout()
-        row.addLayout(self.extra)
+        self.extra_box = QWidget()  # the same width in every row (see TuningPanel), so sliders and boxes line up
+        self.extra = QHBoxLayout(self.extra_box)
+        self.extra.setContentsMargins(0, 0, 0, 0)
+        row.addWidget(self.extra_box)
 
     def set_value(self, hz: int) -> None:
         for widget in (self.slider, self.spin):
@@ -145,6 +148,7 @@ class TuningPanel(QWidget):
         self._playing_poll.setInterval(40)
         self._playing_poll.timeout.connect(self._show_playing)
         self._guided_eq = False  # an EQ was made while the guided test ran: hand it over when it closes
+        self._last_sound: str | None = None  # what Space plays again
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -305,18 +309,12 @@ class TuningPanel(QWidget):
         self.upper.extra.addWidget(self.upper_switch)
         self.upper_auto.setChecked(True)
         self.upper_manual.toggled.connect(self._set_upper_enabled)
-        self.reset_upper = QPushButton(tr("Reset"))
-        self.reset_upper.setToolTip(tr("Put this ear's upper treble back as calibrated."))
-        self.reset_upper.clicked.connect(self._reset_upper)
-        self.upper.extra.addWidget(self.reset_upper)
-        self._reset_space = QWidget()  # keeps both sliders the same length
-        self._reset_space.setFixedWidth(self.upper_switch.sizeHint().width() + self.reset_upper.sizeHint().width()
-                                        + self.upper.extra.spacing())
-        self.primary.extra.addWidget(self._reset_space)
+        for row in (self.primary, self.upper):
+            row.extra_box.setFixedWidth(self.upper_switch.sizeHint().width())
         rows.addWidget(self.upper)
         rows.addWidget(self.hint)
         self.keys_hint = QLabel(tr("Keys: T tone · S sweep around · F full sweep · P pink · G grey · E EQ on/off · "
-                                   "L / R / C ear · Space stop"))
+                                   "L / R / C ear · Space play / stop"))
         self.keys_hint.setObjectName("caption")
         rows.addWidget(self.keys_hint)
         body.addWidget(self.manual_box)
@@ -375,6 +373,27 @@ class TuningPanel(QWidget):
             group.addButton(button)
             row.addWidget(button)
         return frame
+
+    def _may_link(self, which: str) -> bool:
+        """Centre gives both ears one value: if they differ now, ask before overwriting them."""
+        if self.ear != CENTRE:
+            return True
+        values = self.session.upper if which == "upper" else self.session.primary
+        found = {side: int(round(values[side])) for side in self.session.sides if side in values}
+        if len(set(found.values())) <= 1:
+            return True
+        return self.confirm_link(which, found)
+
+    def confirm_link(self, which: str, values: dict) -> bool:
+        what = tr("upper treble") if which == "upper" else tr("resonance")
+        listed = tr(" and ").join(f"{side_name(s)} {hz:,} Hz" for s, hz in sorted(values.items()))
+        box = QMessageBox(QMessageBox.Question, tr("Give both ears the same {what}?").format(what=what),
+                          tr("Your ears have different values now ({values}). In Centre, moving the slider sets "
+                             "both ears to the same {what}.").format(values=listed, what=what), parent=self)
+        same = box.addButton(tr("Set both the same"), QMessageBox.AcceptRole)
+        box.addButton(tr("Keep them different"), QMessageBox.RejectRole)
+        box.exec()
+        return box.clickedButton() is same
 
     def _select_ear(self, ear: str) -> None:
         index = next((i for i in range(self.ears.count()) if self.ears.tabData(i) == ear), None)
@@ -573,6 +592,10 @@ class TuningPanel(QWidget):
     def set_primary_hz(self, hz) -> None:
         if self._syncing or self.session is None:
             return
+        if not self._may_link("primary"):
+            self._sync_peak_controls()  # the slider goes back: nothing changed
+            return
+        self._pin_upper()  # Manual upper trebles stay where they are while the resonance moves
         for side in self.edit_sides:
             value = self.session.set_primary(side, round(float(hz)))
         self._follow("primary", value)       # sound first: it must not wait for drawing
@@ -639,6 +662,7 @@ class TuningPanel(QWidget):
             return
         self.session.set_upper(side, float(round(hz)))
         self.session.upper_enabled = True
+        self._pin_upper()
         self._select_side(side)
         self._sync_upper_controls()
         self._schedule_regen()
@@ -744,9 +768,7 @@ class TuningPanel(QWidget):
         own = self.session.upper.get(side) if self.session.upper_enabled else None
         if own:
             return int(round(own))
-        hz = self._upper_prediction(side, self.session.primary[side])
-        lo, hi = PERSONAL_TREBLE_RANGE
-        return int(round(min(max(hz or DEFAULT_UPPER_HZ, lo), hi)))
+        return self._calibrated_upper(side)
 
     def _follow(self, which: str, hz: float) -> None:
         """Touching a slider or line selects it; a playing tone follows it."""
@@ -767,7 +789,14 @@ class TuningPanel(QWidget):
             return float(self.upper_slider.value())
         return float(self.session.primary[self.side])
 
+    def replay(self) -> None:
+        """Space when nothing plays: the last sound again (a tone at first)."""
+        if self.session is not None:
+            self._start(self._last_sound or "tone")
+            self._sync_play_buttons()
+
     def _start(self, kind: str) -> None:
+        self._last_sound = kind
         if kind == "tone":
             self.audio.play_tone(self._focus_hz(), self.play_side)
         elif kind == "focus":
@@ -857,6 +886,7 @@ class TuningPanel(QWidget):
         if self._syncing or self.session is None:
             return
         self.session.upper_enabled = bool(enabled)
+        self._pin_upper()
         self._sync_upper_controls()
         self.set_focus("upper" if enabled else "primary")
         self.regenerate()
@@ -868,19 +898,14 @@ class TuningPanel(QWidget):
         self.graph.set_upper_marker(hz if self.session.upper_enabled else None)
         if not self.session.upper_enabled:
             return
+        if not self._may_link("upper"):
+            self._sync_upper_value()
+            return
         for side in self.edit_sides:
             self.session.set_upper(side, hz)
         self._follow("upper", hz)
         self._sync_readout()
         self._schedule_regen()
-
-    def _reset_upper(self) -> None:
-        if self.session is None:
-            return
-        for side in self.edit_sides:
-            self.session.clear_upper(side)
-        self._sync_upper_controls()
-        self.regenerate()
 
     def _scorecard_tables(self):
         """For the guided test: a function that, on a worker, returns {side: RoughnessTable} (built once
@@ -907,6 +932,21 @@ class TuningPanel(QWidget):
         except ValueError:
             return None
         return None if hz is None else float(hz)
+
+    def _calibrated_upper(self, side: str) -> int:
+        """Where the calibration puts ``side``'s upper treble for its current resonance (Auto's value)."""
+        hz = self._upper_prediction(side, self.session.primary[side])
+        lo, hi = PERSONAL_TREBLE_RANGE
+        return int(round(min(max(hz or DEFAULT_UPPER_HZ, lo), hi)))
+
+    def _pin_upper(self) -> None:
+        """In Manual every ear has its own upper treble: an ear without one keeps the value it shows now,
+        so moving the resonance never moves it (as on Auto)."""
+        if self.session is None or not self.session.upper_enabled:
+            return
+        for side in self.session.sides:
+            if side not in self.session.upper:
+                self.session.set_upper(side, self._calibrated_upper(side))
 
     def _predicted_upper(self) -> int:
         hz = self._upper_prediction(self.side, self.session.primary[self.side])
@@ -941,7 +981,7 @@ class TuningPanel(QWidget):
         self._syncing = True
         (self.upper_manual if enabled else self.upper_auto).setChecked(True)
         self._syncing = False
-        for widget in (self.upper.slider, self.upper.spin, self.reset_upper):
+        for widget in (self.upper.slider, self.upper.spin):
             widget.setEnabled(enabled)
         self._sync_upper_value()
         self._sync_focus_widgets()

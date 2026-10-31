@@ -152,7 +152,8 @@ yourself, or to fine-tune what the test found:
 1. Put both IEMs in as you normally wear them, with your usual tips.
 2. On the **Left** tab, press **▶ Play tone**. The tone plays in your left ear only, and a dotted line on
    the graph shows the frequency that's playing. **Centre** plays in both ears, and moving the slider
-   there moves both ears' resonance together (the graph shows the left ear).
+   there moves both ears' resonance together (the graph shows the left ear). If your ears have different
+   values, the app asks first: **Set both the same** or **Keep them different**.
 3. Move the slider, type a frequency or drag the orange **Resonance** line on the graph until the tone
    sounds **loudest or most piercing**. That's your left resonance. **Sweep around it** plays a slow
    sweep around that frequency if that's easier to judge (the dotted line follows the sweep). The
@@ -160,8 +161,9 @@ yourself, or to fine-tune what the test found:
 4. Do the same on the **Right** tab.
 
 **〰 Full sweep** plays a slow sweep from 20 Hz to 20 kHz. Each sound button starts its sound and stops
-it when you press it again (it reads **■ Stop tone** while playing). Space, or **Stop all sound** at the
-bottom, stops everything.
+it when you press it again (it reads **■ Stop tone** while playing). **Space** stops whatever plays and,
+pressed again, plays the last sound again (as in EQ Helper); **Stop all sound** at the bottom stops
+everything.
 
 To check by ear, press **≈ Pink noise + EQ** or **≈ Grey noise + EQ**: the noise plays through your EQ
 (the EQ switches on). Move
@@ -183,8 +185,9 @@ list is under the sliders.
 the resonance, and the EQ keeps it as calibrated. Switch to **Manual** only if you hear a second, higher
 peak (above about 10.5 kHz) that still bothers you: a pink **Upper** line appears on the graph, and the
 same sound buttons play at whichever one you last moved (or pick **Resonance** or **Upper treble** next
-to them). Move it to where you hear the peak, per ear. **Reset** puts the selected ear back; **Auto**
-puts both back as calibrated.
+to them). Move it to where you hear the peak, per ear. On **Manual** each ear keeps its own value (an ear
+you haven't moved keeps the one it showed), so moving the resonance never moves it. **Auto** puts both
+back as calibrated.
 
 ## Tunings
 

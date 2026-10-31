@@ -98,11 +98,12 @@ def test_plain_warning_outside_measured_range(panel):
     assert "estimate" in panel.range_warning.text().lower()
 
 
-def test_upper_resonance_auto_follows_the_resonance_manual_is_per_side_and_reset(qtbot, panel):
-    """The upper treble row is always there: Auto (as calibrated) until switched to Manual."""
+def test_upper_resonance_auto_follows_the_resonance_manual_stays_put(qtbot, panel):
+    """The upper treble row is always there: Auto (as calibrated, moving with the resonance) or Manual (each
+    ear's own value, which the resonance never moves). No Reset: Auto is the way back."""
     assert panel.upper.isVisibleTo(panel) and not panel.upper_slider.isEnabled()
     assert panel.upper_auto.isChecked() and not panel.upper_manual.isChecked()
-    assert not panel.session.upper_enabled and not panel.reset_upper.isEnabled()
+    assert not panel.session.upper_enabled and not hasattr(panel, "reset_upper")
     assert not panel.graph.upper_marker.isVisible()
     panel.ears.setCurrentIndex(0)
     panel._upper_prediction = lambda side, hz: 1.9 * hz  # this test calibration has no upper peak
@@ -114,15 +115,20 @@ def test_upper_resonance_auto_follows_the_resonance_manual_is_per_side_and_reset
     assert shown[0] != shown[1]
     panel.upper_manual.click()
     assert panel.upper_slider.isEnabled() and panel.session.upper_enabled
-    panel.ears.setCurrentIndex(0)
+    pinned = dict(panel.session.upper)  # Manual: every ear keeps the value it showed
+    assert set(pinned) == {"L", "R"}
     panel.upper_slider.setValue(15000)
-    assert panel.session.upper == {"L": 15000}
-    assert panel.session.upper_enabled
-    panel.reset_upper.click()
-    assert panel.session.upper == {}
+    assert panel.session.upper == {"L": 15000, "R": pinned["R"]}
+    for ear in (1, 0):  # the right ear (never touched) and the left: moving the resonance moves neither
+        panel.ears.setCurrentIndex(ear)
+        before = panel.upper_slider.value()
+        panel.peak_slider.setValue(panel.peak_slider.value() + 400)
+        qtbot.wait(50)
+        assert panel.upper_slider.value() == before
+    assert panel.session.upper == {"L": 15000, "R": pinned["R"]}
     with qtbot.waitSignal(panel.eqChanged, timeout=5000):
         panel.upper_auto.setChecked(True)
-    assert not panel.session.upper_enabled
+    assert not panel.session.upper_enabled and not panel.upper_slider.isEnabled()
 
 
 def test_target_choice_and_import(qtbot, panel, tmp_path):
@@ -171,6 +177,8 @@ def test_shared_calibration_has_one_both_ears_tab(qtbot, ctx, tmp_path):
 
 def test_centre_plays_in_both_ears_and_moves_both(qtbot, panel):
     engine = panel.audio.engine
+    asked = []
+    panel.confirm_link = lambda which, values: asked.append(which) or True
     panel.ears.setCurrentIndex(2)
     assert panel.ear == "C" and panel.side == "L"
     panel.peak_slider.setValue(7300)
@@ -184,10 +192,27 @@ def test_centre_plays_in_both_ears_and_moves_both(qtbot, panel):
     panel.peak_slider.setValue(8100)
     assert panel.session.primary == {"L": 7300, "R": 8100}
     panel.ears.setCurrentIndex(2)
+    asked.clear()
+    panel.peak_slider.setValue(7000)  # the ears differ now: asked first
+    assert asked == ["primary"] and panel.session.primary == {"L": 7000, "R": 7000}
+    panel.peak_slider.setValue(7050)  # the same again: nothing to ask
+    assert asked == ["primary"]
     panel.upper_manual.click()
     panel.upper_slider.setValue(14500)
     assert panel.session.upper == {"L": 14500, "R": 14500}
     panel.audio.stop_all()
+
+
+def test_centre_keeps_different_ears_when_declined(panel):
+    panel.ears.setCurrentIndex(1)
+    panel.peak_slider.setValue(8100)
+    panel.ears.setCurrentIndex(0)
+    panel.peak_slider.setValue(7300)
+    panel.confirm_link = lambda which, values: values == {"L": 7300, "R": 8100} and False
+    panel.ears.setCurrentIndex(2)
+    panel.peak_slider.setValue(7600)
+    assert panel.session.primary == {"L": 7300, "R": 8100}  # nothing changed
+    assert panel.peak_slider.value() == 7300  # and the slider shows what's there
 
 
 def test_full_sweep_button(panel):

@@ -32,6 +32,10 @@ Each release's section is copied into its notes on the releases page. Add a
 - Guided test: **Enter** always confirms the selected card, and each card shows where it sits from low
   to high.
 - Keyboard focus shows as a neutral ring only when you use the keyboard.
+- Upper treble: **Auto** or **Manual**, no Reset. On Manual each ear keeps its own value, so moving the
+  resonance no longer moves an ear you hadn't set (it did for the right ear).
+- Centre asks before giving both ears the same value when they differ.
+- **Space** plays and stops, as in EQ Helper: it stops whatever plays, and plays the last sound again.
 
 ## 0.3.0
 

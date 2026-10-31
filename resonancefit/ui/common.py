@@ -299,11 +299,12 @@ QPushButton, QToolButton {{ background: {c['control']}; color: {c['text']}; bord
 QPushButton:hover, QToolButton:hover {{ background: {c['hover']}; }}
 QPushButton:pressed, QToolButton:pressed {{ background: {c['line']}; }}
 QPushButton:checked {{ background: {tint}; color: {c['accent']}; }}
-QPushButton:disabled, QToolButton:disabled {{ color: {c['disabled']}; background: {c['raised']}; }}
+QPushButton:disabled, QToolButton:disabled {{ color: {c['disabled']}; background: transparent;
+    border: 2px solid {c['control']}; }}
 QPushButton#primary {{ background: {c['accent']}; color: {c['on_accent']}; font-weight: 600; }}
 QPushButton#primary:hover {{ background: {_mix(accent, QColor(c['text']), 0.15)}; }}
 QPushButton#primary:checked {{ background: {_mix(accent, QColor(c['bg']), 0.25)}; color: {c['on_accent']}; }}
-QPushButton#primary:disabled {{ background: {c['raised']}; color: {c['disabled']}; }}
+QPushButton#primary:disabled {{ background: transparent; color: {c['disabled']}; border: 2px solid {c['control']}; }}
 QPushButton[large="true"] {{ font-size: 11pt; font-weight: 600; padding: 12px 24px; border-radius: 10px; }}
 QToolButton::menu-indicator {{ image: none; width: 0; }}
 QFrame#segments {{ background: {c['control']}; border-radius: 9px; }}
@@ -316,7 +317,8 @@ QComboBox, QLineEdit, QSpinBox {{ background: {c['control']}; color: {c['text']}
     border-radius: 8px; padding: 3px 8px; min-height: 20px; selection-background-color: {c['accent']};
     selection-color: {c['on_accent']}; }}
 QComboBox:hover, QLineEdit:hover, QSpinBox:hover {{ background: {c['hover']}; }}
-QComboBox:disabled, QSpinBox:disabled {{ color: {c['disabled']}; background: {c['raised']}; }}
+QComboBox:disabled, QSpinBox:disabled, QLineEdit:disabled {{ color: {c['disabled']}; background: transparent;
+    border: 2px solid {c['control']}; }}
 QLineEdit:focus {{ border-color: {c['border']}; }}
 QComboBox::drop-down {{ border: none; width: 24px; }}
 QComboBox::down-arrow {{ image: url({CHEVRON[c['dark']]}); width: 12px; height: 12px; }}

@@ -80,7 +80,7 @@ def test_upper_resonance_has_its_own_line_like_the_primary(qtbot, panel):
     graph.upper_marker.setValue(math.log10(14200))
     graph.upper_marker.sigPositionChanged.emit(graph.upper_marker)
     assert panel.upper_slider.value() == 14200 and panel.upper_spin.value() == 14200
-    assert panel.session.upper == {"L": 14200}
+    assert panel.session.upper["L"] == 14200 and set(panel.session.upper) == {"L", "R"}  # Manual pins both
     panel.upper_spin.setValue(15000)
     assert graph.upper_marker_hz() == pytest.approx(15000, rel=1e-6)
     # one set of sound buttons; turning the upper treble on selects it, touching a slider selects that one

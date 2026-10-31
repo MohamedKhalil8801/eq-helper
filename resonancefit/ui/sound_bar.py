@@ -64,5 +64,6 @@ class SoundBar(QFrame):
         self.volume = VolumeSlider(audio)
         row.addWidget(self.volume, 3)
         self.stop_button = QPushButton(tr("■ Stop all sound (Space)"))
+        self.stop_button.setToolTip(tr("Space stops whatever plays; press it again to play the last sound again."))
         self.stop_button.clicked.connect(audio.stop_all)
         row.addWidget(self.stop_button)

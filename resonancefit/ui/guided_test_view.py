@@ -331,7 +331,7 @@ class GuidedTestView(StageBackground):
         layout.addLayout(footer)
         layout.addSpacing(10)
         self.keys_hint = self._label(tr("Keys: 1–8 choose · Enter confirms the selected card · X rule out · P play/pause · S same · "
-                                        "N pink · G grey · F focused · W sweep · Space stop"),
+                                        "N pink · G grey · F focused · W sweep · Space play / stop"),
                                      "gtMuted")
         self.keys_hint.setAlignment(Qt.AlignCenter)
         layout.addLayout(self._padded(self.keys_hint))
