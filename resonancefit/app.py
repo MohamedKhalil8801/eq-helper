@@ -4,10 +4,13 @@
 line (double-click / file association) are imported and selected; if the app
 is already running they are handed to that window instead.
 ``resonancefit --self-test`` — headless check used by CI on every build.
+``resonancefit --rf-install-update …`` — a downloaded update installing itself
+over the old app once it has closed (updater.py).
 """
 
 from __future__ import annotations
 
+import os
 import sys
 import traceback
 from datetime import datetime
@@ -52,8 +55,47 @@ def log_errors(path: Path, version: str = "") -> None:
     sys.excepthook = hook
 
 
+def _install_window(work) -> None:
+    """While "Install and restart" replaces the files: a small window, so the wait isn't blank."""
+    import threading
+
+    from PySide6.QtCore import Qt, QTimer
+    from PySide6.QtWidgets import QApplication, QLabel, QProgressBar, QVBoxLayout, QWidget
+
+    from eq_helper.calibration.branding import load_branding
+
+    from .ui.common import apply_theme
+
+    app = QApplication.instance() or QApplication([])
+    apply_theme("system")
+    name = load_branding().product_name
+    window = QWidget()
+    window.setWindowTitle(name)
+    window.setWindowFlag(Qt.WindowStaysOnTopHint)
+    layout = QVBoxLayout(window)
+    layout.setContentsMargins(20, 18, 20, 18)
+    layout.addWidget(QLabel(f"Installing the new version of {name}…"))
+    bar = QProgressBar()
+    bar.setRange(0, 0)
+    bar.setTextVisible(False)
+    layout.addWidget(bar)
+    window.resize(380, window.sizeHint().height())
+    window.show()
+    thread = threading.Thread(target=work, daemon=True)
+    thread.start()
+    timer = QTimer()
+    timer.timeout.connect(lambda: None if thread.is_alive() else app.quit())
+    timer.start(100)
+    app.exec()
+    thread.join()
+
+
 def main(argv=None) -> int:
     argv = list(sys.argv if argv is None else argv)
+    from .updater import INSTALL_FLAG
+    if INSTALL_FLAG in argv:
+        from .updater import run_install
+        return run_install(argv, show_progress=_install_window)
     if "--self-test" in argv:
         from .selftest import run_self_test
         return run_self_test(argv)
@@ -81,6 +123,10 @@ def main(argv=None) -> int:
     if instance.forward(files):
         return 0  # the running window opens the files and comes to the front
 
+    from .paths import AppPaths
+    from .updater import wait_for_running_install
+    wait_for_running_install(AppPaths.detect().updates_dir)  # an update finishing as the app closed
+
     pending: list[str] = []  # macOS may deliver files before the window exists
     window: MainWindow | None = None
 
@@ -92,10 +138,16 @@ def main(argv=None) -> int:
 
     app.installEventFilter(FileOpenFilter(on_file, app))
     ctx = AppContext.create(branding=branding)
+    from .updater import AppLocation, Updater
     from .updates import UpdateChecker
     from .version import app_version
-    log_errors(ctx.paths.data_dir / "errors.log", app_version())
-    window = MainWindow(ctx, updates=UpdateChecker(ctx.settings, app_version(), ctx.paths.platform))
+    version = app_version()
+    log_errors(ctx.paths.data_dir / "errors.log", version)
+    location = AppLocation.detect(ctx.paths.platform, bool(getattr(sys, "frozen", False)), sys.executable,
+                                  os.environ)
+    updates = UpdateChecker(ctx.settings, version, ctx.paths.platform,
+                            updater=Updater(location, ctx.paths.updates_dir, version))
+    window = MainWindow(ctx, updates=updates)
     instance.listen(window.open_files)
     window.open_files([*files, *pending], activate=False)
     window.show()

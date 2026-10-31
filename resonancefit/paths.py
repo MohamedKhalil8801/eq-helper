@@ -74,6 +74,11 @@ class AppPaths:
         return self.data_dir / "settings.json"
 
     @property
+    def updates_dir(self) -> Path:
+        """A downloaded update waiting to be installed (updater.py)."""
+        return self.data_dir / "updates"
+
+    @property
     def library_dir(self) -> Path:
         """Imported copies of every calibration (survive the download being deleted)."""
         return self.data_dir / "library"

@@ -1,4 +1,4 @@
-"""Is a newer version of the app published? Notify only — nothing is installed.
+"""Is a newer version of the app published? (``updater.py`` downloads and installs it.)
 
 When it checks: only when the app opens (no background service), at most once
 a day after a *successful* check. If the last attempt failed (offline, GitHub
@@ -7,6 +7,9 @@ unreachable…), the next launch tries again, even on the same day. Settings has
 
 What it sends: one anonymous request to GitHub's public releases API for the
 releases repo; nothing about the customer or their calibration.
+
+Development builds (a source run, or a version that isn't plain X.Y.Z) never
+check: ``enabled`` is False.
 
 State lives in the app's settings: ``update_last_success`` (ISO time of the
 last successful check), ``update_last_attempt``, ``update_last_error``,
@@ -25,6 +28,7 @@ from typing import Callable
 DEFAULT_RELEASES_REPO = "MohamedKhalil8801/resonancefit-releases"
 API = "https://api.github.com/repos/{repo}/releases/latest"
 TIMEOUT_S = 10
+CHECKSUMS_NAME = "SHA256SUMS"
 _ASSET = re.compile(r"-(windows|macos|linux)\.(zip|dmg|appimage)$", re.IGNORECASE)
 
 
@@ -54,6 +58,9 @@ class UpdateResult:
     download_url: str = ""
     error: str = ""
     checked_at: datetime | None = None
+    asset_name: str = ""     # this system's download, e.g. <Product>-0.4.0-windows.zip
+    size: int = 0
+    checksums_url: str = ""  # the release's SHA256SUMS
 
 
 def _iso(dt: datetime) -> str:
@@ -69,13 +76,17 @@ def _parse_time(text) -> datetime | None:
 
 class UpdateChecker:
     def __init__(self, settings, current_version: str, platform: str, repo: str = DEFAULT_RELEASES_REPO,
-                 http=None, now: Callable[[], datetime] | None = None):
+                 http=None, now: Callable[[], datetime] | None = None, release: bool | None = None,
+                 updater=None):
+        from .updater import is_release_build
         self.settings = settings
         self.current_version = current_version
         self.platform = platform
         self.repo = repo
         self.http = http or UrllibJson()
         self.now = now or datetime.now
+        self.enabled = is_release_build(current_version) if release is None else release
+        self.updater = updater  # downloads and installs (None: the download link only)
 
     # ── state ──────────────────────────────────────────────────────────────
     @property
@@ -102,7 +113,9 @@ class UpdateChecker:
         latest = self.settings.get("update_latest") or {}
         version = str(latest.get("version", ""))
         return UpdateResult(True, newer(version, self.current_version), version, str(latest.get("page", "")),
-                            str(latest.get("download", "")), checked_at=self.last_success)
+                            str(latest.get("download", "")), checked_at=self.last_success,
+                            asset_name=str(latest.get("asset", "")), size=int(latest.get("size") or 0),
+                            checksums_url=str(latest.get("checksums", "")))
 
     # ── checking ───────────────────────────────────────────────────────────
     def check(self) -> UpdateResult:
@@ -114,16 +127,21 @@ class UpdateChecker:
             if parse_version(tag) is None:
                 raise ValueError(f"unexpected release tag {tag!r}")
             page = str(data.get("html_url") or "")
-            download = next((str(a.get("browser_download_url", "")) for a in data.get("assets") or []
-                             if (m := _ASSET.search(str(a.get("name", "")))) and m.group(1).lower() == self.platform),
-                            "")
+            assets = [a for a in data.get("assets") or [] if isinstance(a, dict)]
+            mine = next((a for a in assets if (m := _ASSET.search(str(a.get("name", ""))))
+                         and m.group(1).lower() == self.platform), {})
+            download, asset, size = str(mine.get("browser_download_url", "")), str(mine.get("name", "")),                 int(mine.get("size") or 0)
+            checksums = next((str(a.get("browser_download_url", "")) for a in assets
+                              if a.get("name") == CHECKSUMS_NAME), "")
         except Exception as exc:  # noqa: BLE001 - offline, GitHub down, odd answer: all "couldn't check"
             self.settings.update(update_last_attempt=_iso(now), update_last_error=str(exc) or type(exc).__name__)
             return UpdateResult(False, error=str(exc) or type(exc).__name__, checked_at=now)
         version = ".".join(str(n) for n in parse_version(tag))
         self.settings.update(update_last_attempt=_iso(now), update_last_success=_iso(now), update_last_error=None,
-                             update_latest={"version": version, "page": page, "download": download})
-        return UpdateResult(True, newer(version, self.current_version), version, page, download, checked_at=now)
+                             update_latest={"version": version, "page": page, "download": download,
+                                            "asset": asset, "size": size, "checksums": checksums})
+        return UpdateResult(True, newer(version, self.current_version), version, page, download, checked_at=now,
+                            asset_name=asset, size=size, checksums_url=checksums)
 
     # ── the launch banner ──────────────────────────────────────────────────
     def dismissed(self, version: str) -> bool:
