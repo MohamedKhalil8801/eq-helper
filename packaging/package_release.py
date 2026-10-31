@@ -8,6 +8,12 @@ Release names (eq_helper/admin/build_cache.py relies on them):
 ``<Product>-<version>-windows.zip`` (one top folder holding the app),
 ``<Product>-<version>-macos.dmg`` (the .app plus an Applications link) and
 ``<Product>-<version>-linux.AppImage`` (with .desktop entry and .rescal MIME type).
+
+The AppImage's filesystem is gzip-compressed, not appimagetool's default zstd:
+AppImageLauncher (which many Linux users install, and which opens every
+AppImage itself) can't read zstd ("doesn't look like a squashfs image"). Its
+desktop entry also says ``X-AppImage-Integrate=false``, so AppImageLauncher
+doesn't move the file away from the Calibrations and Targets folders next to it.
 """
 
 from __future__ import annotations
@@ -18,6 +24,7 @@ import json
 import os
 import shutil
 import stat
+import struct
 import subprocess
 import sys
 import zipfile
@@ -76,10 +83,36 @@ def package_macos(dist: Path, out: Path, version: str) -> Path:
     return target
 
 
+SQUASHFS_COMPRESSION = {1: "gzip", 2: "lzma", 3: "lzo", 4: "xz", 5: "lz4", 6: "zstd"}
+APPIMAGE_COMPRESSION = "gzip"
+
+
+def appimage_compression(path: Path) -> str:
+    """How an AppImage's filesystem is compressed: the squashfs starts where the ELF runtime ends."""
+    with open(path, "rb") as f:
+        head = f.read(64)
+        if head[:4] != b"\x7fELF" or head[4] != 2:
+            raise SystemExit(f"{path} isn't a 64-bit AppImage")
+        shoff, = struct.unpack_from("<Q", head, 0x28)
+        shentsize, shnum = struct.unpack_from("<HH", head, 0x3A)
+        f.seek(shoff + shentsize * shnum)
+        superblock = f.read(22)
+    if superblock[:4] != b"hsqs":
+        raise SystemExit(f"{path} has no squashfs after its runtime")
+    compression, = struct.unpack_from("<H", superblock, 20)
+    return SQUASHFS_COMPRESSION.get(compression, str(compression))
+
+
+def appimage_desktop_entry(branding, ident: str) -> str:
+    from resonancefit.os_integration import desktop_entry
+    return (desktop_entry(branding, "AppRun", ident).replace('Exec="AppRun" %f', "Exec=AppRun %f")
+            + "X-AppImage-Integrate=false\n")
+
+
 def package_linux(dist: Path, out: Path, version: str, appimagetool: str) -> Path:
     sys.path.insert(0, str(ROOT))
     from eq_helper.calibration.branding import load_branding
-    from resonancefit.os_integration import desktop_entry, desktop_id, mime_xml
+    from resonancefit.os_integration import desktop_id, mime_xml
 
     branding = load_branding(ASSETS / "branding.json")
     name = branding.product_name
@@ -95,8 +128,7 @@ def package_linux(dist: Path, out: Path, version: str, appimagetool: str) -> Pat
     apprun.write_text('#!/bin/sh\nHERE="$(dirname "$(readlink -f "$0")")"\n'
                       f'exec "$HERE/usr/lib/{ident}/{name}" "$@"\n', encoding="utf-8")
     apprun.chmod(apprun.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-    (appdir / f"{ident}.desktop").write_text(desktop_entry(branding, "AppRun", ident)
-                                             .replace('Exec="AppRun" %f', "Exec=AppRun %f"), encoding="utf-8")
+    (appdir / f"{ident}.desktop").write_text(appimage_desktop_entry(branding, ident), encoding="utf-8")
     shutil.copyfile(ASSETS / "icon.png", appdir / f"{ident}.png")
     shutil.copyfile(ASSETS / "icon.png", appdir / ".DirIcon")
     mime = appdir / "usr" / "share" / "mime" / "packages"
@@ -105,9 +137,13 @@ def package_linux(dist: Path, out: Path, version: str, appimagetool: str) -> Pat
     target = out / release_name("linux", version)
     target.unlink(missing_ok=True)
     env = {**os.environ, "ARCH": os.environ.get("ARCH", "x86_64")}
-    subprocess.run([appimagetool, "--appimage-extract-and-run", "--no-appstream", str(appdir), str(target)],
-                   check=True, env=env)
+    subprocess.run([appimagetool, "--appimage-extract-and-run", "--no-appstream", "--comp", APPIMAGE_COMPRESSION,
+                    str(appdir), str(target)], check=True, env=env)
     shutil.rmtree(appdir, ignore_errors=True)
+    found = appimage_compression(target)
+    if found != APPIMAGE_COMPRESSION:
+        raise SystemExit(f"{target.name} is {found}-compressed; AppImageLauncher can only open "
+                         f"{APPIMAGE_COMPRESSION}")
     return target
 
 
