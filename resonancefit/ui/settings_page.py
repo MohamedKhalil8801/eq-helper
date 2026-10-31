@@ -18,6 +18,7 @@ from .sound_bar import OutputPicker
 class SettingsPage(QWidget):
     walkthroughRequested = Signal()
     updateCheckRequested = Signal()
+    installUpdateRequested = Signal()
     apoChanged = Signal()
     openUrlRequested = Signal(str)
     apoDeviceChangeRequested = Signal()
@@ -112,20 +113,31 @@ class SettingsPage(QWidget):
         self.update_download.setObjectName("primary")
         self.update_download.clicked.connect(lambda: self.openUrlRequested.emit(self._download_url))
         row.addWidget(self.update_download)
+        self.update_install = QPushButton(tr("Install and restart"))
+        self.update_install.setObjectName("primary")
+        self.update_install.setToolTip(tr("Closes the app, installs the new version and opens it again."))
+        self.update_install.clicked.connect(self.installUpdateRequested)
+        self.update_install.hide()
+        row.addWidget(self.update_install)
         self.update_details = QPushButton(tr("What's new"))
         self.update_details.clicked.connect(lambda: self.openUrlRequested.emit(self._page_url))
         row.addWidget(self.update_details)
         row.addStretch(1)
         upd.body.addLayout(row)
-        self.auto_update_check = QCheckBox(tr("Check once a day when the app opens"))
-        self.auto_update_check.setToolTip(tr("Asks GitHub for the latest release; nothing about you or your "
-                                             "calibration is sent. Nothing is installed automatically."))
+        self.auto_update_check = QCheckBox(tr("Check for updates when the app opens"))
+        self.auto_update_check.setToolTip(tr("Once a day, asks GitHub for the latest release; nothing about you or "
+                                             "your calibration is sent. A new version downloads in the background "
+                                             "and installs when you close the app."))
         self.auto_update_check.setChecked(updates.automatic if updates is not None else False)
         self.auto_update_check.toggled.connect(lambda on: self.ctx.settings.set("update_check_automatic", bool(on)))
         upd.body.addWidget(self.auto_update_check)
         for widget in (self.update_status, self.update_last_checked, self.check_updates_button,
                        self.auto_update_check):
-            widget.setVisible(updates is not None)
+            widget.setVisible(updates is not None and updates.enabled)
+        self.update_dev_note = hint(tr("This is a development build: it never checks for or installs updates, "
+                                       "so a release can't replace it."))
+        self.update_dev_note.setVisible(updates is not None and not updates.enabled)
+        upd.body.addWidget(self.update_dev_note)
         self._download_url = self._page_url = ""
         layout.addWidget(upd)
         self.show_update_result(updates.last_result() if updates is not None else None)
@@ -158,11 +170,36 @@ class SettingsPage(QWidget):
         available = result is not None and result.ok and result.available
         self._download_url = (result.download_url or result.page_url) if available else ""
         self._page_url = result.page_url if available else ""
-        self.update_download.setVisible(available)
+        self.update_download.setVisible(available and not self._installs_here)
         self.update_details.setVisible(available and bool(result.page_url))
         last = self.updates.last_success if self.updates is not None else None
         self.update_last_checked.setText(tr("Last successful check: {when}").format(
             when=last.strftime("%d %b %Y, %H:%M") if last else tr("Never")))
+
+    @property
+    def _installs_here(self) -> bool:
+        updater = self.updates.updater if self.updates is not None else None
+        return updater is not None and updater.can_install
+
+    def show_update_downloading(self, latest: str, done: int, total: int) -> None:
+        percent = int(100 * done / total) if total else 0
+        self.update_status.setText(tr("Downloading version {latest}… {percent}%").format(latest=latest,
+                                                                                        percent=percent))
+        self.update_install.hide()
+
+    def show_update_ready(self, latest: str, failure: str = "") -> None:
+        self.update_status.setText(
+            tr("Installing version {latest} didn't work last time ({reason}).").format(latest=latest, reason=failure)
+            if failure else
+            tr("Version {latest} is downloaded. It installs when you close the app, or install it now.").format(
+                latest=latest))
+        self.update_install.show()
+        self.update_download.setVisible(bool(failure) and bool(self._download_url))
+
+    def show_update_download_failed(self, latest: str, reason: str) -> None:
+        self.update_status.setText(tr("Couldn't download version {latest} ({reason}). It will try again the next "
+                                      "time the app opens.").format(latest=latest, reason=reason))
+        self.update_download.setVisible(bool(self._download_url))
 
     # ── output device ──────────────────────────────────────────────────────
     def refresh_devices(self) -> None:

@@ -6,10 +6,11 @@ from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QEvent, QObject, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
-    QApplication, QFrame, QHBoxLayout, QInputDialog, QLabel, QMainWindow, QPushButton, QMessageBox, QScrollArea, QStackedWidget, QTabWidget, QVBoxLayout, QWidget,
+    QApplication, QFrame, QHBoxLayout, QInputDialog, QLabel, QMainWindow, QProgressBar, QPushButton, QMessageBox,
+    QScrollArea, QStackedWidget, QTabWidget, QVBoxLayout, QWidget,
 )
 
 from eq_helper.calibration.model_cache import load_measurements
@@ -37,6 +38,7 @@ from ..history import HistoryStore
 from ..library import LibraryEntry
 from ..os_integration import FileAssociation
 from ..paths import is_translocated
+from ..updater import UpdateError
 from .about_page import AboutPage
 from .common import (
     Worker, apply_theme, brand_palette, build_style, install_keyboard_focus, is_branded, side_name, tr,
@@ -76,7 +78,9 @@ def _rescal_paths(mime) -> list[Path]:
 
 
 class UpdateBanner(QFrame):
-    """A slim strip above the tabs: "Version X is available" with Download / What's new / dismiss."""
+    """A slim strip above the tabs. Where the app updates itself: "Downloading X… 40%", then "X is ready"
+    with Install and restart (it also installs when the app closes). Elsewhere: "X is available" with
+    Download (the link). What's new and Not now in every state."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -84,19 +88,88 @@ class UpdateBanner(QFrame):
         self.setStyleSheet("#updateBanner { border: 1px solid palette(highlight); border-radius: 6px; }")
         row = QHBoxLayout(self)
         row.setContentsMargins(10, 6, 6, 6)
+        texts = QVBoxLayout()
+        texts.setSpacing(4)
         self.text = QLabel()
         self.text.setWordWrap(True)
-        row.addWidget(self.text, 1)
+        texts.addWidget(self.text)
+        self.progress = QProgressBar()
+        self.progress.setTextVisible(False)
+        self.progress.setFixedHeight(6)
+        texts.addWidget(self.progress)
+        row.addLayout(texts, 1)
+        self.install = QPushButton(tr("Install and restart"))
+        self.install.setObjectName("primary")
+        self.install.setToolTip(tr("Closes the app, installs the new version and opens it again."))
+        row.addWidget(self.install)
+        self.retry = QPushButton(tr("Try again"))
+        self.retry.setObjectName("primary")
+        row.addWidget(self.retry)
         self.download = QPushButton(tr("Download"))
-        self.download.setObjectName("primary")
         row.addWidget(self.download)
         self.details = QPushButton(tr("What's new"))
         row.addWidget(self.details)
         self.dismiss = QPushButton(tr("Not now"))
-        self.dismiss.setToolTip(tr("Hide this until a newer version comes out. Settings still shows it."))
         row.addWidget(self.dismiss)
         self.result = None
+        self.state = ""  # "manual", "downloading", "ready" or "failed"
         self.hide()
+
+    def _show(self, state: str, text: str, buttons: tuple) -> None:
+        self.state = state
+        self.text.setText(text)
+        for button in (self.install, self.retry, self.download):
+            button.setVisible(button in buttons)
+        self.download.setObjectName("primary" if state == "manual" else "")
+        self.download.setText(tr("Download") if state == "manual" else tr("Download it yourself"))
+        self.download.style().unpolish(self.download)
+        self.download.style().polish(self.download)
+        self.progress.setVisible(state == "downloading")
+        self.details.setVisible(bool(self.result is not None and self.result.page_url))
+        self.dismiss.setToolTip(
+            tr("Hide this until a newer version comes out. Settings still shows it.") if state == "manual" else
+            tr("Hide this for now. The new version still installs when you close the app.")
+            if state in ("downloading", "ready") else tr("Hide this for now."))
+
+    def show_manual(self, product: str, latest: str, current: str) -> None:
+        self._show("manual", tr("{product} {latest} is available (you have {current}). Your calibrations, history "
+                                "and settings are kept when you update.").format(
+            product=product, latest=latest, current=current), (self.download,))
+
+    def show_downloading(self, product: str, latest: str, done: int, total: int) -> None:
+        percent = int(100 * done / total) if total else 0
+        self._show("downloading", tr("Downloading {product} {latest}… {percent}%").format(
+            product=product, latest=latest, percent=percent), ())
+        self.progress.setRange(0, 1000 if total else 0)
+        self.progress.setValue(int(1000 * done / total) if total else 0)
+
+    def show_ready(self, product: str, latest: str, failure: str = "") -> None:
+        text = tr("{product} {latest} is ready. It installs when you close the app, or now: the app restarts and "
+                  "your calibrations, history and settings are kept.").format(product=product, latest=latest)
+        if failure:
+            text = tr("Installing {latest} didn't work last time ({reason}). Your current version is untouched. "
+                      "Try again, or download it yourself.").format(latest=latest, reason=failure)
+        self._show("ready", text, (self.install, self.download) if failure else (self.install,))
+
+    def show_failed(self, latest: str, reason: str) -> None:
+        self._show("failed", tr("Couldn't download {latest} ({reason}).").format(latest=latest, reason=reason),
+                   (self.retry, self.download))
+
+
+class _DownloadProgress(QObject):
+    """Hands a worker thread's download progress to the GUI thread, once per tenth of a percent at most."""
+
+    changed = Signal(int, int)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._last = -1
+
+    def report(self, done: int, total: int) -> None:
+        step = int(1000 * done / total) if total else done >> 20
+        if step != self._last:
+            self._last = step
+            self.changed.emit(done, total)
 
 
 class MainWindow(QMainWindow):
@@ -109,6 +182,11 @@ class MainWindow(QMainWindow):
         self.ctx = ctx
         self.updates = updates
         self._update_worker: Worker | None = None
+        self._download_worker: Worker | None = None
+        self._cancel_download = False
+        self._update_ready = None      # updater.Staged: downloaded, installs on close
+        self._update_started = False   # "Install and restart" started the install
+        self._guided = False
         self.audio = audio or AudioService()
         self.current: LoadedCalibration | None = None
         self.history: HistoryStore | None = None
@@ -144,6 +222,8 @@ class MainWindow(QMainWindow):
             lambda: self.open_url(self.update_banner.result.download_url or self.update_banner.result.page_url))
         self.update_banner.details.clicked.connect(lambda: self.open_url(self.update_banner.result.page_url))
         self.update_banner.dismiss.clicked.connect(self._dismiss_update)
+        self.update_banner.install.clicked.connect(self.install_update_now)
+        self.update_banner.retry.clicked.connect(lambda: self.download_update(self.update_banner.result))
         self.stack = QStackedWidget()
         outer.addWidget(self.stack, 1)
         self.setCentralWidget(central)
@@ -220,26 +300,45 @@ class MainWindow(QMainWindow):
         all sound) stay; the header, tabs, sidebar (EQ switch, saving, history) and update banner hide."""
         if active:
             self._banner_shown = self.update_banner.isVisibleTo(self)
+        self._guided = active
         for widget in (self.header, self.tabs.tabBar(), self.sidebar):
             widget.setVisible(not active)
         self.update_banner.setVisible(not active and getattr(self, "_banner_shown", False))
 
-    # ── updates (notify only) ──────────────────────────────────────────────
+    # ── updates ────────────────────────────────────────────────────────────
     def open_url(self, url: str) -> None:
         if url:
             QDesktopServices.openUrl(QUrl(url))
 
+    @property
+    def _updater(self):
+        """Downloads and installs updates, where this copy of the app can replace itself."""
+        updater = self.updates.updater if self.updates is not None else None
+        return updater if updater is not None and updater.can_install else None
+
+    def _reveal_banner(self) -> None:
+        if self._guided:
+            self._banner_shown = True  # shown when the guided test ends
+        else:
+            self.update_banner.show()
+
     def _launch_update_check(self) -> None:
-        """At launch only: check unless today's check already succeeded (a failed one is retried)."""
-        if self.updates is None:
+        """At launch only: check unless today's check already succeeded (a failed one is retried). A
+        development build never checks."""
+        if self.updates is None or not self.updates.enabled:
             return
+        if self._updater is not None:
+            self._updater.tidy()
+            ready = self._updater.ready()
+            if ready is not None:
+                self._downloaded(ready)
         if self.updates.automatic and self.updates.due():
             self.check_for_updates(manual=False)
         else:
             self._show_update(self.updates.last_result(), manual=False)
 
     def check_for_updates(self, manual: bool = True) -> None:
-        if self.updates is None or self._update_worker is not None:
+        if self.updates is None or not self.updates.enabled or self._update_worker is not None:
             return
         self.settings_page.set_checking()
         self._update_worker = self._run(self.updates.check, lambda result: self._update_checked(result, manual))
@@ -251,19 +350,87 @@ class MainWindow(QMainWindow):
     def _show_update(self, result, manual: bool) -> None:
         self.settings_page.show_update_result(result)
         if result is None or not (result.ok and result.available):
-            self.update_banner.hide()
+            if self._update_ready is None and self._download_worker is None:
+                self.update_banner.hide()
+            return
+        self.update_banner.result = result
+        if self._updater is not None:
+            self.download_update(result)
             return
         if not manual and self.updates.dismissed(result.latest):
             return
-        self.update_banner.result = result
-        self.update_banner.text.setText(tr("{product} {latest} is available (you have {current}). Your "
-                                           "calibrations, history and settings are kept when you update.").format(
-            product=self.ctx.branding.product_name, latest=result.latest, current=self.updates.current_version))
-        self.update_banner.details.setVisible(bool(result.page_url))
-        self.update_banner.show()
+        self.update_banner.show_manual(self.ctx.branding.product_name, result.latest, self.updates.current_version)
+        self._reveal_banner()
+
+    def download_update(self, result) -> None:
+        """Download ``result`` in the background (once: a finished download is kept until installed)."""
+        updater = self._updater
+        if updater is None or result is None or self._download_worker is not None:
+            return
+        if self._update_ready is not None and self._update_ready.version == result.latest:
+            self._downloaded(self._update_ready)
+            return
+        self._cancel_download = False
+        progress = _DownloadProgress(self)
+        progress.changed.connect(lambda done, total: self._download_progress(result, done, total))
+        worker = self._run(lambda: updater.download(result, progress.report, lambda: self._cancel_download),
+                           self._downloaded)
+        worker.failed.connect(lambda reason: self._download_failed(result, reason))
+        self._download_worker = worker
+        self._download_progress(result, 0, result.size)
+        self._reveal_banner()
+
+    def _download_progress(self, result, done: int, total: int) -> None:
+        if self._download_worker is None:
+            return
+        self.update_banner.show_downloading(self.ctx.branding.product_name, result.latest, done, total)
+        self.settings_page.show_update_downloading(result.latest, done, total)
+
+    def _downloaded(self, staged) -> None:
+        self._download_worker = None
+        self._update_ready = staged
+        failure = self._updater.last_failure() if self._updater is not None else ""
+        if self.update_banner.result is None or self.update_banner.result.latest != staged.version:
+            last = self.updates.last_result()
+            self.update_banner.result = last if last is not None and last.latest == staged.version else None
+        self.update_banner.show_ready(self.ctx.branding.product_name, staged.version, failure)
+        self.settings_page.show_update_ready(staged.version, failure)
+        self._reveal_banner()
+
+    def _download_failed(self, result, reason: str) -> None:
+        self._download_worker = None
+        if self._cancel_download:
+            return
+        self.update_banner.show_failed(result.latest, reason)
+        self.settings_page.show_update_download_failed(result.latest, reason)
+        self._reveal_banner()
+
+    def install_update_now(self) -> None:
+        """Install and restart: the new version installs itself once this window has closed."""
+        updater = self._updater
+        if updater is None or self._update_ready is None:
+            return
+        try:
+            started = updater.install(relaunch=True)
+        except UpdateError as exc:
+            self.update_banner.show_ready(self.ctx.branding.product_name, self._update_ready.version, str(exc))
+            return
+        if started:
+            self._update_started = True
+            self.close()
+
+    def _install_on_close(self) -> None:
+        """Closing the app installs a downloaded update (without opening the app again)."""
+        updater = self._updater
+        if updater is None or self._update_started or self._update_ready is None:
+            return
+        try:
+            self._update_started = updater.install(relaunch=False)
+        except UpdateError:
+            pass  # still downloaded: offered again at the next launch
 
     def _dismiss_update(self) -> None:
-        if self.update_banner.result is not None:
+        if self.update_banner.result is not None and self.update_banner.state == "manual":
             self.updates.dismiss(self.update_banner.result.latest)
         self.update_banner.hide()
 
@@ -318,6 +485,7 @@ class MainWindow(QMainWindow):
 
         self.settings_page = SettingsPage(self.ctx, self.audio, self.apo, self.updates)
         self.settings_page.updateCheckRequested.connect(lambda: self.check_for_updates(manual=True))
+        self.settings_page.installUpdateRequested.connect(self.install_update_now)
         self.settings_page.openUrlRequested.connect(self.open_url)
         self.settings_page.apoChanged.connect(self.sync_other_eqs)
         self.settings_page.apoDeviceChangeRequested.connect(self.change_apo_device)
@@ -678,6 +846,8 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         self.tuning.flush()
         self.audio.stop_all()
+        self._cancel_download = True  # an unfinished download starts over next time
         for worker in list(self._workers):
             worker.wait(5000)
+        self._install_on_close()
         super().closeEvent(event)

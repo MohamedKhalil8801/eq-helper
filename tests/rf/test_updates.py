@@ -1,6 +1,7 @@
 """Update check: on launch, once a day after a success; retried after a failure; manual in Settings."""
 
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import pytest
 
@@ -108,10 +109,10 @@ def make_win(qtbot, tmp_path):
     folder.mkdir(parents=True)
     write_rescal(folder / "a.rescal", make_calibration())
 
-    def make(http, clock=None):
+    def make(http, clock=None, release=True, updater=None):
         ctx = AppContext.create(AppPaths("windows", tmp_path / "data", tmp_path / "app"))
         updates = UpdateChecker(ctx.settings, "0.2.0", "windows", repo="owner/releases", http=http,
-                                now=clock or Clock())
+                                now=clock or Clock(), release=release, updater=updater)
         w = MainWindow(ctx, start_audio=False, updates=updates)
         w.opened_urls = []
         w.open_url = w.opened_urls.append
@@ -176,3 +177,140 @@ def test_automatic_checks_can_be_turned_off(qtbot, make_win):
     assert http2.calls == 0
     w2.settings_page.check_updates_button.click()           # manual checks still work
     qtbot.waitUntil(lambda: http2.calls == 1, timeout=10000)
+
+
+def test_development_builds_never_check(qtbot, make_win):
+    http = FakeHttp()
+    w = make_win(http, release=False)
+    qtbot.wait(300)
+    assert http.calls == 0 and not w.update_banner.isVisibleTo(w)
+    page = w.settings_page
+    assert page.update_dev_note.isVisibleTo(page) and not page.check_updates_button.isVisibleTo(page)
+    page.updateCheckRequested.emit()
+    qtbot.wait(100)
+    assert http.calls == 0
+
+
+def test_dev_builds_are_any_version_but_plain_x_y_z(tmp_path):
+    def enabled(version):
+        return UpdateChecker(Settings(tmp_path / "s.json"), version, "windows").enabled
+    assert not enabled("0.1.3-dev") and not enabled("dev")
+    assert not enabled("0.3.0")  # a source run (not frozen) is development too
+
+
+class FakeUpdater:
+    """Stands in for updater.Updater: downloads "instantly", records installs."""
+
+    def __init__(self, can_install=True, fail=None, ready=None):
+        self.can_install, self.fail, self._ready = can_install, fail, ready
+        self.downloads, self.installs, self.tidied = [], [], 0
+        self.failure = ""
+
+    def problem(self):
+        return "" if self.can_install else "read-only"
+
+    def tidy(self):
+        self.tidied += 1
+
+    def ready(self):
+        return self._ready
+
+    def last_failure(self):
+        return self.failure
+
+    def download(self, result, progress=None, cancelled=None):
+        from resonancefit.updater import Staged, UpdateError
+        self.downloads.append(result.latest)
+        if progress:
+            progress(50, 100)
+            progress(100, 100)
+        if self.fail:
+            raise UpdateError(self.fail)
+        self._ready = Staged(result.latest, Path("staged"))
+        return self._ready
+
+    def install(self, relaunch):
+        self.installs.append(relaunch)
+        return self._ready is not None
+
+
+def test_new_version_downloads_by_itself_then_install_and_restart(qtbot, make_win):
+    updater = FakeUpdater()
+    w = make_win(FakeHttp(), updater=updater)
+    banner = w.update_banner
+    qtbot.waitUntil(lambda: banner.state == "ready", timeout=10000)
+    assert updater.downloads == ["0.3.0"] and updater.tidied == 1
+    assert banner.isVisibleTo(w) and banner.install.isVisibleTo(banner) and not banner.download.isVisibleTo(banner)
+    assert "0.3.0 is ready" in banner.text.text()
+    page = w.settings_page
+    assert page.update_install.isVisibleTo(page) and not page.update_download.isVisibleTo(page)
+    assert "downloaded" in page.update_status.text()
+    banner.install.click()
+    assert updater.installs == [True]   # the new build restarts the app once it has replaced it
+    assert not w.isVisible()
+
+
+def test_closing_installs_a_downloaded_update_without_restarting(qtbot, make_win):
+    updater = FakeUpdater()
+    w = make_win(FakeHttp(), updater=updater)
+    qtbot.waitUntil(lambda: w.update_banner.state == "ready", timeout=10000)
+    w.update_banner.dismiss.click()     # "Not now" only hides it
+    assert not w.update_banner.isVisibleTo(w)
+    w.close()
+    assert updater.installs == [False]
+
+
+def test_closing_mid_download_installs_nothing(qtbot, make_win):
+    updater = FakeUpdater()
+    w = make_win(FakeHttp(fail=True), updater=updater)
+    qtbot.wait(300)
+    w.close()
+    assert updater.installs == []
+
+
+def test_a_finished_download_is_offered_at_launch_without_checking(qtbot, make_win):
+    from resonancefit.updater import Staged
+    clock = Clock()
+    make_win(FakeHttp(), clock).close()        # checked today already
+    updater = FakeUpdater(ready=Staged("0.3.0", Path("staged")))
+    http = FakeHttp()
+    w = make_win(http, clock, updater=updater)
+    qtbot.waitUntil(lambda: w.update_banner.state == "ready", timeout=10000)
+    assert http.calls == 0 and updater.downloads == []
+    assert w.update_banner.details.isVisibleTo(w.update_banner)  # What's new from the last check
+
+
+def test_failed_download_offers_retry_and_the_link(qtbot, make_win):
+    updater = FakeUpdater(fail="no network")
+    w = make_win(FakeHttp(), updater=updater)
+    banner = w.update_banner
+    qtbot.waitUntil(lambda: banner.state == "failed", timeout=10000)
+    assert "no network" in banner.text.text()
+    assert banner.retry.isVisibleTo(banner) and banner.download.text() == "Download it yourself"
+    banner.download.click()
+    assert w.opened_urls == ["https://dl/windows"]
+    updater.fail = None
+    banner.retry.click()
+    qtbot.waitUntil(lambda: banner.state == "ready", timeout=10000)
+    assert updater.downloads == ["0.3.0", "0.3.0"]
+
+
+def test_a_failed_install_is_shown_with_the_link(qtbot, make_win):
+    from resonancefit.updater import Staged
+    updater = FakeUpdater(ready=Staged("0.3.0", Path("staged")))
+    updater.failure = "access denied"
+    w = make_win(FakeHttp(), updater=updater)
+    banner = w.update_banner
+    qtbot.waitUntil(lambda: banner.state == "ready", timeout=10000)
+    assert "access denied" in banner.text.text() and banner.download.isVisibleTo(banner)
+
+
+def test_where_the_app_cant_replace_itself_it_offers_the_link(qtbot, make_win):
+    updater = FakeUpdater(can_install=False)
+    w = make_win(FakeHttp(), updater=updater)
+    banner = w.update_banner
+    qtbot.waitUntil(lambda: banner.isVisibleTo(w), timeout=10000)
+    assert banner.state == "manual" and updater.downloads == [] and banner.download.text() == "Download"
+    assert w.settings_page.update_download.isVisibleTo(w.settings_page)
+    w.close()
+    assert updater.installs == []
